@@ -1,4 +1,7 @@
 # Chromeleon Browser
+[![Discord](https://img.shields.io/discord/1499516872758923264?logo=discord&label=Discord)](https://discord.gg/EdRx3832Hw)
+
+**Support:** [Discussions](https://github.com/nodriver-project/Chromeleon-Browser/discussions) · [Releases](https://github.com/nodriver-project/Chromeleon-Browser/releases)
 
 A Chromium build for AI browser agents, with a fingerprint identity you control.
 
