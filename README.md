@@ -1,4 +1,4 @@
-# Chromeleon Browser
+# Chromeleon Browser — Chromium for AI agents
 [![Discord](https://img.shields.io/discord/1499516872758923264?logo=discord&label=Discord)](https://discord.gg/EdRx3832Hw)
 
 **Support:** [Discussions](https://github.com/nodriver-project/Chromeleon-Browser/discussions) · [Releases](https://github.com/nodriver-project/Chromeleon-Browser/releases)
