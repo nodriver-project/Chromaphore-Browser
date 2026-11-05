@@ -11,6 +11,7 @@ For identity, it reports itself to sites as Google Chrome, answers in headless m
 
 **Windows only.** Download the binary from the [Releases page](../../releases); the agent features can also be built from the patches in [`patches/`](patches) (see [Source and binary](#source-and-binary)).
 
+**On a Mac?** There's no macOS build yet. Star or watch this repo (**Watch → Custom → Releases**) to hear when one comes out.
 ---
 
 ## Contents
@@ -221,7 +222,7 @@ These don't fit the seed model. Set them to match the proxy or VPN exit you use:
 
 Uninstall from **Settings → Apps** like any normal program.
 
-Windows SmartScreen may warn on first run, since the build isn't code-signed with an EV certificate.
+Windows SmartScreen may warn on first run ("Windows protected your PC", unknown publisher), since the build isn't code-signed yet. To run it anyway, click **More info → Run anyway**. Before you do, you can check that the file is the one published here: run `Get-FileHash .\<file name>` in PowerShell and compare the hash with the SHA-256 in the release notes.
 
 ### Portable (zip)
 
