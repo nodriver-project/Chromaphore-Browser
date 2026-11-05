@@ -12,6 +12,7 @@ For identity, it reports itself to sites as Google Chrome, answers in headless m
 **Windows only.** Download the binary from the [Releases page](../../releases); the agent features can also be built from the patches in [`patches/`](patches) (see [Source and binary](#source-and-binary)).
 
 **On a Mac?** There's no macOS build yet. Star or watch this repo (**Watch → Custom → Releases**) to hear when one comes out.
+
 ---
 
 ## Contents
