@@ -46,6 +46,8 @@ Grab the latest build from the [Releases page](../../releases):
 
 Each release carries two versions: Chromeleon's own and the Chromium it is built on, as in `Chromeleon-1.0.0-chromium156.0.8078.47-windows-x64-portable.zip`. Chromeleon's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names and are kept as they were. The SHA-256 of each file is in its release notes.
 
+The release notes also link a VirusTotal scan of the browser's own files (`chrome.exe`, `chrome.dll`, `chrome_elf.dll`), and [Install](#install) says what to do if Windows SmartScreen warns.
+
 ## What's in it
 
 - **Actions done whole, with human timing.** Pointer moves planned like a hand's, clicks, wheel scrolls, drags (native and pointer-based), typing with realistic key timing, key chords, paste, and form controls (`<select>`, date and time fields, colour pickers, file choosers), each one command that answers when the action has ended and says what it led to (navigations, new tabs, blocked popups).
