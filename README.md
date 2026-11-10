@@ -1,7 +1,7 @@
-# Chromeleon Browser — Chromium for AI agents
+# Chromaphore Browser — Chromium for AI agents
 [![Discord](https://img.shields.io/discord/1499516872758923264?logo=discord&label=Discord)](https://discord.gg/EdRx3832Hw)
 
-**Support:** [Discussions](https://github.com/nodriver-project/Chromeleon-Browser/discussions) · [Releases](https://github.com/nodriver-project/Chromeleon-Browser/releases)
+**Support:** [Discussions](https://github.com/nodriver-project/Chromaphore-Browser/discussions) · [Releases](https://github.com/nodriver-project/Chromaphore-Browser/releases)
 
 A Chromium build for AI browser agents, with a fingerprint identity you control.
 
@@ -40,11 +40,11 @@ Grab the latest build from the [Releases page](../../releases):
 
 | File | Description |
 |---|---|
-| `Chromeleon-<release>-chromium<chromium>-windows-x64-setup.exe` | Installer with Windows integration |
-| `Chromeleon-<release>-chromium<chromium>-windows-x64-portable.zip` | Portable, no installation |
+| `Chromaphore-<release>-chromium<chromium>-windows-x64-setup.exe` | Installer with Windows integration |
+| `Chromaphore-<release>-chromium<chromium>-windows-x64-portable.zip` | Portable, no installation |
 | `register-browser.ps1` | Registers the portable copy with Windows as a browser (optional) |
 
-Each release carries two versions: Chromeleon's own and the Chromium it is built on, as in `Chromeleon-1.0.0-chromium156.0.8078.47-windows-x64-portable.zip`. Chromeleon's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names and are kept as they were. The SHA-256 of each file is in its release notes.
+Each release carries two versions: Chromaphore's own and the Chromium it is built on, as in `Chromaphore-1.0.0-chromium156.0.8078.47-windows-x64-portable.zip`. Chromaphore's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names and are kept as they were. The SHA-256 of each file is in its release notes.
 
 The release notes also link a VirusTotal scan of the browser's own files (`chrome.exe`, `chrome.dll`, `chrome_elf.dll`), and [Install](#install) says what to do if Windows SmartScreen warns.
 
@@ -218,10 +218,10 @@ These don't fit the seed model. Set them to match the proxy or VPN exit you use:
 
 ### Installer (recommended)
 
-1. Download `Chromeleon-<release>-chromium<chromium>-windows-x64-setup.exe` and run it. A newer installer upgrades an earlier Chromeleon install in place. Installs from before the rename ("Anti-Fingerprint Chromium") are a separate program to Windows; uninstall one by hand from **Settings → Apps**.
+1. Download `Chromaphore-<release>-chromium<chromium>-windows-x64-setup.exe` and run it. A newer installer upgrades an earlier Chromaphore install in place. Installs from before the rename ("Anti-Fingerprint Chromium") are a separate program to Windows; uninstall one by hand from **Settings → Apps**.
 2. Choose an install location (or accept the default) and all-users vs. just-me.
 3. It installs the browser, adds Start Menu / desktop shortcuts, and registers it with Windows as a web browser.
-4. To make it your default: tick **"Choose … as your default browser"** on the last wizard page, or later open **Settings → Apps → Default apps**, find **Chromeleon**, and set it for `http`, `https`, and `.html`. The same page lets you make it the default app for `.pdf` and `.md` files.
+4. To make it your default: tick **"Choose … as your default browser"** on the last wizard page, or later open **Settings → Apps → Default apps**, find **Chromaphore**, and set it for `http`, `https`, and `.html`. The same page lets you make it the default app for `.pdf` and `.md` files.
 
 Uninstall from **Settings → Apps** like any normal program.
 
