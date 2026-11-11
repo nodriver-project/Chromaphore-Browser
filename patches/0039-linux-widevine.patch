@@ -1,0 +1,780 @@
+From 2b629be3d2096c4ab9bed7e9533d550d63e7df55 Mon Sep 17 00:00:00 2001
+From: The browser Authors <noreply@browser.invalid>
+Date: Wed, 11 Nov 2026 03:26:11 -0500
+Subject: [PATCH 39/61] linux-widevine
+
+Widevine in a Linux build presenting Windows (see the user-agent commit)
+runs as Chrome's Widevine runs on Windows. Windows' CDM works in privacy
+mode: a session opens with a service-certificate request (the two bytes 08
+04) unless the page set a certificate on the MediaKeys, and the license
+request that follows carries the client identification encrypted to the
+license service's certificate, sized as Chrome 156's Widevine sizes it on
+Windows. The Linux CDM sends its identification in the clear, naming Linux.
+CdmAdapter runs Windows' flow over the Linux CDM
+(media/cdm/windows_widevine.h). A request rebuilt this way no longer matches
+the CDM's signature, so license servers refuse it: the major streaming
+services (the list in windows_widevine.cc) and the sites
+--widevine-playback-sites names get the Linux CDM unchanged and play.
+getStatusForPolicy() answers as Chrome on a Windows desktop with an HDCP 2.2
+display. Nothing changes on Windows or with --use-chromium-defaults. The
+switch declaration rides in switch-resolver.
+---
+ .../service_host/utility_process_host.cc      |   5 +
+ media/cdm/BUILD.gn                            |   7 +
+ media/cdm/cdm_adapter.cc                      |  96 +++++
+ media/cdm/cdm_adapter.h                       |  26 ++
+ media/cdm/windows_widevine.cc                 | 400 ++++++++++++++++++
+ media/cdm/windows_widevine.h                  |  86 ++++
+ 6 files changed, 620 insertions(+)
+ create mode 100644 media/cdm/windows_widevine.cc
+ create mode 100644 media/cdm/windows_widevine.h
+
+diff --git a/content/browser/service_host/utility_process_host.cc b/content/browser/service_host/utility_process_host.cc
+index 1ec742dc81..3349884a12 100644
+--- a/content/browser/service_host/utility_process_host.cc
++++ b/content/browser/service_host/utility_process_host.cc
+@@ -407,6 +407,11 @@ bool UtilityProcessHost::StartProcess() {
+       // browser: the network service presents Windows unless told not to
+       // (net/socket/windows_ip_ttl.h).
+       ::switches::kUseChromiumDefaults,
++#if BUILDFLAG(IS_LINUX)
++      // browser: and so does the CDM's Widevine, except for these sites
++      // (media/cdm/windows_widevine.h).
++      ::switches::kWidevinePlaybackSites,
++#endif
+       network::switches::kAdditionalTrustTokenKeyCommitments,
+       network::switches::kForceEffectiveConnectionType,
+       network::switches::kHostResolverRules,
+diff --git a/media/cdm/BUILD.gn b/media/cdm/BUILD.gn
+index 49c017bb16..5e01d60c99 100644
+--- a/media/cdm/BUILD.gn
++++ b/media/cdm/BUILD.gn
+@@ -98,6 +98,13 @@ source_set("cdm") {
+       "supported_cdm_versions.cc",
+       "supported_cdm_versions.h",
+     ]
++    if (is_linux) {
++      sources += [
++        "windows_widevine.cc",
++        "windows_widevine.h",
++      ]
++      deps += [ "//components/browser:browser_switches" ]
++    }
+ 
+     if (enable_cdm_host_verification) {
+       sources += [
+diff --git a/media/cdm/cdm_adapter.cc b/media/cdm/cdm_adapter.cc
+index 8de444a6be..bf7b8b5869 100644
+--- a/media/cdm/cdm_adapter.cc
++++ b/media/cdm/cdm_adapter.cc
+@@ -268,6 +268,10 @@ CdmAdapter::CdmAdapter(
+   CHECK(session_expiration_update_cb_);
+ 
+   cdm_metrics_data_.cdm_origin = cdm_origin_;
++#if BUILDFLAG(IS_LINUX)
++  windows_widevine_ =
++      WindowsWidevineApplies(cdm_config_.key_system, cdm_origin_);
++#endif
+ 
+   helper_->SetFileReadCB(
+       base::BindRepeating(&CdmAdapter::OnFileRead, weak_factory_.GetWeakPtr()));
+@@ -355,6 +359,18 @@ void CdmAdapter::SetServerCertificate(
+     return;
+   }
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: a certificate set on the MediaKeys puts Windows' Widevine in
++  // privacy mode for every later session, with no service-certificate
++  // request (windows_widevine.h).
++  if (windows_widevine_) {
++    if (std::optional<WindowsWidevineCertificate> parsed =
++            ParseWidevineSignedDrmCertificate(certificate)) {
++      windows_widevine_certificate_ = std::move(parsed);
++    }
++  }
++#endif
++
+   uint32_t promise_id =
+       cdm_promise_adapter_.SavePromise(std::move(promise), __func__);
+   cdm_->SetServerCertificate(promise_id, certificate.data(),
+@@ -367,6 +383,15 @@ void CdmAdapter::GetStatusForPolicy(
+   CHECK(task_runner_->BelongsToCurrentThread());
+   TRACE_EVENT0("media", "CdmAdapter::GetStatusForPolicy");
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: HDCP answered as Chrome on a Windows desktop answers it
++  // (windows_widevine.h); Chrome has no output protection on Linux.
++  if (windows_widevine_) {
++    promise->resolve(WindowsWidevineHdcpStatus(min_hdcp_version));
++    return;
++  }
++#endif
++
+   uint32_t promise_id =
+       cdm_promise_adapter_.SavePromise(std::move(promise), __func__);
+   DVLOG(2) << __func__ << ": promise_id = " << promise_id;
+@@ -419,6 +444,28 @@ void CdmAdapter::UpdateSession(const std::string& session_id,
+   CHECK(!response.empty());
+   TRACE_EVENT1("media", "CdmAdapter::UpdateSession", "session_id", session_id);
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: the page's answer to the service-certificate request sent for
++  // Windows' Widevine: the update resolves and the session's license
++  // request follows in privacy mode, as on Windows (windows_widevine.h).
++  if (windows_widevine_) {
++    auto held = windows_widevine_held_requests_.find(session_id);
++    if (held != windows_widevine_held_requests_.end()) {
++      if (std::optional<WindowsWidevineCertificate> certificate =
++              ParseWidevineServiceCertificate(response)) {
++        std::vector<uint8_t> clear_request = std::move(held->second);
++        windows_widevine_held_requests_.erase(held);
++        std::optional<std::vector<uint8_t>> request =
++            MakeWidevinePrivacyRequest(clear_request, *certificate);
++        promise->resolve();
++        DeliverWindowsWidevineRequest(
++            session_id, request ? std::move(*request) : std::move(clear_request));
++        return;
++      }
++    }
++  }
++#endif
++
+   cdm_metrics_data_.number_of_update_calls++;
+ 
+   uint32_t promise_id =
+@@ -892,12 +939,57 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
+                session_id_str, "message_type", message_type);
+ 
+   const uint8_t* message_ptr = reinterpret_cast<const uint8_t*>(message);
++#if BUILDFLAG(IS_LINUX)
++  // browser: Windows' Widevine opens a session with a service-certificate
++  // request unless the page set a certificate on the MediaKeys, and sends
++  // the license request in privacy mode (windows_widevine.h). The Linux
++  // request is held until the certificate comes.
++  if (windows_widevine_ && message_type == cdm::kLicenseRequest &&
++      windows_widevine_started_sessions_.insert(session_id_str).second) {
++    std::vector<uint8_t> clear_request(
++        message_ptr, UNSAFE_TODO(message_ptr + message_size));
++    if (!windows_widevine_certificate_) {
++      windows_widevine_held_requests_[session_id_str] =
++          std::move(clear_request);
++      session_message_cb_.Run(session_id_str,
++                              ToMediaMessageType(message_type),
++                              WidevineServiceCertificateRequest());
++      return;
++    }
++    if (std::optional<std::vector<uint8_t>> request =
++            MakeWidevinePrivacyRequest(clear_request,
++                                       *windows_widevine_certificate_)) {
++      session_message_cb_.Run(session_id_str,
++                              ToMediaMessageType(message_type),
++                              std::move(*request));
++      return;
++    }
++  }
++#endif
+   session_message_cb_.Run(
+       session_id_str, ToMediaMessageType(message_type),
+       std::vector<uint8_t>(message_ptr,
+                            UNSAFE_TODO(message_ptr + message_size)));
+ }
+ 
++#if BUILDFLAG(IS_LINUX)
++void CdmAdapter::DeliverWindowsWidevineRequest(const std::string& session_id,
++                                               std::vector<uint8_t> request) {
++  task_runner_->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<CdmAdapter> self, const std::string& session_id,
++             std::vector<uint8_t> request) {
++            if (self) {
++              self->session_message_cb_.Run(
++                  session_id, ToMediaMessageType(cdm::kLicenseRequest),
++                  std::move(request));
++            }
++          },
++          weak_factory_.GetWeakPtr(), session_id, std::move(request)));
++}
++#endif
++
+ void CdmAdapter::OnExpirationChange(const char* session_id,
+                                     uint32_t session_id_size,
+                                     cdm::Time new_expiry_time) {
+@@ -920,6 +1012,10 @@ void CdmAdapter::OnSessionClosed(const char* session_id,
+   std::string session_id_str(session_id, session_id_size);
+   TRACE_EVENT1("media", "CdmAdapter::OnSessionClosed", "session_id",
+                session_id_str);
++#if BUILDFLAG(IS_LINUX)
++  windows_widevine_started_sessions_.erase(session_id_str);
++  windows_widevine_held_requests_.erase(session_id_str);
++#endif
+   // Library CDMs typically only close sessions as a result of `CloseSession()`.
+   session_closed_cb_.Run(session_id_str, CdmSessionClosedReason::kClose);
+ }
+diff --git a/media/cdm/cdm_adapter.h b/media/cdm/cdm_adapter.h
+index 9770d6d19a..78ec690989 100644
+--- a/media/cdm/cdm_adapter.h
++++ b/media/cdm/cdm_adapter.h
+@@ -7,7 +7,10 @@
+ 
+ #include <stdint.h>
+ 
++#include <map>
+ #include <memory>
++#include <optional>
++#include <set>
+ #include <string>
+ #include <vector>
+ 
+@@ -20,6 +23,7 @@
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/threading/thread.h"
+ #include "base/types/pass_key.h"
++#include "build/build_config.h"
+ #include "components/crash/core/common/crash_key.h"
+ #include "media/base/audio_buffer.h"
+ #include "media/base/callback_registry.h"
+@@ -35,6 +39,10 @@
+ #include "media/cdm/cdm_auxiliary_helper.h"
+ #include "ui/gfx/geometry/size.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "media/cdm/windows_widevine.h"
++#endif
++
+ namespace media {
+ 
+ class AudioFramesImpl;
+@@ -191,6 +199,13 @@ class MEDIA_EXPORT CdmAdapter final : public ContentDecryptionModule,
+   // otherwise.
+   void Initialize(std::unique_ptr<media::SimpleCdmPromise> promise);
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: delivers |request| as |session_id|'s license request once the
++  // promise just resolved has settled (windows_widevine.h).
++  void DeliverWindowsWidevineRequest(const std::string& session_id,
++                                     std::vector<uint8_t> request);
++#endif
++
+   // Create an instance of the CDM.
+   // Caller owns the returned pointer. Returns nullptr on error, e.g. does not
+   // support the key system, does not support a supported interface, etc.
+@@ -287,6 +302,17 @@ class MEDIA_EXPORT CdmAdapter final : public ContentDecryptionModule,
+   // Tracks UKM related data.
+   CdmMetricsData cdm_metrics_data_;
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: Widevine as Chrome on Windows runs it (windows_widevine.h):
++  // whether it applies to this CDM, the certificate the page set on the
++  // MediaKeys, the sessions whose first message went out, and the license
++  // request each session awaiting the service certificate holds.
++  bool windows_widevine_ = false;
++  std::optional<WindowsWidevineCertificate> windows_widevine_certificate_;
++  std::set<std::string> windows_widevine_started_sessions_;
++  std::map<std::string, std::vector<uint8_t>> windows_widevine_held_requests_;
++#endif
++
+   // Used to keep track of promises while the CDM is processing the request.
+   CdmPromiseAdapter cdm_promise_adapter_;
+ 
+diff --git a/media/cdm/windows_widevine.cc b/media/cdm/windows_widevine.cc
+new file mode 100644
+index 0000000000..b7e23787d6
+--- /dev/null
++++ b/media/cdm/windows_widevine.cc
+@@ -0,0 +1,400 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "media/cdm/windows_widevine.h"
++
++#include <utility>
++
++#include "base/command_line.h"
++#include "base/no_destructor.h"
++#include "base/numerics/safe_conversions.h"
++#include "base/rand_util.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "components/browser/browser_switches.h"
++#include "third_party/boringssl/src/include/openssl/cipher.h"
++#include "third_party/boringssl/src/include/openssl/rsa.h"
++#include "url/origin.h"
++
++namespace media {
++
++namespace {
++
++constexpr char kWidevineKeySystem[] = "com.widevine.alpha";
++
++// The major Widevine streaming services, whose content must play: they get
++// the Linux Widevine unchanged. --widevine-playback-sites adds to them.
++constexpr const char* kPlaybackSites[] = {
++    "netflix.com",      "youtube.com",        "primevideo.com",
++    "amazon.com",       "disneyplus.com",     "hulu.com",
++    "max.com",          "hbomax.com",         "paramountplus.com",
++    "peacocktv.com",    "apple.com",          "spotify.com",
++    "tidal.com",        "crunchyroll.com",    "dazn.com",
++    "espn.com",         "sling.com",          "fubo.tv",
++    "starz.com",        "discoveryplus.com",  "mubi.com",
++    "plex.tv",          "vudu.com",           "fandangoathome.com",
++    "tubitv.com",       "pluto.tv",           "philo.com",
++};
++
++// SignedMessage.MessageType.
++constexpr uint64_t kLicenseRequestMessage = 1;
++constexpr uint64_t kServiceCertificateRequestMessage = 4;
++constexpr uint64_t kServiceCertificateMessage = 5;
++// DrmCertificate.Type.
++constexpr uint64_t kServiceCertificateType = 3;
++
++// The client identification Chrome 156's Widevine (4.10.3112.0) encrypts on
++// Windows: 3,696 bytes of ciphertext, so 3,680 to 3,695 bytes before AES's
++// padding (measured). The Linux one is about 1,470 bytes; the
++// rest is filler in ClientIdentification's vmp_data field (7), which
++// Windows' Widevine fills with its verified media path data.
++constexpr size_t kWindowsClientIdSize = 3680;
++constexpr uint32_t kVmpDataField = 7;
++
++// Protocol buffer wire format, as much of it as these messages need.
++struct Field {
++  uint32_t number = 0;
++  uint32_t wire_type = 0;
++  uint64_t varint = 0;
++  // The value of a length-delimited field.
++  base::span<const uint8_t> bytes;
++  // The whole field, tag included.
++  base::span<const uint8_t> encoded;
++};
++
++bool ReadVarint(base::span<const uint8_t> data, size_t& pos, uint64_t& value) {
++  value = 0;
++  for (int shift = 0; shift < 64; shift += 7) {
++    if (pos >= data.size()) {
++      return false;
++    }
++    const uint8_t byte = data[pos++];
++    value |= static_cast<uint64_t>(byte & 0x7f) << shift;
++    if (!(byte & 0x80)) {
++      return true;
++    }
++  }
++  return false;
++}
++
++std::optional<std::vector<Field>> Parse(base::span<const uint8_t> data) {
++  std::vector<Field> fields;
++  size_t pos = 0;
++  while (pos < data.size()) {
++    const size_t start = pos;
++    uint64_t key = 0;
++    if (!ReadVarint(data, pos, key)) {
++      return std::nullopt;
++    }
++    Field field;
++    field.number = static_cast<uint32_t>(key >> 3);
++    field.wire_type = static_cast<uint32_t>(key & 7);
++    if (field.number == 0) {
++      return std::nullopt;
++    }
++    switch (field.wire_type) {
++      case 0:
++        if (!ReadVarint(data, pos, field.varint)) {
++          return std::nullopt;
++        }
++        break;
++      case 1:
++        if (data.size() - pos < 8) {
++          return std::nullopt;
++        }
++        pos += 8;
++        break;
++      case 2: {
++        uint64_t length = 0;
++        if (!ReadVarint(data, pos, length) || length > data.size() - pos) {
++          return std::nullopt;
++        }
++        field.bytes = data.subspan(pos, static_cast<size_t>(length));
++        pos += static_cast<size_t>(length);
++        break;
++      }
++      case 5:
++        if (data.size() - pos < 4) {
++          return std::nullopt;
++        }
++        pos += 4;
++        break;
++      default:
++        return std::nullopt;
++    }
++    field.encoded = data.subspan(start, pos - start);
++    fields.push_back(field);
++  }
++  return fields;
++}
++
++const Field* Find(const std::vector<Field>& fields,
++                  uint32_t number,
++                  uint32_t wire_type) {
++  for (const Field& field : fields) {
++    if (field.number == number && field.wire_type == wire_type) {
++      return &field;
++    }
++  }
++  return nullptr;
++}
++
++void AppendVarint(std::vector<uint8_t>& out, uint64_t value) {
++  while (value >= 0x80) {
++    out.push_back(static_cast<uint8_t>(value | 0x80));
++    value >>= 7;
++  }
++  out.push_back(static_cast<uint8_t>(value));
++}
++
++void AppendBytesField(std::vector<uint8_t>& out,
++                      uint32_t number,
++                      base::span<const uint8_t> value) {
++  AppendVarint(out, (number << 3) | 2);
++  AppendVarint(out, value.size());
++  out.insert(out.end(), value.begin(), value.end());
++}
++
++void AppendRaw(std::vector<uint8_t>& out, base::span<const uint8_t> raw) {
++  out.insert(out.end(), raw.begin(), raw.end());
++}
++
++std::optional<std::vector<uint8_t>> AesCbcEncrypt(
++    base::span<const uint8_t> key,
++    base::span<const uint8_t> iv,
++    base::span<const uint8_t> plaintext) {
++  bssl::ScopedEVP_CIPHER_CTX context;
++  if (!EVP_EncryptInit_ex(context.get(), EVP_aes_128_cbc(), nullptr,
++                          key.data(), iv.data())) {
++    return std::nullopt;
++  }
++  std::vector<uint8_t> out(plaintext.size() + EVP_MAX_BLOCK_LENGTH);
++  int written = 0;
++  int final_written = 0;
++  if (!EVP_EncryptUpdate(context.get(), out.data(), &written,
++                         plaintext.data(),
++                         base::checked_cast<int>(plaintext.size())) ||
++      !EVP_EncryptFinal_ex(
++          context.get(),
++          base::span(out).subspan(static_cast<size_t>(written)).data(),
++          &final_written)) {
++    return std::nullopt;
++  }
++  out.resize(static_cast<size_t>(written) + static_cast<size_t>(final_written));
++  return out;
++}
++
++std::optional<std::vector<uint8_t>> RsaOaepEncrypt(
++    base::span<const uint8_t> public_key,
++    base::span<const uint8_t> message) {
++  bssl::UniquePtr<RSA> rsa(
++      RSA_public_key_from_bytes(public_key.data(), public_key.size()));
++  if (!rsa) {
++    return std::nullopt;
++  }
++  std::vector<uint8_t> out(RSA_size(rsa.get()));
++  size_t written = 0;
++  // Widevine wraps the privacy key with RSA-OAEP over SHA-1.
++  if (!RSA_encrypt(rsa.get(), &written, out.data(), out.size(), message.data(),
++                   message.size(), RSA_PKCS1_OAEP_PADDING)) {
++    return std::nullopt;
++  }
++  out.resize(written);
++  return out;
++}
++
++}  // namespace
++
++WindowsWidevineCertificate::WindowsWidevineCertificate() = default;
++WindowsWidevineCertificate::WindowsWidevineCertificate(
++    const WindowsWidevineCertificate&) = default;
++WindowsWidevineCertificate& WindowsWidevineCertificate::operator=(
++    const WindowsWidevineCertificate&) = default;
++WindowsWidevineCertificate::~WindowsWidevineCertificate() = default;
++
++bool WindowsWidevineApplies(const std::string& key_system,
++                            const url::Origin& origin) {
++  if (key_system != kWidevineKeySystem) {
++    return false;
++  }
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  if (command_line.HasSwitch(::switches::kUseChromiumDefaults)) {
++    return false;
++  }
++  if (origin.opaque()) {
++    return true;
++  }
++  static const base::NoDestructor<std::vector<std::string>> playback_sites([] {
++    std::vector<std::string> sites(std::begin(kPlaybackSites),
++                                   std::end(kPlaybackSites));
++    for (const std::string& site : base::SplitString(
++             base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++                 ::switches::kWidevinePlaybackSites),
++             ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
++      sites.push_back(base::ToLowerASCII(site));
++    }
++    return sites;
++  }());
++  const std::string host = base::ToLowerASCII(origin.host());
++  for (const std::string& site : *playback_sites) {
++    if (site == "*" || host == site || base::EndsWith(host, "." + site)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++std::optional<WindowsWidevineCertificate> ParseWidevineSignedDrmCertificate(
++    base::span<const uint8_t> data) {
++  const std::optional<std::vector<Field>> signed_certificate = Parse(data);
++  if (!signed_certificate) {
++    return std::nullopt;
++  }
++  const Field* drm_certificate = Find(*signed_certificate, 1, 2);
++  if (!drm_certificate) {
++    return std::nullopt;
++  }
++  const std::optional<std::vector<Field>> certificate =
++      Parse(drm_certificate->bytes);
++  if (!certificate) {
++    return std::nullopt;
++  }
++  const Field* type = Find(*certificate, 1, 0);
++  const Field* serial_number = Find(*certificate, 2, 2);
++  const Field* public_key = Find(*certificate, 4, 2);
++  const Field* provider_id = Find(*certificate, 7, 2);
++  if (!type || type->varint != kServiceCertificateType || !serial_number ||
++      !public_key) {
++    return std::nullopt;
++  }
++  bssl::UniquePtr<RSA> rsa(RSA_public_key_from_bytes(
++      public_key->bytes.data(), public_key->bytes.size()));
++  if (!rsa) {
++    return std::nullopt;
++  }
++  WindowsWidevineCertificate result;
++  result.serial_number.assign(serial_number->bytes.begin(),
++                              serial_number->bytes.end());
++  result.public_key.assign(public_key->bytes.begin(), public_key->bytes.end());
++  if (provider_id) {
++    result.provider_id.assign(provider_id->bytes.begin(),
++                              provider_id->bytes.end());
++  }
++  return result;
++}
++
++std::optional<WindowsWidevineCertificate> ParseWidevineServiceCertificate(
++    base::span<const uint8_t> data) {
++  const std::optional<std::vector<Field>> signed_message = Parse(data);
++  if (!signed_message) {
++    return std::nullopt;
++  }
++  const Field* type = Find(*signed_message, 1, 0);
++  const Field* message = Find(*signed_message, 2, 2);
++  if (!type || type->varint != kServiceCertificateMessage || !message) {
++    return std::nullopt;
++  }
++  return ParseWidevineSignedDrmCertificate(message->bytes);
++}
++
++std::vector<uint8_t> WidevineServiceCertificateRequest() {
++  return {0x08, static_cast<uint8_t>(kServiceCertificateRequestMessage)};
++}
++
++std::optional<std::vector<uint8_t>> MakeWidevinePrivacyRequest(
++    base::span<const uint8_t> clear_request,
++    const WindowsWidevineCertificate& certificate) {
++  const std::optional<std::vector<Field>> signed_message =
++      Parse(clear_request);
++  if (!signed_message) {
++    return std::nullopt;
++  }
++  const Field* type = Find(*signed_message, 1, 0);
++  const Field* message = Find(*signed_message, 2, 2);
++  if (!type || type->varint != kLicenseRequestMessage || !message) {
++    return std::nullopt;
++  }
++  const std::optional<std::vector<Field>> request = Parse(message->bytes);
++  if (!request) {
++    return std::nullopt;
++  }
++  const Field* client_id = Find(*request, 1, 2);
++  if (!client_id) {
++    return std::nullopt;
++  }
++
++  // The identification, sized as Windows' with filler inside the
++  // encryption, which only the license service can open.
++  std::vector<uint8_t> plaintext(client_id->bytes.begin(),
++                                 client_id->bytes.end());
++  const size_t target =
++      kWindowsClientIdSize + static_cast<size_t>(base::RandUint64() % 16);
++  // A filler of 128 to 16,383 bytes takes a tag byte and two length bytes.
++  if (plaintext.size() + 3 + 128 <= target) {
++    std::vector<uint8_t> filler(target - plaintext.size() - 3);
++    base::RandBytes(filler);
++    AppendBytesField(plaintext, kVmpDataField, filler);
++  }
++
++  std::vector<uint8_t> key(16);
++  std::vector<uint8_t> iv(16);
++  base::RandBytes(key);
++  base::RandBytes(iv);
++  const std::optional<std::vector<uint8_t>> ciphertext =
++      AesCbcEncrypt(key, iv, plaintext);
++  const std::optional<std::vector<uint8_t>> wrapped_key =
++      RsaOaepEncrypt(certificate.public_key, key);
++  if (!ciphertext || !wrapped_key) {
++    return std::nullopt;
++  }
++
++  // EncryptedClientIdentification.
++  std::vector<uint8_t> encrypted_client_id;
++  if (!certificate.provider_id.empty()) {
++    AppendBytesField(encrypted_client_id, 1,
++                     base::as_byte_span(certificate.provider_id));
++  }
++  AppendBytesField(encrypted_client_id, 2, certificate.serial_number);
++  AppendBytesField(encrypted_client_id, 3, *ciphertext);
++  AppendBytesField(encrypted_client_id, 4, iv);
++  AppendBytesField(encrypted_client_id, 5, *wrapped_key);
++
++  // The LicenseRequest without client_id (1), with encrypted_client_id (8)
++  // in field order, as Windows' Widevine writes it.
++  std::vector<uint8_t> privacy_request;
++  bool inserted = false;
++  for (const Field& field : *request) {
++    if (field.number == 1) {
++      continue;
++    }
++    if (field.number > 8 && !inserted) {
++      AppendBytesField(privacy_request, 8, encrypted_client_id);
++      inserted = true;
++    }
++    AppendRaw(privacy_request, field.encoded);
++  }
++  if (!inserted) {
++    AppendBytesField(privacy_request, 8, encrypted_client_id);
++  }
++
++  std::vector<uint8_t> out;
++  for (const Field& field : *signed_message) {
++    if (field.number == 2 && field.wire_type == 2) {
++      AppendBytesField(out, 2, privacy_request);
++    } else {
++      AppendRaw(out, field.encoded);
++    }
++  }
++  return out;
++}
++
++CdmKeyInformation::KeyStatus WindowsWidevineHdcpStatus(
++    HdcpVersion min_hdcp_version) {
++  return min_hdcp_version <= HdcpVersion::kHdcpVersion2_2
++             ? CdmKeyInformation::USABLE
++             : CdmKeyInformation::OUTPUT_RESTRICTED;
++}
++
++}  // namespace media
+diff --git a/media/cdm/windows_widevine.h b/media/cdm/windows_widevine.h
+new file mode 100644
+index 0000000000..c951adbdf7
+--- /dev/null
++++ b/media/cdm/windows_widevine.h
+@@ -0,0 +1,86 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef MEDIA_CDM_WINDOWS_WIDEVINE_H_
++#define MEDIA_CDM_WINDOWS_WIDEVINE_H_
++
++#include <stdint.h>
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/containers/span.h"
++#include "media/base/cdm_key_information.h"
++#include "media/base/content_decryption_module.h"
++
++namespace url {
++class Origin;
++}
++
++namespace media {
++
++// browser: Widevine as Chrome on Windows runs it, for a Linux build
++// presenting Windows. Chrome's Windows Widevine works in privacy mode: a
++// session's first message is a service-certificate request (the two bytes
++// 08 04), and once the page answers it with the license service's
++// certificate, the license request carries the client identification
++// encrypted to that certificate's key. The Linux Widevine has no privacy
++// mode: its first message is the license request with the identification in
++// the clear (platform_name "Linux"). CdmAdapter runs the session flow; this
++// file holds the message work.
++
++// Whether the emulation applies to a CDM of |key_system| for |origin|: a
++// Linux build presenting Windows (no --use-chromium-defaults), Widevine, and
++// an origin that is not a playback site. The request built here carries the
++// CDM's signature over the original request, which a license server
++// refuses, so the major streaming services, and the sites listed in
++// --widevine-playback-sites, get the Linux Widevine unchanged and play.
++bool WindowsWidevineApplies(const std::string& key_system,
++                            const url::Origin& origin);
++
++// What a privacy-mode license request needs of the license service's
++// certificate.
++struct WindowsWidevineCertificate {
++  WindowsWidevineCertificate();
++  WindowsWidevineCertificate(const WindowsWidevineCertificate&);
++  WindowsWidevineCertificate& operator=(const WindowsWidevineCertificate&);
++  ~WindowsWidevineCertificate();
++
++  std::string provider_id;
++  std::vector<uint8_t> serial_number;
++  // PKCS#1 RSAPublicKey, DER.
++  std::vector<uint8_t> public_key;
++};
++
++// A SignedDrmCertificate of a service, as MediaKeys.setServerCertificate()
++// takes it.
++std::optional<WindowsWidevineCertificate> ParseWidevineSignedDrmCertificate(
++    base::span<const uint8_t> data);
++
++// A license server's answer to a service-certificate request: a
++// SignedMessage of type SERVICE_CERTIFICATE around a SignedDrmCertificate.
++std::optional<WindowsWidevineCertificate> ParseWidevineServiceCertificate(
++    base::span<const uint8_t> data);
++
++// The service-certificate request Windows' Widevine opens a session with.
++std::vector<uint8_t> WidevineServiceCertificateRequest();
++
++// |clear_request|, a SignedMessage around a LicenseRequest with its
++// client_id in the clear, in privacy mode: client_id replaced by an
++// EncryptedClientIdentification for |certificate|, sized as Chrome 156's
++// Widevine on Windows sizes it. Nullopt when |clear_request| is not such a
++// message.
++std::optional<std::vector<uint8_t>> MakeWidevinePrivacyRequest(
++    base::span<const uint8_t> clear_request,
++    const WindowsWidevineCertificate& certificate);
++
++// MediaKeys.getStatusForPolicy() as Chrome answers it on a Windows desktop
++// with an HDCP 2.2 display: usable up to HDCP 2.2.
++CdmKeyInformation::KeyStatus WindowsWidevineHdcpStatus(
++    HdcpVersion min_hdcp_version);
++
++}  // namespace media
++
++#endif  // MEDIA_CDM_WINDOWS_WIDEVINE_H_
+-- 
+2.45.1.windows.1
+

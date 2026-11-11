@@ -1,0 +1,1331 @@
+From f73d7e3104313c8627ae79e67ca1214ab0e2c74e Mon Sep 17 00:00:00 2001
+From: The browser Authors <noreply@browser.invalid>
+Date: Wed, 11 Nov 2026 03:26:09 -0500
+Subject: [PATCH 38/61] linux-graphics
+
+WebGL in a Linux build presenting Windows (see the user-agent commit)
+reports what ANGLE's Direct3D 11 backend reports on Windows in place of the
+host's (SwiftShader on a server): the limits, ranges and shader precisions
+getParameter() and getShaderPrecisionFormat() return, without the ETC and
+ASTC compressed texture extensions, and one common Intel integrated GPU's
+names (Iris Xe, 0x9A49, the most common in the pool) unless a persona claims
+another (platform/graphics/gpu/ windows_gpu_profile.h). WebGPU likewise: a
+GPU-less server offers the SwiftShader adapter without
+--enable-unsafe-webgpu (the GPU process lets the CPU adapter past the safety
+level and the blocklist, and receives --use-chromium-defaults), and pages
+see a Windows machine's GPU: its vendor and architecture (intel gen-12-lp by
+default, a persona's through webgpu-spoof), its Direct3D 12 subgroup sizes,
+no fallback adapter, the Direct3D 12 features and Chrome's tiered limits
+measured on Windows, and bgra8unorm as the preferred canvas format.
+WEBGL_debug_shaders' getTranslatedShaderSource() answers with the HLSL
+Chrome's Direct3D 11 back end produces (the GPU process translates the
+shader with ANGLE's own HLSL translator, angle_enable_hlsl, with that back
+end's options and limits and the claimed vendor's workarounds), not ANGLE
+Vulkan's SPIR-V. It translates the source the shader was compiled with,
+with the shader extensions enabled by then (Windows defines an
+extension's macro once the page enables it, and the external-image ones,
+which Chrome's decoder requests, always), as ANGLE on Windows translates
+at compile time, and the translated-length query answers for the same
+text. With GL disabled (no usable GPU), a WebGL creation error
+names no device, "Disabled" GL strings and a sandboxed GPU process, as
+Chrome on Windows writes it, not the host's PCI display device (or
+"Sandboxed = no" in a container run with --no-sandbox)
+(content/renderer/renderer_blink_platform_impl.cc). Only what pages read
+changes; the limits Blink and the GPU process enforce stay the host's.
+Nothing changes on Windows or with --use-chromium-defaults.
+---
+ content/browser/gpu/gpu_process_host.cc       |   5 +
+ .../renderer/renderer_blink_platform_impl.cc  |  23 ++
+ gpu/command_buffer/service/BUILD.gn           |  15 ++
+ .../service/d3d11_shader_translation.cc       | 251 ++++++++++++++++++
+ .../service/d3d11_shader_translation.h        |  40 +++
+ .../service/gles2_cmd_decoder_passthrough.h   |  15 ++
+ .../gles2_cmd_decoder_passthrough_doers.cc    |  97 +++++++
+ .../service/webgpu_decoder_impl.cc            |  35 ++-
+ .../webgl/webgl2_rendering_context_base.cc    |  11 +
+ .../webgl/webgl_rendering_context_base.cc     |  78 +++++-
+ .../blink/renderer/modules/webgpu/gpu.cc      |  11 +
+ .../renderer/modules/webgpu/gpu_adapter.cc    |  46 ++++
+ third_party/blink/renderer/platform/BUILD.gn  |   8 +
+ .../graphics/gpu/windows_gpu_profile.cc       | 229 ++++++++++++++++
+ .../graphics/gpu/windows_gpu_profile.h        |  78 ++++++
+ 15 files changed, 936 insertions(+), 6 deletions(-)
+ create mode 100644 gpu/command_buffer/service/d3d11_shader_translation.cc
+ create mode 100644 gpu/command_buffer/service/d3d11_shader_translation.h
+ create mode 100644 third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
+ create mode 100644 third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
+
+diff --git a/content/browser/gpu/gpu_process_host.cc b/content/browser/gpu/gpu_process_host.cc
+index 23877b74ab..1edd6174f8 100644
+--- a/content/browser/gpu/gpu_process_host.cc
++++ b/content/browser/gpu/gpu_process_host.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "content/browser/gpu/gpu_process_host.h"
+ 
++#include "components/browser/browser_switches.h"
++
+ #include <stddef.h>
+ 
+ #include <algorithm>
+@@ -257,6 +259,9 @@ GpuTerminationStatus ConvertToGpuTerminationStatus(
+ 
+ // Command-line switches to propagate to the GPU process.
+ static const char* const kSwitchNames[] = {
++    // browser: the GPU process presents Windows' WebGPU adapter unless
++    // this asks for stock Chromium (webgpu_decoder_impl.cc).
++    ::switches::kUseChromiumDefaults,
+     sandbox::policy::switches::kDisableSeccompFilterSandbox,
+     sandbox::policy::switches::kGpuSandboxAllowSysVShm,
+     sandbox::policy::switches::kGpuSandboxFailuresFatal,
+diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer/renderer_blink_platform_impl.cc
+index 4341f407c4..3036881153 100644
+--- a/content/renderer/renderer_blink_platform_impl.cc
++++ b/content/renderer/renderer_blink_platform_impl.cc
+@@ -141,6 +141,11 @@
+ #include "content/common/android/sync_compositor_statics.h"
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "ui/gl/gl_implementation.h"
++#endif
++
+ using blink::Platform;
+ using blink::WebAudioDevice;
+ using blink::WebAudioLatencyHint;
+@@ -728,6 +733,24 @@ void RendererBlinkPlatformImpl::CollectWebGLContextInfo(
+   gl_info->using_gpu_compositing = !IsGpuCompositingDisabled();
+   gl_info->using_passthrough_command_decoder = gpu_info.passthrough_cmd_decoder;
+   gl_info->angle_implementation = gpu_info.gl_implementation_parts.angle;
++#if BUILDFLAG(IS_LINUX)
++  // browser: with GL disabled (no usable GPU), Chrome on Windows names no
++  // device and "Disabled" GL strings in a WebGL creation error
++  // (gpu_info_collector.cc). Linux names the host's PCI display device, a
++  // server's board graphics or a cloud machine's virtual adapter, and no GL
++  // strings. A Linux build presenting Windows answers as Windows does.
++  if (blink::PresentsWindowsPlatform() &&
++      gpu_info.gl_implementation_parts.gl == gl::kGLImplementationDisabled) {
++    gl_info->vendor_id = 0;
++    gl_info->device_id = 0;
++    gl_info->vendor_info = blink::WebString::FromUtf8("Disabled");
++    gl_info->renderer_info = blink::WebString::FromUtf8("Disabled");
++    gl_info->driver_version = blink::WebString();
++    // A container runs the browser with --no-sandbox; Chrome on Windows
++    // writes "Sandboxed = yes".
++    gl_info->sandboxed = true;
++  }
++#endif
+ }
+ 
+ std::unique_ptr<blink::WebGraphicsContext3DProvider>
+diff --git a/gpu/command_buffer/service/BUILD.gn b/gpu/command_buffer/service/BUILD.gn
+index dfd4182a87..45476f77b6 100644
+--- a/gpu/command_buffer/service/BUILD.gn
++++ b/gpu/command_buffer/service/BUILD.gn
+@@ -354,6 +354,11 @@ target(link_target_type, "gles2_sources") {
+       "webgpu_decoder_impl.cc",
+       "webgpu_decoder_impl.h",
+     ]
++
++    # browser: PresentsWindowsWebGpu() in a Linux build.
++    if (is_linux) {
++      deps += [ "//components/browser:browser_switches" ]
++    }
+   }
+ 
+   configs += [
+@@ -415,6 +420,16 @@ target(link_target_type, "gles2_sources") {
+     "//ui/gl/init",
+   ]
+ 
++  # browser: WEBGL_debug_shaders as Chrome's Direct3D 11 back end answers
++  # it, in a Linux build presenting Windows (linux-graphics).
++  if (is_linux) {
++    sources += [
++      "d3d11_shader_translation.cc",
++      "d3d11_shader_translation.h",
++    ]
++    deps += [ "//components/browser:browser_switches" ]
++  }
++
+   if (use_ozone) {
+     sources += [
+       "shared_image/gl_ozone_image_representation.cc",
+diff --git a/gpu/command_buffer/service/d3d11_shader_translation.cc b/gpu/command_buffer/service/d3d11_shader_translation.cc
+new file mode 100644
+index 0000000000..d02c3f6ff2
+--- /dev/null
++++ b/gpu/command_buffer/service/d3d11_shader_translation.cc
+@@ -0,0 +1,251 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "gpu/command_buffer/service/d3d11_shader_translation.h"
++
++#include <iterator>
++#include <map>
++#include <string_view>
++#include <tuple>
++#include <vector>
++
++#include "base/command_line.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_split.h"
++#include "ui/gfx/extension_set.h"
++#include "base/synchronization/lock.h"
++#include "components/browser/browser_switches.h"
++#include "third_party/angle/include/GLSLANG/ShaderLang.h"
++#include "ui/gl/gl_bindings.h"
++#include "ui/gl/gl_switches.h"
++
++namespace gpu::gles2 {
++
++namespace {
++
++// A D3D11 workaround of ANGLE's: on when --enable-angle-features names it,
++// off when --disable-angle-features does, otherwise as on |default_on|.
++bool NamedFeature(std::string_view name, bool default_on) {
++  const base::CommandLine& command_line =
++      *base::CommandLine::ForCurrentProcess();
++  for (const auto& [list, value] :
++       {std::make_pair(::switches::kEnableANGLEFeatures, true),
++        std::make_pair(::switches::kDisableANGLEFeatures, false)}) {
++    for (const std::string& named :
++         base::SplitString(command_line.GetSwitchValueASCII(list), ",",
++                           base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
++      if (named == name) {
++        return value;
++      }
++    }
++  }
++  return default_on;
++}
++
++// The vendor workarounds renderer11_utils.cpp turns on for D3D11 shaders:
++// NVIDIA's keep vertex constant register 0 free and read texture dimensions
++// without the base level; Intel's add texelFetch offsets beforehand.
++struct Workarounds {
++  bool skip_vs_constant_register_zero = false;
++  bool get_dimensions_ignores_base_level = false;
++  bool pre_add_texel_fetch_offsets = true;
++};
++
++const Workarounds& ClaimedWorkarounds() {
++  static const Workarounds workarounds{
++      NamedFeature("skipVSConstantRegisterZero", false),
++      NamedFeature("getDimensionsIgnoresBaseLevel", false),
++      NamedFeature("preAddTexelFetchOffsets", true)};
++  return workarounds;
++}
++
++// The limits ANGLE's D3D11 back end gives the translator at feature level
++// 11_1 (Compiler.cpp from renderer11_utils.cpp's caps), as WebGL contexts
++// have them; the Windows GPU profile reports the same to pages.
++ShBuiltInResources Direct3D11Resources(bool webgl2) {
++  ShBuiltInResources resources;
++  sh::InitBuiltInResources(&resources);
++  resources.MaxVertexAttribs = 16;
++  resources.MaxVertexUniformVectors =
++      ClaimedWorkarounds().skip_vs_constant_register_zero ? 4095 : 4096;
++  resources.MaxVaryingVectors = 30;
++  resources.MaxVertexTextureImageUnits = 16;
++  resources.MaxCombinedTextureImageUnits = 32;
++  resources.MaxTextureImageUnits = 16;
++  resources.MaxFragmentUniformVectors = 1024;
++  resources.MaxDrawBuffers = 8;
++  resources.MaxVertexOutputVectors = 30;
++  resources.MaxFragmentInputVectors = 30;
++  resources.MinProgramTexelOffset = -8;
++  resources.MaxProgramTexelOffset = 7;
++  resources.MaxFragmentUniformBlocks = 12;
++  resources.MaxVertexUniformBlocks = 12;
++  resources.MaxUniformBufferBindings = 24;
++  resources.MaxDualSourceDrawBuffers = 1;
++  resources.MaxSamples = 8;
++  resources.MinPointSize = 1;
++  resources.MaxPointSize = 1024;
++  resources.MaxViewsOVR = 4;
++  resources.MaxClipDistances = 8;
++  resources.MaxCullDistances = 8;
++  resources.MaxCombinedClipAndCullDistances = 8;
++  resources.HashFunction = nullptr;
++  return resources;
++}
++
++// The shader extensions the D3D11 back end supports (renderer11_utils.cpp
++// GenerateCaps) that a WebGL context of this version offers, each on once
++// the page has enabled it, as Windows defines their macros (measured). The
++// translator then applies each extension's own shader-version rules.
++struct ShaderExtension {
++  const char* name;
++  int ShBuiltInResources::* flag;
++  bool webgl1;
++  bool webgl2;
++  // On for every context of a version it serves, whatever the host lists.
++  bool always = false;
++};
++constexpr ShaderExtension kShaderExtensions[] = {
++    {"GL_OES_standard_derivatives",
++     &ShBuiltInResources::OES_standard_derivatives, true, false},
++    {"GL_EXT_shader_texture_lod", &ShBuiltInResources::EXT_shader_texture_lod,
++     true, false},
++    {"GL_EXT_frag_depth", &ShBuiltInResources::EXT_frag_depth, true, false},
++    {"GL_EXT_draw_buffers", &ShBuiltInResources::EXT_draw_buffers, true,
++     false},
++    {"GL_EXT_blend_func_extended",
++     &ShBuiltInResources::EXT_blend_func_extended, true, true},
++    {"GL_ANGLE_multi_draw", &ShBuiltInResources::ANGLE_multi_draw, true,
++     true},
++    {"GL_OVR_multiview2", &ShBuiltInResources::OVR_multiview2, false, true},
++    {"GL_ANGLE_clip_cull_distance",
++     &ShBuiltInResources::ANGLE_clip_cull_distance, false, true},
++    {"GL_NV_shader_noperspective_interpolation",
++     &ShBuiltInResources::NV_shader_noperspective_interpolation, false, true},
++    {"GL_EXT_conservative_depth", &ShBuiltInResources::EXT_conservative_depth,
++     false, true},
++    {"GL_OES_sample_variables", &ShBuiltInResources::OES_sample_variables,
++     false, true},
++    {"GL_OES_shader_multisample_interpolation",
++     &ShBuiltInResources::OES_shader_multisample_interpolation, false, true},
++    // Requested by Chrome's decoder for every context, so defined in every
++    // WebGL shader of a version they serve.
++    {"GL_OES_EGL_image_external", &ShBuiltInResources::OES_EGL_image_external,
++     true, true, /*always=*/true},
++    {"GL_OES_EGL_image_external_essl3",
++     &ShBuiltInResources::OES_EGL_image_external_essl3, false, true,
++     /*always=*/true},
++    // On with OVR_multiview2; the translator hides its macro in WebGL.
++    {"GL_OVR_multiview", &ShBuiltInResources::OVR_multiview, false, true},
++};
++
++static_assert(std::size(kShaderExtensions) <= 32);
++
++}  // namespace
++
++uint32_t ShaderExtensionBits(bool webgl2, const std::string& gl_extensions) {
++  const gfx::ExtensionSet enabled = gfx::MakeExtensionSet(gl_extensions);
++  uint32_t bits = 0;
++  for (size_t i = 0; i < std::size(kShaderExtensions); ++i) {
++    const ShaderExtension& extension = kShaderExtensions[i];
++    if ((webgl2 ? extension.webgl2 : extension.webgl1) &&
++        (extension.always || gfx::HasExtension(enabled, extension.name))) {
++      bits |= 1u << i;
++    }
++  }
++  return bits;
++}
++
++namespace {
++
++// libANGLE's Shader::compile() for a WebGL (hardened) context, then
++// ShaderD3D::compile() for D3D11 on Windows 10 or later.
++ShCompileOptions Direct3D11Options(uint32_t shader_type) {
++  const Workarounds& workarounds = ClaimedWorkarounds();
++  ShCompileOptions options = {};
++  options.objectCode = true;
++  options.emulateGLDrawID = true;
++  options.initGLPosition = true;
++  options.limitCallStackDepth = true;
++  options.limitExpressionComplexity = true;
++  options.initSharedVariables = true;
++  options.rejectWebglShadersWithLargeVariables = true;
++  options.rejectWebglShadersWithUndefinedBehavior = true;
++  options.expandFragmentOutputsToVec4 = true;
++  options.removeInactiveVariables = true;
++  options.clampIndirectArrayBounds = true;
++  options.expandSelectHLSLIntegerPowExpressions = true;
++  options.HLSLGetDimensionsIgnoresBaseLevel =
++      workarounds.get_dimensions_ignores_base_level;
++  options.rewriteTexelFetchOffsetToTexelFetch =
++      workarounds.pre_add_texel_fetch_offsets;
++  options.skipD3DConstantRegisterZero =
++      workarounds.skip_vs_constant_register_zero &&
++      shader_type == GL_VERTEX_SHADER;
++  options.allowTranslateUniformBlockToStructuredBuffer = true;
++  options.initializeBuiltinsForInstancedMultiview = true;
++  options.pls.type = ShPixelLocalStorageType::ImageLoadStore;
++  options.pls.fragmentSyncType =
++      ShFragmentSynchronizationType::RasterizerOrderViews_D3D;
++  options.pls.supportsNativeRGBA8ImageFormats = true;
++  options.validateAST = false;
++  return options;
++}
++
++}  // namespace
++
++bool PresentsWindowsShaderTranslation() {
++  static const bool presents =
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kUseChromiumDefaults);
++  return presents;
++}
++
++std::string TranslateAsDirect3D11(uint32_t shader_type,
++                                  bool webgl2,
++                                  const std::string& source,
++                                  uint32_t extension_bits) {
++  if (shader_type != GL_VERTEX_SHADER && shader_type != GL_FRAGMENT_SHADER) {
++    return std::string();
++  }
++  const uint32_t extensions = extension_bits;
++  static base::NoDestructor<base::Lock> lock;
++  static base::NoDestructor<
++      std::map<std::tuple<uint32_t, bool, uint32_t>, ShHandle>>
++      compilers;
++  base::AutoLock auto_lock(*lock);
++  static const bool initialized = sh::Initialize();
++  if (!initialized) {
++    return std::string();
++  }
++  ShHandle& compiler = (*compilers)[{shader_type, webgl2, extensions}];
++  if (!compiler) {
++    ShBuiltInResources resources = Direct3D11Resources(webgl2);
++    for (size_t i = 0; i < std::size(kShaderExtensions); ++i) {
++      resources.*kShaderExtensions[i].flag = (extensions >> i) & 1;
++    }
++    // WebGL 1 without WEBGL_draw_buffers has one draw buffer.
++    if (!webgl2 && !resources.EXT_draw_buffers) {
++      resources.MaxDrawBuffers = 1;
++    }
++    compiler = sh::ConstructCompiler(shader_type,
++                                     webgl2 ? SH_WEBGL2_SPEC : SH_WEBGL_SPEC,
++                                     SH_HLSL_4_1_OUTPUT, &resources);
++    if (!compiler) {
++      return std::string();
++    }
++  }
++  const char* strings[] = {source.c_str()};
++  if (!sh::Compile(compiler, strings, 1, Direct3D11Options(shader_type))) {
++    return std::string();
++  }
++  // ShaderD3D's debug info, as Shader::getTranslatedSourceWithDebugInfo()
++  // returns it.
++  return "// INITIAL HLSL BEGIN\n\n" + sh::GetObjectCode(compiler) +
++         "\n// INITIAL HLSL END\n\n\n" + "\n// " +
++         (shader_type == GL_VERTEX_SHADER ? "VERTEX" : "FRAGMENT") +
++         " SHADER END\n";
++}
++
++}  // namespace gpu::gles2
+diff --git a/gpu/command_buffer/service/d3d11_shader_translation.h b/gpu/command_buffer/service/d3d11_shader_translation.h
+new file mode 100644
+index 0000000000..532fe7ec03
+--- /dev/null
++++ b/gpu/command_buffer/service/d3d11_shader_translation.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef GPU_COMMAND_BUFFER_SERVICE_D3D11_SHADER_TRANSLATION_H_
++#define GPU_COMMAND_BUFFER_SERVICE_D3D11_SHADER_TRANSLATION_H_
++
++#include <stdint.h>
++
++#include <string>
++
++namespace gpu::gles2 {
++
++// browser: whether this GPU process serves a Linux build presenting Windows
++// (no --use-chromium-defaults).
++bool PresentsWindowsShaderTranslation();
++
++// browser: what Chrome on Windows returns from WEBGL_debug_shaders'
++// getTranslatedShaderSource() for a WebGL shader of |shader_type|
++// (GL_VERTEX_SHADER or GL_FRAGMENT_SHADER) and |source|: ANGLE's Direct3D 11
++// back end translates it to HLSL and returns that text between its debug
++// markers. Translated here by ANGLE's own HLSL translator with the options
++// and limits that back end uses at feature level 11_1, and the vendor
++// workarounds --enable-angle-features and --disable-angle-features name
++// (Intel's otherwise, the Windows GPU profile's default). Empty when it does
++// not compile. |extension_bits| are ShaderExtensionBits() when the shader
++// was compiled: ANGLE on Windows defines a shader extension's macro only
++// once the extension is enabled.
++std::string TranslateAsDirect3D11(uint32_t shader_type,
++                                  bool webgl2,
++                                  const std::string& source,
++                                  uint32_t extension_bits);
++
++// browser: which shader extensions of the D3D11 back end's a WebGL context
++// has enabled, from its GL_EXTENSIONS string, for TranslateAsDirect3D11().
++uint32_t ShaderExtensionBits(bool webgl2, const std::string& gl_extensions);
++
++}  // namespace gpu::gles2
++
++#endif  // GPU_COMMAND_BUFFER_SERVICE_D3D11_SHADER_TRANSLATION_H_
+diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h
+index 75172439b5..50f5847a15 100644
+--- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h
++++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h
+@@ -529,6 +529,21 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl : public GLES2Decoder {
+   // Mappings from client side IDs to service side IDs for shared objects
+   raw_ptr<PassthroughResources> resources_ = nullptr;
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: WEBGL_debug_shaders' translation as Chrome's Direct3D 11 back
++  // end gives it, in a Linux build presenting Windows
++  // (d3d11_shader_translation.h): what each WebGL shader was last compiled
++  // with, by client id, and its translation once asked for.
++  struct CompiledShader {
++    std::string source;
++    uint32_t extension_bits = 0;
++    std::optional<std::string> translation;
++  };
++  void RecordCompiledShader(GLuint shader);
++  const std::string& Direct3D11Translation(GLuint shader);
++  base::flat_map<GLuint, CompiledShader> compiled_shaders_;
++#endif
++
+   // Mappings from client side IDs to service side IDs for per-context objects
+   ClientServiceMap<GLuint, GLuint> framebuffer_id_map_;
+   ClientServiceMap<GLuint, GLuint> transform_feedback_id_map_;
+diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
+index 4aeff35017..26840ae9e6 100644
+--- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
++++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
+@@ -41,6 +41,12 @@
+ #include "ui/gl/gl_version_info.h"
+ #include "ui/gl/scoped_make_current.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "base/no_destructor.h"
++#include "base/numerics/safe_conversions.h"
++#include "gpu/command_buffer/service/d3d11_shader_translation.h"
++#endif
++
+ namespace gpu {
+ namespace gles2 {
+ 
+@@ -729,9 +735,68 @@ error::Error GLES2DecoderPassthroughImpl::DoColorMaskiOES(GLuint buf,
+ 
+ error::Error GLES2DecoderPassthroughImpl::DoCompileShader(GLuint shader) {
+   api()->glCompileShaderFn(GetShaderServiceID(shader, resources_));
++#if BUILDFLAG(IS_LINUX)
++  if (feature_info_->IsWebGLContext() && PresentsWindowsShaderTranslation()) {
++    RecordCompiledShader(shader);
++  }
++#endif
+   return error::kNoError;
+ }
+ 
++#if BUILDFLAG(IS_LINUX)
++// browser: what |shader| was compiled with: its source and the extensions
++// the page had enabled (the translation is made from these, as ANGLE on
++// Windows translates at compile time).
++void GLES2DecoderPassthroughImpl::RecordCompiledShader(GLuint shader) {
++  const GLuint service_id = GetShaderServiceID(shader, resources_);
++  if (!service_id) {
++    return;
++  }
++  GLint source_length = 0;
++  api()->glGetShaderivFn(service_id, GL_SHADER_SOURCE_LENGTH, &source_length);
++  CompiledShader& compiled = compiled_shaders_[shader];
++  compiled.source.clear();
++  if (source_length > 0) {
++    std::vector<char> buffer(source_length, 0);
++    GLsizei length = 0;
++    api()->glGetShaderSourceFn(service_id, source_length, &length,
++                               buffer.data());
++    compiled.source.assign(buffer.data(), length);
++  }
++  const char* extensions =
++      reinterpret_cast<const char*>(api()->glGetStringFn(GL_EXTENSIONS));
++  compiled.extension_bits = ShaderExtensionBits(
++      feature_info_->IsWebGL2OrES3Context(), extensions ? extensions : "");
++  compiled.translation.reset();
++}
++
++// browser: |shader|'s Direct3D 11 translation, made once per compile; empty
++// when it was not compiled or did not compile.
++const std::string& GLES2DecoderPassthroughImpl::Direct3D11Translation(
++    GLuint shader) {
++  static const base::NoDestructor<std::string> kNone;
++  auto it = compiled_shaders_.find(shader);
++  if (it == compiled_shaders_.end()) {
++    return *kNone;
++  }
++  CompiledShader& compiled = it->second;
++  if (!compiled.translation) {
++    const GLuint service_id = GetShaderServiceID(shader, resources_);
++    GLint compile_status = GL_FALSE;
++    GLint type = 0;
++    api()->glGetShaderivFn(service_id, GL_COMPILE_STATUS, &compile_status);
++    api()->glGetShaderivFn(service_id, GL_SHADER_TYPE, &type);
++    compiled.translation =
++        compile_status
++            ? TranslateAsDirect3D11(type, feature_info_->IsWebGL2OrES3Context(),
++                                    compiled.source,
++                                    compiled.extension_bits)
++            : std::string();
++  }
++  return *compiled.translation;
++}
++#endif
++
+ error::Error GLES2DecoderPassthroughImpl::DoCompressedTexImage2D(
+     GLenum target,
+     GLint level,
+@@ -1043,6 +1108,9 @@ error::Error GLES2DecoderPassthroughImpl::DoDeleteSync(GLuint sync) {
+ }
+ 
+ error::Error GLES2DecoderPassthroughImpl::DoDeleteShader(GLuint shader) {
++#if BUILDFLAG(IS_LINUX)
++  compiled_shaders_.erase(shader);
++#endif
+   return DeleteHelper(
+       shader, &resources_->shader_id_map,
+       [this](GLuint shader) { api()->glDeleteShaderFn(shader); });
+@@ -1732,6 +1800,23 @@ error::Error GLES2DecoderPassthroughImpl::DoGetShaderiv(GLuint shader,
+                                                         GLsizei bufsize,
+                                                         GLsizei* length,
+                                                         GLint* params) {
++#if BUILDFLAG(IS_LINUX)
++  // browser: the length of the translation getTranslatedShaderSource()
++  // returns (Blink sizes its buffer from it), with its terminating null,
++  // as ANGLE counts it.
++  if (pname == GL_TRANSLATED_SHADER_SOURCE_LENGTH_ANGLE && bufsize >= 1 &&
++      feature_info_->IsWebGLContext() && PresentsWindowsShaderTranslation() &&
++      compiled_shaders_.contains(shader)) {
++    const std::string& translation = Direct3D11Translation(shader);
++    *params = translation.empty()
++                  ? 0
++                  : base::checked_cast<GLint>(translation.size() + 1);
++    if (length) {
++      *length = 1;
++    }
++    return error::kNoError;
++  }
++#endif
+   api()->glGetShaderivRobustANGLEFn(GetShaderServiceID(shader, resources_),
+                                     pname, bufsize, length, params);
+   return error::kNoError;
+@@ -4302,6 +4387,18 @@ error::Error GLES2DecoderPassthroughImpl::DoGetTranslatedShaderSourceANGLE(
+     std::string* source) {
+   CheckErrorCallbackState();
+   GLuint service_id = GetShaderServiceID(shader, resources_);
++#if BUILDFLAG(IS_LINUX)
++  // browser: a WebGL shader's translation as Chrome's Direct3D 11 back end
++  // gives it, in a Linux build presenting Windows
++  // (d3d11_shader_translation.h).
++  // A shader never compiled, or unknown, is the host's to answer ("", or
++  // GL_INVALID_VALUE).
++  if (feature_info_->IsWebGLContext() && PresentsWindowsShaderTranslation() &&
++      compiled_shaders_.contains(shader)) {
++    *source = Direct3D11Translation(shader);
++    return error::kNoError;
++  }
++#endif
+   GLint translated_source_length = 0;
+   api()->glGetShaderivFn(service_id, GL_TRANSLATED_SHADER_SOURCE_LENGTH_ANGLE,
+                          &translated_source_length);
+diff --git a/gpu/command_buffer/service/webgpu_decoder_impl.cc b/gpu/command_buffer/service/webgpu_decoder_impl.cc
+index 02a3f6f90b..fb8e46b104 100644
+--- a/gpu/command_buffer/service/webgpu_decoder_impl.cc
++++ b/gpu/command_buffer/service/webgpu_decoder_impl.cc
+@@ -53,6 +53,11 @@
+ #include "gpu/config/gpu_finch_features.h"
+ #include "gpu/config/gpu_preferences.h"
+ #include "gpu/config/webgpu_blocklist_impl.h"
++
++#if BUILDFLAG(IS_LINUX)
++#include "base/command_line.h"
++#include "components/browser/browser_switches.h"
++#endif
+ #include "gpu/webgpu/callback.h"
+ #include "third_party/blink/public/common/tokens/tokens.h"
+ #include "third_party/dawn/include/dawn/native/DawnNative.h"
+@@ -80,6 +85,26 @@ namespace webgpu {
+ 
+ namespace {
+ 
++// browser: whether this GPU process serves a Linux build presenting Windows
++// (blink::PresentsWindowsPlatform(), which gpu/ cannot reach): a GPU-less
++// server then offers the SwiftShader adapter, which pages see as a Windows
++// machine's GPU (Blink's gpu_adapter.cc), without --enable-unsafe-webgpu
++// and its developer features.
++bool PresentsWindowsWebGpu() {
++#if BUILDFLAG(IS_LINUX)
++  static const bool presents =
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kUseChromiumDefaults);
++  return presents;
++#else
++  return false;
++#endif
++}
++
++}  // namespace
++
++namespace {
++
+ constexpr wgpu::TextureUsage kAllowedWritableMailboxTextureUsages =
+     wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::RenderAttachment |
+     wgpu::TextureUsage::StorageBinding;
+@@ -1630,7 +1655,8 @@ wgpu::Adapter WebGPUDecoderImpl::CreatePreferredAdapter(
+   // The fallback adapter is SwiftShader, which is only allowed with
+   // --enable-unsafe-webgpu. Don't make Dawn load it otherwise.
+   const bool allow_fallback_adapter =
+-      safety_level_ == webgpu::SafetyLevel::kUnsafe;
++      safety_level_ == webgpu::SafetyLevel::kUnsafe ||
++      PresentsWindowsWebGpu();
+   if (force_fallback && !allow_fallback_adapter) {
+     return nullptr;
+   }
+@@ -1778,7 +1804,12 @@ wgpu::Adapter WebGPUDecoderImpl::CreatePreferredAdapter(
+     wgpu::AdapterInfo adapter_info = {};
+     adapter.GetInfo(&adapter_info);
+ 
+-    if (use_blocklist() && IsWebGPUAdapterBlocklisted(adapter).blocked) {
++    // browser: in a Linux build presenting Windows, the CPU adapter
++    // (SwiftShader) passes the blocklist; see PresentsWindowsWebGpu().
++    if (use_blocklist() &&
++        !(PresentsWindowsWebGpu() &&
++          adapter_info.adapterType == wgpu::AdapterType::CPU) &&
++        IsWebGPUAdapterBlocklisted(adapter).blocked) {
+       return false;
+     }
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+index 9eb36fe26c..89f8d55d56 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+@@ -11,6 +11,7 @@
+ #include "base/feature_list.h"
+ #include "base/numerics/checked_math.h"
+ #include "base/numerics/safe_conversions.h"
++#include "build/build_config.h"
+ #include "gpu/command_buffer/client/gles2_interface.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
+@@ -107,6 +108,10 @@
+   };                                                       \
+   GetCurrentUnpackState(params)
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h"
++#endif
++
+ namespace blink {
+ 
+ namespace {
+@@ -5058,6 +5063,12 @@ ScriptValue WebGL2RenderingContextBase::GetInt64Parameter(
+   GLint64 value = 0;
+   if (!isContextLost())
+     ContextGL()->GetInteger64v(pname, &value);
++#if BUILDFLAG(IS_LINUX)
++  // browser: see windows_gpu_profile.h.
++  if (std::optional<int64_t> windows = WindowsGpuIntParameter(pname)) {
++    value = *windows;
++  }
++#endif
+   return WebGLAny(script_state, value);
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+index b17f336f90..227186c30c 100644
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -170,6 +170,10 @@
+ #include "third_party/skia/include/gpu/ganesh/GrTypes.h"
+ #include "ui/gfx/geometry/size.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h"
++#endif
++
+ 
+ // Populates parameters from texImage2D except for border, width, height, and
+ // depth (which are not present for all texImage2D functions).
+@@ -3854,6 +3858,13 @@ bool WebGLRenderingContextBase::ExtensionSupportedAndAllowed(
+     return false;
+   if (disabled_extensions_.Contains(String(tracker->ExtensionName())))
+     return false;
++#if BUILDFLAG(IS_LINUX)
++  // browser: none Direct3D 11 lacks, in a Linux build presenting Windows
++  // (windows_gpu_profile.h).
++  if (WindowsGpuHidesExtension(tracker->ExtensionName())) {
++    return false;
++  }
++#endif
+   return true;
+ }
+ 
+@@ -4216,8 +4227,15 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
+-        return WebGLAny(script_state,
+-                        String(ContextGL()->GetString(GL_RENDERER)));
++        String real = String(ContextGL()->GetString(GL_RENDERER));
++#if BUILDFLAG(IS_LINUX)
++        // browser: a Linux build presenting Windows names a Windows GPU
++        // (windows_gpu_profile.h).
++        if (PresentsWindowsGpu()) {
++          real = kWindowsGpuRenderer;
++        }
++#endif
++        return WebGLAny(script_state, real);
+       }
+       SynthesizeGLError(
+           GL_INVALID_ENUM, "getParameter",
+@@ -4225,8 +4243,14 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
+-        return WebGLAny(script_state,
+-                        String(ContextGL()->GetString(GL_VENDOR)));
++        String real = String(ContextGL()->GetString(GL_VENDOR));
++#if BUILDFLAG(IS_LINUX)
++        // browser: and its vendor.
++        if (PresentsWindowsGpu()) {
++          real = kWindowsGpuVendor;
++        }
++#endif
++        return WebGLAny(script_state, real);
+       }
+       SynthesizeGLError(
+           GL_INVALID_ENUM, "getParameter",
+@@ -4526,6 +4550,18 @@ WebGLShaderPrecisionFormat* WebGLRenderingContextBase::getShaderPrecisionFormat(
+   GLint precision = 0;
+   ContextGL()->GetShaderPrecisionFormat(shader_type, precision_type, range,
+                                         &precision);
++#if BUILDFLAG(IS_LINUX)
++  // browser: Direct3D 11's in a Linux build presenting Windows
++  // (windows_gpu_profile.h).
++  std::array<int32_t, 2> windows_range;
++  int32_t windows_precision;
++  if (WindowsGpuPrecisionFormat(precision_type, windows_range,
++                                windows_precision)) {
++    range[0] = windows_range[0];
++    range[1] = windows_range[1];
++    precision = windows_precision;
++  }
++#endif
+   return MakeGarbageCollected<WebGLShaderPrecisionFormat>(range[0], range[1],
+                                                           precision);
+ }
+@@ -8011,6 +8047,12 @@ ScriptValue WebGLRenderingContextBase::GetFloatParameter(
+   GLfloat value = 0;
+   if (!isContextLost()) {
+     ContextGL()->GetFloatv(pname, &value);
++#if BUILDFLAG(IS_LINUX)
++    // browser: see windows_gpu_profile.h.
++    if (std::optional<float> windows = WindowsGpuFloatParameter(pname)) {
++      value = *windows;
++    }
++#endif
+   }
+   return WebGLAny(script_state, value);
+ }
+@@ -8021,6 +8063,12 @@ ScriptValue WebGLRenderingContextBase::GetIntParameter(
+   GLint value = 0;
+   if (!isContextLost()) {
+     ContextGL()->GetIntegerv(pname, &value);
++#if BUILDFLAG(IS_LINUX)
++    // browser: see windows_gpu_profile.h.
++    if (std::optional<int64_t> windows = WindowsGpuIntParameter(pname)) {
++      value = static_cast<GLint>(*windows);
++    }
++#endif
+     switch (pname) {
+       case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
+       case GL_IMPLEMENTATION_COLOR_READ_TYPE:
+@@ -8043,6 +8091,12 @@ ScriptValue WebGLRenderingContextBase::GetInt64Parameter(
+   GLint64 value = 0;
+   if (!isContextLost())
+     ContextGL()->GetInteger64v(pname, &value);
++#if BUILDFLAG(IS_LINUX)
++  // browser: see windows_gpu_profile.h.
++  if (std::optional<int64_t> windows = WindowsGpuIntParameter(pname)) {
++    value = *windows;
++  }
++#endif
+   return WebGLAny(script_state, value);
+ }
+ 
+@@ -8061,6 +8115,14 @@ ScriptValue WebGLRenderingContextBase::GetWebGLFloatArrayParameter(
+   std::array<GLfloat, 4> value = {0};
+   if (!isContextLost())
+     ContextGL()->GetFloatv(pname, value.data());
++#if BUILDFLAG(IS_LINUX)
++  // browser: see windows_gpu_profile.h.
++  if (std::optional<std::array<float, 2>> windows =
++          WindowsGpuFloatPairParameter(pname)) {
++    value[0] = (*windows)[0];
++    value[1] = (*windows)[1];
++  }
++#endif
+   unsigned length = 0;
+   switch (pname) {
+     case GL_ALIASED_POINT_SIZE_RANGE:
+@@ -8085,6 +8147,14 @@ ScriptValue WebGLRenderingContextBase::GetWebGLIntArrayParameter(
+   std::array<GLint, 4> value = {0};
+   if (!isContextLost())
+     ContextGL()->GetIntegerv(pname, value.data());
++#if BUILDFLAG(IS_LINUX)
++  // browser: see windows_gpu_profile.h.
++  if (std::optional<std::array<int32_t, 2>> windows =
++          WindowsGpuIntPairParameter(pname)) {
++    value[0] = (*windows)[0];
++    value[1] = (*windows)[1];
++  }
++#endif
+   unsigned length = 0;
+   switch (pname) {
+     case GL_MAX_VIEWPORT_DIMS:
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu.cc b/third_party/blink/renderer/modules/webgpu/gpu.cc
+index 74daeb175a..620e33ef02 100644
+--- a/third_party/blink/renderer/modules/webgpu/gpu.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu.cc
+@@ -46,6 +46,10 @@
+ #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+ #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h"
++#endif
++
+ namespace blink {
+ 
+ namespace {
+@@ -397,6 +401,13 @@ ScriptPromise<IDLNullable<GPUAdapter>> GPU::requestAdapter(
+ }
+ 
+ V8GPUTextureFormat GPU::getPreferredCanvasFormat() {
++#if BUILDFLAG(IS_LINUX)
++  // browser: Windows' answer in a Linux build presenting Windows
++  // (windows_gpu_profile.h); the format used inside stays Linux's.
++  if (PresentsWindowsGpu()) {
++    return FromDawnEnum(wgpu::TextureFormat::BGRA8Unorm);
++  }
++#endif
+   return FromDawnEnum(GetPreferredCanvasFormat());
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+index 5d35a355c7..5a445496d3 100644
+--- a/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
++++ b/third_party/blink/renderer/modules/webgpu/gpu_adapter.cc
+@@ -27,6 +27,10 @@
+ #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+ #include "third_party/blink/renderer/platform/wtf/text/format.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h"
++#endif
++
+ namespace blink {
+ 
+ namespace {
+@@ -97,6 +101,14 @@ GPUAdapter::GPUAdapter(
+ 
+   vendor_ = String::FromUtf8(info.vendor);
+   architecture_ = String::FromUtf8(info.architecture);
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows names a Windows GPU
++  // (windows_gpu_profile.h).
++  if (PresentsWindowsGpu()) {
++    vendor_ = kWindowsGpuWebgpuVendor;
++    architecture_ = kWindowsGpuWebgpuArchitecture;
++  }
++#endif
+   if (info.deviceID <= 0xffff) {
+     device_ = Format("0x{:04x}", info.deviceID);
+   } else {
+@@ -112,12 +124,40 @@ GPUAdapter::GPUAdapter(
+   }
+   subgroup_min_size_ = info.subgroupMinSize;
+   subgroup_max_size_ = info.subgroupMaxSize;
++#if BUILDFLAG(IS_LINUX)
++  // browser: and that GPU's Direct3D 12 subgroup sizes.
++  if (PresentsWindowsGpu()) {
++    if (std::optional<std::array<uint32_t, 2>> range =
++            WindowsGpuSubgroupRange(vendor_.Utf8(), architecture_.Utf8())) {
++      subgroup_min_size_ = (*range)[0];
++      subgroup_max_size_ = (*range)[1];
++    }
++  }
++#endif
+   power_preference_ = powerProperties.powerPreference;
+ 
+   features_ = MakeFeatureNameSet(GetHandle());
++#if BUILDFLAG(IS_LINUX)
++  // browser: the features a Windows machine's adapter reports.
++  if (PresentsWindowsGpu()) {
++    features_ = MakeGarbageCollected<GPUSupportedFeatures>();
++    for (std::string_view name : WindowsGpuWebgpuFeatures()) {
++      if (std::optional<V8GPUFeatureName> feature =
++              V8GPUFeatureName::Create(String::FromUtf8(name))) {
++        features_->AddFeatureName(*feature);
++      }
++    }
++  }
++#endif
+ 
+   GPUSupportedLimits::ComboLimits limits;
+   GetHandle().GetLimits(limits.GetLinked());
++#if BUILDFLAG(IS_LINUX)
++  // browser: and its limits.
++  if (PresentsWindowsGpu()) {
++    ApplyWindowsGpuWebgpuLimits(limits, limits);
++  }
++#endif
+   limits_ = MakeGarbageCollected<GPUSupportedLimits>(limits);
+ 
+   info_ = CreateAdapterInfoForAdapter();
+@@ -125,6 +165,12 @@ GPUAdapter::GPUAdapter(
+ 
+ GPUAdapterInfo* GPUAdapter::CreateAdapterInfoForAdapter() {
+   bool is_fallback_adapter = adapter_type_ == wgpu::AdapterType::CPU;
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Windows machine's adapter is its GPU, never a fallback.
++  if (PresentsWindowsGpu()) {
++    is_fallback_adapter = false;
++  }
++#endif
+ 
+   GPUAdapterInfo* info;
+   if (RuntimeEnabledFeatures::WebGPUDeveloperFeaturesEnabled()) {
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index 5f771bafbe..55ec53e29c 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -1777,6 +1777,14 @@ component("platform") {
+     ]
+   }
+ 
++  # browser: the Windows GPU profile of a Linux build presenting Windows.
++  if (is_linux) {
++    sources += [
++      "graphics/gpu/windows_gpu_profile.cc",
++      "graphics/gpu/windows_gpu_profile.h",
++    ]
++  }
++
+   if (is_win) {
+     sources += [
+       "fonts/win/dwrite_font_format_support.cc",
+diff --git a/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
+new file mode 100644
+index 0000000000..0c55088336
+--- /dev/null
++++ b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
+@@ -0,0 +1,229 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h"
++
++#include <GLES3/gl3.h>
++
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++
++namespace blink {
++
++namespace {
++
++struct IntValue {
++  uint32_t pname;
++  int64_t value;
++};
++
++// ANGLE's Direct3D 11 backend on Windows (feature level 11_1), as measured;
++// the vertex uniform values are a non-NVIDIA GPU's.
++constexpr IntValue kIntValues[] = {
++    {GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, 32},
++    {GL_MAX_FRAGMENT_UNIFORM_VECTORS, 1024},
++    {GL_MAX_RENDERBUFFER_SIZE, 16384},
++    {GL_MAX_TEXTURE_IMAGE_UNITS, 16},
++    {GL_MAX_TEXTURE_SIZE, 16384},
++    {GL_MAX_VARYING_VECTORS, 30},
++    {GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, 16},
++    {GL_MAX_VERTEX_UNIFORM_VECTORS, kWindowsGpuVertexUniformVectors},
++    {GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS, 200704},
++    {GL_MAX_COMBINED_UNIFORM_BLOCKS, 24},
++    {GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS, 212992},
++    {GL_MAX_ELEMENT_INDEX, 4294967294},
++    {GL_MAX_FRAGMENT_INPUT_COMPONENTS, 120},
++    {GL_MAX_FRAGMENT_UNIFORM_BLOCKS, 12},
++    {GL_MAX_FRAGMENT_UNIFORM_COMPONENTS, 4096},
++    {GL_MAX_SAMPLES, 8},
++    {GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS, 120},
++    {GL_MAX_UNIFORM_BUFFER_BINDINGS, 24},
++    {GL_MAX_VARYING_COMPONENTS, 120},
++    {GL_MAX_VERTEX_OUTPUT_COMPONENTS, 120},
++    {GL_MAX_VERTEX_UNIFORM_BLOCKS, 12},
++    {GL_MAX_VERTEX_UNIFORM_COMPONENTS, kWindowsGpuVertexUniformVectors * 4},
++};
++
++constexpr std::string_view kWebgpuFeatures[] = {
++    "bgra8unorm-storage",
++    "clip-distances",
++    "core-features-and-limits",
++    "depth-clip-control",
++    "depth32float-stencil8",
++    "dual-source-blending",
++    "float32-blendable",
++    "float32-filterable",
++    "indirect-first-instance",
++    "primitive-index",
++    "rg11b10ufloat-renderable",
++    "shader-f16",
++    "subgroup-size-control",
++    "subgroups",
++    "texture-component-swizzle",
++    "texture-compression-bc",
++    "texture-compression-bc-sliced-3d",
++    "texture-compression-unaligned",
++    "texture-formats-tier1",
++    "texture-formats-tier2",
++    "timestamp-query",
++};
++
++constexpr std::string_view kHiddenExtensions[] = {
++    "WEBGL_compressed_texture_astc",
++    "WEBGL_compressed_texture_etc",
++    "WEBGL_compressed_texture_etc1",
++};
++
++}  // namespace
++
++bool PresentsWindowsGpu() {
++  return PresentsWindowsPlatform();
++}
++
++std::optional<int64_t> WindowsGpuIntParameter(uint32_t pname) {
++  if (!PresentsWindowsGpu()) {
++    return std::nullopt;
++  }
++  for (const IntValue& entry : kIntValues) {
++    if (entry.pname == pname) {
++      return entry.value;
++    }
++  }
++  return std::nullopt;
++}
++
++std::optional<float> WindowsGpuFloatParameter(uint32_t pname) {
++  if (!PresentsWindowsGpu() || pname != GL_MAX_TEXTURE_LOD_BIAS) {
++    return std::nullopt;
++  }
++  return 2.0f;
++}
++
++std::optional<std::array<int32_t, 2>> WindowsGpuIntPairParameter(
++    uint32_t pname) {
++  if (!PresentsWindowsGpu() || pname != GL_MAX_VIEWPORT_DIMS) {
++    return std::nullopt;
++  }
++  return std::array<int32_t, 2>{32767, 32767};
++}
++
++std::optional<std::array<float, 2>> WindowsGpuFloatPairParameter(
++    uint32_t pname) {
++  if (!PresentsWindowsGpu() || pname != GL_ALIASED_POINT_SIZE_RANGE) {
++    return std::nullopt;
++  }
++  return std::array<float, 2>{1.0f, 1024.0f};
++}
++
++bool WindowsGpuPrecisionFormat(uint32_t precision_type,
++                               std::array<int32_t, 2>& range,
++                               int32_t& precision) {
++  if (!PresentsWindowsGpu()) {
++    return false;
++  }
++  switch (precision_type) {
++    case GL_LOW_FLOAT:
++    case GL_MEDIUM_FLOAT:
++    case GL_HIGH_FLOAT:
++      range = {127, 127};
++      precision = 23;
++      return true;
++    case GL_LOW_INT:
++    case GL_MEDIUM_INT:
++    case GL_HIGH_INT:
++      range = {31, 30};
++      precision = 0;
++      return true;
++    default:
++      return false;
++  }
++}
++
++bool WindowsGpuHidesExtension(std::string_view name) {
++  if (!PresentsWindowsGpu()) {
++    return false;
++  }
++  for (std::string_view hidden : kHiddenExtensions) {
++    if (hidden == name) {
++      return true;
++    }
++  }
++  return false;
++}
++
++int64_t WindowsGpuCombinedVertexUniformComponents(int vertex_uniform_vectors) {
++  return int64_t{12} * 16384 + int64_t{4} * vertex_uniform_vectors;
++}
++
++std::optional<std::array<uint32_t, 2>> WindowsGpuSubgroupRange(
++    std::string_view vendor,
++    std::string_view architecture) {
++  if (vendor == "nvidia") {
++    return std::array<uint32_t, 2>{32, 32};
++  }
++  if (vendor == "amd") {
++    if (architecture.starts_with("gcn-")) {
++      return std::array<uint32_t, 2>{64, 64};
++    }
++    if (architecture.starts_with("rdna-")) {
++      return std::array<uint32_t, 2>{32, 64};
++    }
++    return std::nullopt;
++  }
++  if (vendor == "intel") {
++    // Dawn lowers Gen 12 LP's minimum to 8.
++    if (architecture == "gen-12-lp") {
++      return std::array<uint32_t, 2>{8, 32};
++    }
++    if (architecture.starts_with("gen-") || architecture.starts_with("xe-")) {
++      return std::array<uint32_t, 2>{16, 32};
++    }
++  }
++  return std::nullopt;
++}
++
++base::span<const std::string_view> WindowsGpuWebgpuFeatures() {
++  return kWebgpuFeatures;
++}
++
++void ApplyWindowsGpuWebgpuLimits(wgpu::Limits& limits,
++                                 wgpu::CompatibilityModeLimits& compat_limits) {
++  limits.maxTextureDimension1D = 16384;
++  limits.maxTextureDimension2D = 16384;
++  limits.maxTextureDimension3D = 2048;
++  limits.maxTextureArrayLayers = 2048;
++  limits.maxBindGroups = 4;
++  limits.maxBindGroupsPlusVertexBuffers = 24;
++  limits.maxBindingsPerBindGroup = 1000;
++  limits.maxDynamicUniformBuffersPerPipelineLayout = 10;
++  limits.maxDynamicStorageBuffersPerPipelineLayout = 8;
++  limits.maxSampledTexturesPerShaderStage = 48;
++  limits.maxSamplersPerShaderStage = 16;
++  limits.maxStorageBuffersPerShaderStage = 16;
++  limits.maxStorageTexturesPerShaderStage = 8;
++  limits.maxUniformBuffersPerShaderStage = 12;
++  limits.maxUniformBufferBindingSize = 65536;
++  limits.maxStorageBufferBindingSize = 2147483644;
++  limits.minUniformBufferOffsetAlignment = 256;
++  limits.minStorageBufferOffsetAlignment = 256;
++  limits.maxVertexBuffers = 8;
++  limits.maxBufferSize = 2147483648;
++  limits.maxVertexAttributes = 30;
++  limits.maxVertexBufferArrayStride = 2048;
++  limits.maxInterStageShaderVariables = 28;
++  limits.maxColorAttachments = 8;
++  limits.maxColorAttachmentBytesPerSample = 128;
++  limits.maxComputeWorkgroupStorageSize = 32768;
++  limits.maxComputeInvocationsPerWorkgroup = 1024;
++  limits.maxComputeWorkgroupSizeX = 1024;
++  limits.maxComputeWorkgroupSizeY = 1024;
++  limits.maxComputeWorkgroupSizeZ = 64;
++  limits.maxComputeWorkgroupsPerDimension = 65535;
++  limits.maxImmediateSize = 64;
++  compat_limits.maxStorageBuffersInFragmentStage = 16;
++  compat_limits.maxStorageTexturesInFragmentStage = 8;
++  compat_limits.maxStorageBuffersInVertexStage = 16;
++  compat_limits.maxStorageTexturesInVertexStage = 8;
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
+new file mode 100644
+index 0000000000..e6bcd3f505
+--- /dev/null
++++ b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
+@@ -0,0 +1,78 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_WINDOWS_GPU_PROFILE_H_
++#define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_WINDOWS_GPU_PROFILE_H_
++
++#include <array>
++#include <cstdint>
++#include <optional>
++#include <string_view>
++
++#include "base/containers/span.h"
++
++#include "third_party/blink/renderer/platform/graphics/gpu/webgpu_cpp.h"
++#include "third_party/blink/renderer/platform/platform_export.h"
++
++namespace blink {
++
++// browser: what WebGL reports in a Linux build presenting Windows: the values
++// ANGLE's Direct3D 11 backend reports on Windows in place of the host's
++// (SwiftShader on a server), and one common Intel integrated GPU's names when
++// no persona claims another. Only what pages read changes; the limits Blink
++// and the GPU process enforce stay the host's.
++PLATFORM_EXPORT bool PresentsWindowsGpu();
++
++inline constexpr char kWindowsGpuVendor[] = "Google Inc. (Intel)";
++inline constexpr char kWindowsGpuRenderer[] =
++    "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 "
++    "vs_5_0 ps_5_0, D3D11)";
++inline constexpr int kWindowsGpuVertexUniformVectors = 4096;
++
++// Direct3D 11's value for a parameter getParameter() returns as a number,
++// a pair or a float; nullopt for the ones it reports as the host does.
++PLATFORM_EXPORT std::optional<int64_t> WindowsGpuIntParameter(uint32_t pname);
++PLATFORM_EXPORT std::optional<float> WindowsGpuFloatParameter(uint32_t pname);
++PLATFORM_EXPORT std::optional<std::array<int32_t, 2>>
++WindowsGpuIntPairParameter(uint32_t pname);
++PLATFORM_EXPORT std::optional<std::array<float, 2>>
++WindowsGpuFloatPairParameter(uint32_t pname);
++
++// Every precision is full precision in Direct3D 11. False for an unknown
++// precision type.
++PLATFORM_EXPORT bool WindowsGpuPrecisionFormat(uint32_t precision_type,
++                                               std::array<int32_t, 2>& range,
++                                               int32_t& precision);
++
++// The extensions Direct3D 11 never offers.
++PLATFORM_EXPORT bool WindowsGpuHidesExtension(std::string_view name);
++
++// MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS for a number of vertex uniform
++// vectors: 12 uniform blocks of 16384 components plus 4 per vector.
++PLATFORM_EXPORT int64_t
++WindowsGpuCombinedVertexUniformComponents(int vertex_uniform_vectors);
++
++// WebGPU: the GPU-less default's adapter.info names, as Dawn gives them for
++// Iris Xe (0x9A49, Gen 12 LP).
++inline constexpr char kWindowsGpuWebgpuVendor[] = "intel";
++inline constexpr char kWindowsGpuWebgpuArchitecture[] = "gen-12-lp";
++
++// The subgroup sizes Chrome reports on Windows for an architecture, the
++// Direct3D 12 driver's wave lane counts; nullopt for one not listed.
++PLATFORM_EXPORT std::optional<std::array<uint32_t, 2>> WindowsGpuSubgroupRange(
++    std::string_view vendor,
++    std::string_view architecture);
++
++// The Direct3D 12 adapter features Chrome reports on Windows (measured),
++// as feature names.
++PLATFORM_EXPORT base::span<const std::string_view> WindowsGpuWebgpuFeatures();
++
++// Chrome's tiered adapter limits on Windows (measured).
++PLATFORM_EXPORT void ApplyWindowsGpuWebgpuLimits(
++    wgpu::Limits& limits,
++    wgpu::CompatibilityModeLimits& compat_limits);
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_WINDOWS_GPU_PROFILE_H_
+-- 
+2.45.1.windows.1
+

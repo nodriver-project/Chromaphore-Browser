@@ -1,7 +1,7 @@
-From 16b2e788c30f18455bbdda674eea6529308e1f40 Mon Sep 17 00:00:00 2001
+From bb2824cf1b6fb64737e45da9c43fb3530435827a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:25 -0500
-Subject: [PATCH 12/55] mouse-path
+Date: Wed, 11 Nov 2026 03:23:25 -0500
+Subject: [PATCH 12/61] mouse-path
 
 Synthetic human mouse-path gesture + route observer.
 ---

@@ -1,28 +1,28 @@
-From 9bce31e35fa60e9e212268518e449c74e1f85674 Mon Sep 17 00:00:00 2001
+From 4542e7c69cfadf2a03e519c8e8603fc4971c6377 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:26 -0500
-Subject: [PATCH 13/55] cursor-overlay
+Date: Wed, 11 Nov 2026 03:23:27 -0500
+Subject: [PATCH 13/61] cursor-overlay
 
 CDP screencast cursor overlay compositing. Its page_handler.cc/.h wiring
 rides in agent-snapshot, which dominates that file; its BUILD.gn sources and
 input_handler member ride in keyboard-typing.
 
-One overlay per tab (WebContentsUserData), redrawn through DevToolsVideoConsumer::RequestRefreshFrame; the frame-stream's change callback rides in devtools_video_consumer.*.
+One overlay per tab (WebContentsUserData), redrawn through DevToolsVideoConsumer::RequestRefreshFrame; the frame-stream's change callback rides in devtools_video_consumer.*; video-recording's lines in cdp_cursor_overlay.h/.cc ride here too (a recording draws the CDP cursor into its frames): DrawCursor, which screencast frames and recordings share; RenderSprite; ForRecording, the overlay a recording makes without --show-cdp-cursor, which tracks the pointer and draws nothing on the window (draws_on_window); and the pointer's position, look version and click count, which a recording reads.
 ---
- .../browser/devtools/cdp_cursor_overlay.cc    | 352 ++++++++++++++++++
- content/browser/devtools/cdp_cursor_overlay.h | 130 +++++++
+ .../browser/devtools/cdp_cursor_overlay.cc    | 431 ++++++++++++++++++
+ content/browser/devtools/cdp_cursor_overlay.h | 172 +++++++
  .../devtools/devtools_video_consumer.cc       |  27 ++
  .../devtools/devtools_video_consumer.h        |  15 +
- 4 files changed, 524 insertions(+)
+ 4 files changed, 645 insertions(+)
  create mode 100644 content/browser/devtools/cdp_cursor_overlay.cc
  create mode 100644 content/browser/devtools/cdp_cursor_overlay.h
 
 diff --git a/content/browser/devtools/cdp_cursor_overlay.cc b/content/browser/devtools/cdp_cursor_overlay.cc
 new file mode 100644
-index 0000000000..dd1239206e
+index 0000000000..065eafe9dc
 --- /dev/null
 +++ b/content/browser/devtools/cdp_cursor_overlay.cc
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,431 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -45,6 +45,7 @@ index 0000000000..dd1239206e
 +#include "third_party/skia/include/core/SkCanvas.h"
 +#include "third_party/skia/include/core/SkPaint.h"
 +#include "third_party/skia/include/core/SkPathBuilder.h"
++#include "third_party/skia/include/core/SkRect.h"
 +#include "ui/aura/window.h"
 +#include "ui/compositor/layer.h"
 +#include "ui/compositor/layer_textured.h"
@@ -64,6 +65,13 @@ index 0000000000..dd1239206e
 +constexpr SkColor kCursorColor = SK_ColorWHITE;
 +constexpr SkColor kClickColor = SkColorSetRGB(255, 165, 0);
 +constexpr SkColor kRippleColor = SkColorSetARGB(100, 255, 165, 0);
++
++// How far the arrow's outline can reach past its path, in DIPs: half the
++// outline's width times Skia's default miter limit, 4, at a sharp join.
++constexpr float kOutlineReach = 0.5f * 4;
++// RenderSprite's largest scale: no page is drawn at more pixels per DIP, and
++// it keeps the sprite's size a small int.
++constexpr float kMaxSpriteScale = 16;
 +
 +// The arrow, in a 32 x 32 box with the hotspot at the origin.
 +SkPath CursorPath() {
@@ -85,6 +93,40 @@ index 0000000000..dd1239206e
 +gfx::Point LayerOrigin(const gfx::PointF& pos) {
 +  return gfx::Point(base::saturated_cast<int>(pos.x()),
 +                    base::saturated_cast<int>(pos.y()));
++}
++
++// Draws the cursor with its hotspot at (x, y) of `canvas`, `scale` pixels
++// per DIP: the arrow's fill, its outline, then the click mark while
++// clicking. Screencast frames and recordings both draw with it.
++void DrawCursor(SkCanvas& canvas,
++                float x,
++                float y,
++                float scale,
++                bool clicking) {
++  canvas.save();
++  canvas.translate(x, y);
++  canvas.scale(scale, scale);
++  const SkPath path = CursorPath();
++
++  SkPaint fill;
++  fill.setColor(clicking ? kClickColor : kCursorColor);
++  fill.setAntiAlias(true);
++  canvas.drawPath(path, fill);
++
++  SkPaint stroke;
++  stroke.setColor(SK_ColorBLACK);
++  stroke.setAntiAlias(true);
++  stroke.setStyle(SkPaint::kStroke_Style);
++  stroke.setStrokeWidth(1.0f);
++  canvas.drawPath(path, stroke);
++  canvas.restore();
++
++  if (clicking) {
++    SkPaint ripple;
++    ripple.setColor(kRippleColor);
++    ripple.setAntiAlias(true);
++    canvas.drawCircle(x, y, kRippleRadius * scale, ripple);
++  }
 +}
 +
 +}  // namespace
@@ -127,9 +169,22 @@ index 0000000000..dd1239206e
 +  return GetOrCreateForWebContents(web_contents);
 +}
 +
++// static
++CdpCursorOverlay* CdpCursorOverlay::ForRecording(WebContents* web_contents) {
++  if (!web_contents) {
++    return nullptr;
++  }
++  CdpCursorOverlay* overlay = GetOrCreateForWebContents(web_contents);
++  // The router's events reach it only once it follows the page.
++  overlay->Follow();
++  return overlay;
++}
++
 +CdpCursorOverlay::CdpCursorOverlay(WebContents* web_contents)
 +    : WebContentsObserver(web_contents),
-+      WebContentsUserData<CdpCursorOverlay>(*web_contents) {}
++      WebContentsUserData<CdpCursorOverlay>(*web_contents),
++      draws_on_window_(base::CommandLine::ForCurrentProcess()->HasSwitch(
++          switches::kShowCdpCursor)) {}
 +
 +CdpCursorOverlay::~CdpCursorOverlay() {
 +  Detach();
@@ -189,6 +244,12 @@ index 0000000000..dd1239206e
 +
 +  attached_window_ = window;
 +  window->AddObserver(this);
++
++  // Without --show-cdp-cursor the overlay only tracks the pointer, for a
++  // recording; nothing shows on the window.
++  if (!draws_on_window_) {
++    return;
++  }
 +
 +  cursor_delegate_ = std::make_unique<CursorLayerDelegate>(this);
 +  click_delegate_ = std::make_unique<ClickLayerDelegate>(this);
@@ -266,9 +327,11 @@ index 0000000000..dd1239206e
 +    return;
 +  }
 +  const gfx::PointF pos(dip_x, dip_y);
-+  if (pos == current_pos_) {
++  if (has_position_ && pos == current_pos_) {
 +    return;  // a press, a release, or a still drag's dragover
 +  }
++  // The first point places the pointer, even at the 0,0 it starts at.
++  has_position_ = true;
 +  current_pos_ = pos;
 +  if (cursor_layer_) {
 +    cursor_layer_->SetBounds(gfx::Rect(LayerOrigin(current_pos_),
@@ -309,7 +372,13 @@ index 0000000000..dd1239206e
 +}
 +
 +void CdpCursorOverlay::StartClickAnimation() {
++  // A press while the mark of the one before still shows changes nothing
++  // drawn.
++  if (!is_clicking_) {
++    ++look_version_;
++  }
 +  is_clicking_ = true;
++  ++click_count_;
 +  if (cursor_layer_) {
 +    cursor_layer_->SchedulePaint(gfx::Rect(cursor_layer_->size()));
 +  }
@@ -329,6 +398,7 @@ index 0000000000..dd1239206e
 +
 +void CdpCursorOverlay::OnClickAnimationEnd() {
 +  is_clicking_ = false;
++  ++look_version_;
 +  if (cursor_layer_) {
 +    cursor_layer_->SchedulePaint(gfx::Rect(cursor_layer_->size()));
 +  }
@@ -344,32 +414,41 @@ index 0000000000..dd1239206e
 +  SkCanvas canvas(bitmap);
 +  const float x = current_pos_.x() * scale_x;
 +  const float y = current_pos_.y() * scale_y;
-+  const float cursor_scale = std::min(scale_x, scale_y);
++  DrawCursor(canvas, x, y, std::min(scale_x, scale_y), is_clicking_);
++}
 +
-+  canvas.save();
-+  canvas.translate(x, y);
-+  canvas.scale(cursor_scale, cursor_scale);
-+  const SkPath path = CursorPath();
-+
-+  SkPaint fill;
-+  fill.setColor(is_clicking_ ? kClickColor : kCursorColor);
-+  fill.setAntiAlias(true);
-+  canvas.drawPath(path, fill);
-+
-+  SkPaint stroke;
-+  stroke.setColor(SK_ColorBLACK);
-+  stroke.setAntiAlias(true);
-+  stroke.setStyle(SkPaint::kStroke_Style);
-+  stroke.setStrokeWidth(1.0f);
-+  canvas.drawPath(path, stroke);
-+  canvas.restore();
-+
-+  if (is_clicking_) {
-+    SkPaint ripple;
-+    ripple.setColor(kRippleColor);
-+    ripple.setAntiAlias(true);
-+    canvas.drawCircle(x, y, kRippleRadius * cursor_scale, ripple);
++SkBitmap CdpCursorOverlay::RenderSprite(float scale,
++                                        gfx::PointF* hotspot) const {
++  if (!std::isfinite(scale) || scale <= 0 || scale > kMaxSpriteScale) {
++    return SkBitmap();
 +  }
++  // The ink around the hotspot, in DIPs: the arrow with its outline, and the
++  // click mark's disc while clicking.
++  SkRect ink = CursorPath().getBounds().makeOutset(kOutlineReach,
++                                                   kOutlineReach);
++  if (is_clicking_) {
++    ink.join(SkRect::MakeLTRB(-kRippleRadius, -kRippleRadius, kRippleRadius,
++                              kRippleRadius));
++  }
++  // In pixels, with one more on each side for the anti-aliased edge, and
++  // even sides.
++  const int left = base::ClampFloor(ink.left() * scale) - 1;
++  const int top = base::ClampFloor(ink.top() * scale) - 1;
++  int width = base::ClampCeil(ink.right() * scale) + 1 - left;
++  int height = base::ClampCeil(ink.bottom() * scale) + 1 - top;
++  width += width & 1;
++  height += height & 1;
++
++  SkBitmap bitmap;
++  if (!bitmap.tryAllocN32Pixels(width, height)) {
++    return SkBitmap();
++  }
++  bitmap.eraseColor(SK_ColorTRANSPARENT);
++  const gfx::PointF at(static_cast<float>(-left), static_cast<float>(-top));
++  SkCanvas canvas(bitmap);
++  DrawCursor(canvas, at.x(), at.y(), scale, is_clicking_);
++  *hotspot = at;
++  return bitmap;
 +}
 +
 +WEB_CONTENTS_USER_DATA_KEY_IMPL(CdpCursorOverlay);
@@ -377,16 +456,18 @@ index 0000000000..dd1239206e
 +}  // namespace content
 diff --git a/content/browser/devtools/cdp_cursor_overlay.h b/content/browser/devtools/cdp_cursor_overlay.h
 new file mode 100644
-index 0000000000..9c6fd3c7c9
+index 0000000000..2df721d3b5
 --- /dev/null
 +++ b/content/browser/devtools/cdp_cursor_overlay.h
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,172 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#ifndef CONTENT_BROWSER_DEVTOOLS_CDP_CURSOR_OVERLAY_H_
 +#define CONTENT_BROWSER_DEVTOOLS_CDP_CURSOR_OVERLAY_H_
++
++#include <stdint.h>
 +
 +#include <memory>
 +
@@ -421,7 +502,13 @@ index 0000000000..9c6fd3c7c9
 +// --show-cdp-cursor is set, so an observer can follow synthetic input. The
 +// layer is the browser's own, over the page rather than in it: the page never
 +// sees it, and nor does a screenshot, which copies only the page's surface.
-+// Page.startScreencast and Page.startFrameStream draw it onto their frames.
++// Page.startScreencast and Page.startFrameStream draw it onto their frames
++// while the switch is set.
++//
++// A video recording draws it into its frames with or without the switch.
++// Without it, the recording makes the tab's overlay itself (ForRecording):
++// one that tracks the pointer and draws nothing on the window, and that
++// screencast and frame-stream frames leave out as before.
 +//
 +// One per tab, shared by every DevTools session attached to it: a viewer's
 +// session and an iframe's move the one cursor rather than adding their own.
@@ -437,6 +524,11 @@ index 0000000000..9c6fd3c7c9
 + public:
 +  // The tab's overlay, made on first use; null without --show-cdp-cursor.
 +  static CdpCursorOverlay* ForWebContents(WebContents* web_contents);
++
++  // The tab's overlay for a video recording, made on first use with or
++  // without --show-cdp-cursor, and following the tab's primary page; null
++  // only for a null `web_contents`.
++  static CdpCursorOverlay* ForRecording(WebContents* web_contents);
 +
 +  ~CdpCursorOverlay() override;
 +
@@ -454,6 +546,28 @@ index 0000000000..9c6fd3c7c9
 +  // Draws the cursor onto a screencast frame. The scale factors convert the
 +  // DIP cursor position to bitmap pixels.
 +  void CompositeCursorOnto(SkBitmap& bitmap, float scale_x, float scale_y);
++
++  // Whether the cursor shows on the tab's window (--show-cdp-cursor), and so
++  // on screencast and frame-stream frames.
++  bool draws_on_window() const { return draws_on_window_; }
++
++  // Whether input has placed the pointer yet; until then it is nowhere.
++  bool has_position() const { return has_position_; }
++  // The hotspot's place, in the tab's root view's DIPs.
++  const gfx::PointF& position() const { return current_pos_; }
++  // Changes whenever what is drawn changes other than by a move: the click
++  // mark going on, and going off.
++  uint64_t look_version() const { return look_version_; }
++  // Counts the mouse presses.
++  uint64_t click_count() const { return click_count_; }
++
++  // Draws the cursor as it looks now (the arrow, and the click mark while
++  // clicking) at `scale` pixels per DIP into a new N32 premultiplied bitmap,
++  // transparent elsewhere, of even width and height and just large enough
++  // for the ink. `*hotspot` gets the hotspot's place in it, in pixels. Empty
++  // for a scale that is not finite and positive, above 16, or that the
++  // bitmap could not be allocated for.
++  SkBitmap RenderSprite(float scale, gfx::PointF* hotspot) const;
 +
 +  // Runs |callback| whenever the cursor moves or its click ripple starts or
 +  // ends. A capture that draws the cursor asks for a frame then: a cursor
@@ -502,6 +616,13 @@ index 0000000000..9c6fd3c7c9
 +
 +  gfx::PointF current_pos_;
 +  bool is_clicking_ = false;
++
++  // --show-cdp-cursor, read once: the layers above the page exist only with
++  // it.
++  const bool draws_on_window_;
++  bool has_position_ = false;
++  uint64_t look_version_ = 0;
++  uint64_t click_count_ = 0;
 +
 +  base::RepeatingClosureList changed_callbacks_;
 +

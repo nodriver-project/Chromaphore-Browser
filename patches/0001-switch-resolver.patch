@@ -1,23 +1,23 @@
-From d2c021dbab13682d5ddbdfdca1470733549f8051 Mon Sep 17 00:00:00 2001
+From 2f84a41c2716c3622f19cdabeee91fa53bc76bfe Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:11:59 -0500
-Subject: [PATCH 01/55] switch-resolver
+Date: Wed, 11 Nov 2026 03:22:46 -0500
+Subject: [PATCH 01/61] switch-resolver
 
 browser switch resolver + component scaffolding and switches-dep plumbing.
 
-Riders: the fdlibm dependency and movement-persona sources in components/browser/BUILD.gn; the renderer switch forwarding in render_process_host_impl.cc; refresh-rate, private-clipboard, cancel-print-preview, cancel-payment-request and movement-persona switch declarations; chrome/browser/BUILD.gn carries stable-version's dependency.
+Riders: the fdlibm dependency and movement-persona sources in components/browser/BUILD.gn; the renderer switch forwarding in render_process_host_impl.cc; refresh-rate, private-clipboard, cancel-print-preview, cancel-payment-request, movement-persona, linux-widevine and timer-uptime switch declarations; chrome/browser/BUILD.gn carries stable-version's dependency.
 ---
  chrome/browser/BUILD.gn                       |   1 +
  components/browser/BUILD.gn                   |  27 ++++
- components/browser/browser_switches.cc        |  70 ++++++++
- components/browser/browser_switches.h         |  39 +++++
+ components/browser/browser_switches.cc        |  85 ++++++++++
+ components/browser/browser_switches.h         |  43 +++++
  components/browser/switch_resolver.cc         | 122 ++++++++++++++
  components/browser/switch_resolver.h          | 150 ++++++++++++++++++
  .../renderer_host/render_process_host_impl.cc |   6 +
  content/public/browser/BUILD.gn               |   2 +
  third_party/blink/common/BUILD.gn             |   1 +
  third_party/blink/renderer/core/BUILD.gn      |   1 +
- 10 files changed, 419 insertions(+)
+ 10 files changed, 438 insertions(+)
  create mode 100644 components/browser/BUILD.gn
  create mode 100644 components/browser/browser_switches.cc
  create mode 100644 components/browser/browser_switches.h
@@ -71,10 +71,10 @@ index 0000000000..5ef5e52b97
 +}
 diff --git a/components/browser/browser_switches.cc b/components/browser/browser_switches.cc
 new file mode 100644
-index 0000000000..1b0283aead
+index 0000000000..9551afbc92
 --- /dev/null
 +++ b/components/browser/browser_switches.cc
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,85 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -102,6 +102,21 @@ index 0000000000..1b0283aead
 +// secure PlayReady CDM in addition to primevideo.com and amazon.com; "*"
 +// allows every origin. Other origins see the EME answers of stock Chrome.
 +const char kSoftwarePlayreadySites[] = "software-playready-sites";
++
++// Linux, a comma-separated list of sites (a host or a parent domain; "*"
++// for every site) that get Linux's Widevine unchanged, so their Widevine
++// content plays, in addition to the major streaming services. Other sites
++// see Widevine as Chrome on Windows runs it (media/cdm/windows_widevine.h),
++// whose license requests a license server refuses.
++const char kWidevinePlaybackSites[] = "widevine-playback-sites";
++
++// Internal, set by the browser on each renderer's command line: the
++// microseconds renderers add to the monotonic clock before they clamp
++// DOMHighResTimeStamps, so the rounding follows a clock 2 to 30 days old
++// when the browser session started, drawn once per session
++// (render_process_host_impl.cc), and not the machine's uptime
++// (third_party/blink/renderer/core/timing/performance.cc).
++const char kTimerUptimeOffset[] = "timer-uptime-offset";
 +
 +// Presence-only. Draws a cursor overlay while a DevTools client is attached.
 +const char kShowCdpCursor[] = "show-cdp-cursor";
@@ -147,10 +162,10 @@ index 0000000000..1b0283aead
 +}  // namespace switches
 diff --git a/components/browser/browser_switches.h b/components/browser/browser_switches.h
 new file mode 100644
-index 0000000000..ee993e8c8d
+index 0000000000..de3312e7b9
 --- /dev/null
 +++ b/components/browser/browser_switches.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,43 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -176,6 +191,10 @@ index 0000000000..ee993e8c8d
 +
 +// Media.
 +COMPONENT_EXPORT(BROWSER) extern const char kSoftwarePlayreadySites[];
++COMPONENT_EXPORT(BROWSER) extern const char kWidevinePlaybackSites[];
++
++// Timers.
++COMPONENT_EXPORT(BROWSER) extern const char kTimerUptimeOffset[];
 +
 +// Automation.
 +COMPONENT_EXPORT(BROWSER) extern const char kShowCdpCursor[];

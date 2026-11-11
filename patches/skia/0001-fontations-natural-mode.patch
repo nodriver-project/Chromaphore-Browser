@@ -1,0 +1,292 @@
+From f2676883e27fc0a2693f08e23026165ccbaf16d7 Mon Sep 17 00:00:00 2001
+From: The browser Authors <noreply@browser.invalid>
+Date: Wed, 4 Nov 2026 19:18:43 -0500
+Subject: [PATCH] fontations-natural-mode
+
+DirectWrite's natural mode in Skia's Fontations port, for a Linux build
+presenting Windows (the linux-fonts commit switches it on there). Chrome on
+Windows draws small text through DirectWrite, which picks its natural mode
+for a face and size when the font's gasp range lacks symmetric smoothing,
+or, without a gasp range, up to 20 px on a face with instructions: the
+font's instructions run with the symmetric-rendering bit off and the outline
+left alone across the line, and the glyph is antialiased across the line
+only, as ClearType's three subpixels of six samples each averaged to grey,
+so a pixel takes one of 19 levels before gamma. Linux Chrome draws the same
+fonts with Fontations, antialiased in both directions. With
+SkTypeface_Fontations_SetWindowsNaturalMode(true), Fontations' scaler
+context makes the same choice from the gasp table, runs the instructions as
+natural mode does (skrifa's smooth target, symmetric rendering off), and
+renders an A8 glyph from 18 aliased samples across each pixel, then the
+preblend gamma, as the DirectWrite port applies it. Off by default; nothing
+changes unless a caller turns it on.
+---
+ include/ports/SkTypeface_fontations.h |   6 ++
+ src/ports/SkTypeface_fontations.cpp   | 129 ++++++++++++++++++++++++++
+ src/ports/fontations/src/ffi.rs       |  11 ++-
+ src/ports/fontations/src/hinting.rs   |  27 ++++++
+ 4 files changed, 172 insertions(+), 1 deletion(-)
+
+diff --git a/include/ports/SkTypeface_fontations.h b/include/ports/SkTypeface_fontations.h
+index dc01f5e..3f126b2 100644
+--- a/include/ports/SkTypeface_fontations.h
++++ b/include/ports/SkTypeface_fontations.h
+@@ -21,4 +21,10 @@ SK_API sk_sp<SkTypeface> SkTypeface_Make_Fontations(std::unique_ptr<SkStreamAsse
+ SK_API sk_sp<SkTypeface> SkTypeface_Make_Fontations(sk_sp<const SkData> fontData,
+                                                     const SkFontArguments& args);
+ 
++// browser: when true, Fontations draws faces and sizes DirectWrite would
++// draw in its NATURAL mode the way that mode textures them (antialiasing
++// across the line only, in 18 steps; the font's instructions with the
++// symmetric-rendering bit off). Process-wide; off by default.
++SK_API void SkTypeface_Fontations_SetWindowsNaturalMode(bool on);
++
+ #endif
+diff --git a/src/ports/SkTypeface_fontations.cpp b/src/ports/SkTypeface_fontations.cpp
+index e6350ec..e21d481 100644
+--- a/src/ports/SkTypeface_fontations.cpp
++++ b/src/ports/SkTypeface_fontations.cpp
+@@ -17,17 +17,69 @@
+ #include "include/effects/SkGradient.h"
+ #include "include/private/SkMutex.h"
+ #include "src/codec/SkCodecPriv.h"
++#include "src/core/SkAutoPixmapStorage.h"
++#include "src/core/SkBlitter_A8.h"
++#include "src/core/SkDraw.h"
+ #include "src/core/SkFontDescriptor.h"
+ #include "src/core/SkFontPriv.h"
++#include "src/core/SkRasterClip.h"
+ #include "src/core/SkScopeExit.h"
+ #include "src/ports/SkTypeface_fontations_priv.h"
+ #include "src/ports/fontations/src/skpath_bridge.h"
+ 
++#include <atomic>
+ #include <optional>
+ #include <utility>
++#include <vector>
++
++// browser: see SkTypeface_Fontations_SetWindowsNaturalMode().
++static std::atomic<bool> gWindowsNaturalMode{false};
++
++void SkTypeface_Fontations_SetWindowsNaturalMode(bool on) {
++    gWindowsNaturalMode.store(on, std::memory_order_relaxed);
++}
+ 
+ namespace {
+ 
++// browser: whether DirectWrite would draw this face at this size in its
++// NATURAL mode (antialiasing across the line only), as Skia's DirectWrite
++// port chooses it: a gasp table of version 1 or later whose range for the
++// size lacks the symmetric-smoothing flag; or, without such a range, a
++// size of at most 20 px on a face with instructions.
++bool WindowsNaturalModeApplies(const fontations_ffi::BridgeFontRef& fontRef, SkScalar size) {
++    if (!(size > 0)) {
++        return false;
++    }
++    const int ppem = SkScalarRoundToInt(SkScalarRoundToScalar(size * 64.0f) / 64.0f);
++    constexpr SkFontTableTag kGasp = SkSetFourByteTag('g', 'a', 's', 'p');
++    const size_t length = fontations_ffi::table_data(fontRef, kGasp, 0, rust::Slice<uint8_t>());
++    if (length >= 4) {
++        std::vector<uint8_t> gasp(length);
++        rust::Slice<uint8_t> slice(gasp.data(), gasp.size());
++        if (fontations_ffi::table_data(fontRef, kGasp, 0, slice) == length) {
++            const uint16_t version = (gasp[0] << 8) | gasp[1];
++            const uint16_t ranges = (gasp[2] << 8) | gasp[3];
++            if (version >= 1 && 4 + 4 * static_cast<size_t>(ranges) <= length) {
++                for (uint16_t i = 0; i < ranges; ++i) {
++                    const uint16_t maxPPEM = (gasp[4 + 4 * i] << 8) | gasp[5 + 4 * i];
++                    const uint16_t flags = (gasp[6 + 4 * i] << 8) | gasp[7 + 4 * i];
++                    if (ppem <= maxPPEM) {
++                        constexpr uint16_t kSymmetricSmoothing = 0x0008;
++                        return !(flags & kSymmetricSmoothing);
++                    }
++                }
++            }
++        }
++    }
++    if (size > 20) {
++        return false;
++    }
++    return fontations_ffi::table_data(fontRef, SkSetFourByteTag('f', 'p', 'g', 'm'), 0,
++                                      rust::Slice<uint8_t>()) > 0 ||
++           fontations_ffi::table_data(fontRef, SkSetFourByteTag('p', 'r', 'e', 'p'), 0,
++                                      rust::Slice<uint8_t>()) > 0;
++}
++
+ template <typename T> rust::Slice<T> toSlice(SkSpan<T> span) {
+     return rust::Slice<T>(span.data(), span.size());
+ }
+@@ -376,6 +428,16 @@ public:
+ 
+         fDoLinearMetrics = this->isLinearMetrics();
+ 
++        // browser: DirectWrite's NATURAL mode for this face and size
++        // (SkTypeface_Fontations_SetWindowsNaturalMode): the font's own
++        // instructions, antialiasing across the line only; see
++        // generateNaturalImage(). Chosen below, after the hinting instance.
++        fNaturalEmulation = gWindowsNaturalMode.load(std::memory_order_relaxed) &&
++                            SkMask::kA8_Format == fRec.fMaskFormat &&
++                            fRec.getHinting() != SkFontHinting::kNone &&
++                            !fontations_ffi::hinting_reliant(fOutlines) &&
++                            WindowsNaturalModeApplies(fBridgeFontRef, fScale.y());
++
+         // See below for the exception for SkFontHinting::kSlight.
+         bool forceAutoHinting = SkToBool(fRec.fFlags & kForceAutohinting_Flag);
+         AutoHinting autoHintingControl = forceAutoHinting ? AutoHinting::ForceForGlyfAndCff
+@@ -456,6 +518,66 @@ public:
+                 }
+             }
+         }
++        if (fNaturalEmulation) {
++            fHintingInstance = fontations_ffi::make_natural_hinting_instance(
++                    fOutlines, fScale.y(), fBridgeNormalizedCoords);
++            fDoLinearMetrics = true;
++        }
++    }
++
++    // browser: the glyph as DirectWrite's NATURAL mode textures it: no
++    // antialiasing down the line, across it the count of 18 samples a pixel
++    // (ClearType's three subpixels, six samples each, averaged), then the
++    // preblend gamma table as the DirectWrite port applies it. The device
++    // path already carries the hinted outline, the remaining matrix and the
++    // subpixel offset; it is placed in the glyph's box as
++    // GenerateImageFromPath places it.
++    void generateNaturalImage(const SkGlyph& glyph, void* imageBuffer) {
++        sk_bzero(imageBuffer, glyph.rowBytes() * glyph.height());
++        const SkPath* devPath = glyph.path();
++        if (!devPath || glyph.width() <= 0 || glyph.height() <= 0) {
++            return;
++        }
++        constexpr int kSamples = 18;
++        const int wideWidth = glyph.width() * kSamples;
++        SkAutoPixmapStorage wide;
++        if (!wide.tryAlloc(SkImageInfo::MakeA8(wideWidth, glyph.height()))) {
++            return;
++        }
++        sk_bzero(wide.writable_addr(), wide.computeByteSize());
++
++        SkMatrix matrix;
++        matrix.setAll(kSamples, 0, -SkIntToScalar(glyph.left()) * kSamples,
++                      0, 1, -SkIntToScalar(glyph.top()),
++                      0, 0, 1);
++        SkRasterClip clip;
++        clip.setRect(SkIRect::MakeWH(wideWidth, glyph.height()));
++        SkPaint paint;
++        paint.setAntiAlias(false);
++        paint.setStroke(glyph.pathIsHairline());
++        skcpu::Draw draw;
++        draw.fBlitterChooser = SkA8Blitter_Choose;
++        draw.fDst = wide;
++        draw.fRC = &clip;
++        draw.fCTM = &matrix;
++        draw.drawPath(*devPath, paint, nullptr);
++
++        uint8_t* dst = static_cast<uint8_t*>(imageBuffer);
++        const bool gamma = fPreBlend.isApplicable();
++        for (int y = 0; y < glyph.height(); ++y) {
++            const uint8_t* row = wide.addr8(0, y);
++            uint8_t* out = dst + y * glyph.rowBytes();
++            for (int x = 0; x < glyph.width(); ++x) {
++                int count = 0;
++                for (int s = 0; s < kSamples; ++s) {
++                    if (row[x * kSamples + s]) {
++                        ++count;
++                    }
++                }
++                const uint8_t coverage = (count * 255 + kSamples / 2) / kSamples;
++                out[x] = gamma ? fPreBlend.fG[coverage] : coverage;
++            }
++        }
+     }
+ 
+     std::optional<SkScalar> getContourHeightForLetter(SkUnichar letter) {
+@@ -802,6 +924,10 @@ protected:
+     void generateImage(const SkGlyph& glyph, void* imageBuffer) override {
+         ScalerContextBits::value_type format = glyph.extraBits();
+         if (format == ScalerContextBits::PATH) {
++            if (fNaturalEmulation && glyph.maskFormat() == SkMask::kA8_Format) {
++                this->generateNaturalImage(glyph, imageBuffer);
++                return;
++            }
+             this->generateImageFromPath(glyph, imageBuffer);
+         } else if (format == ScalerContextBits::COLRv1 || format == ScalerContextBits::COLRv0) {
+             SkASSERT(glyph.maskFormat() == SkMask::kARGB32_Format);
+@@ -974,6 +1100,9 @@ private:
+     const fontations_ffi::BridgeMappingIndex& fMappingIndex;
+     const SkSpan<const SkColor> fPalette;
+     rust::Box<fontations_ffi::BridgeHintingInstance> fHintingInstance;
++    /** browser: draw as DirectWrite's NATURAL mode would
++        (SkTypeface_Fontations_SetWindowsNaturalMode); see generateNaturalImage(). */
++    bool fNaturalEmulation = false;
+     bool fDoLinearMetrics = false;
+     // Keeping the path extraction target buffers around significantly avoids
+     // allocation churn.
+diff --git a/src/ports/fontations/src/ffi.rs b/src/ports/fontations/src/ffi.rs
+index fd71547..05acbfe 100644
+--- a/src/ports/fontations/src/ffi.rs
++++ b/src/ports/fontations/src/ffi.rs
+@@ -39,7 +39,8 @@ use crate::{
+     },
+     hinting::{
+         get_bridge_glyph_styles, hinting_reliant, make_hinting_instance,
+-        make_mono_hinting_instance, no_hinting_instance, BridgeGlyphStyles, BridgeHintingInstance,
++        make_mono_hinting_instance, make_natural_hinting_instance, no_hinting_instance,
++        BridgeGlyphStyles, BridgeHintingInstance,
+     },
+     names::{
+         family_name, get_localized_strings, localized_name_next, postscript_name,
+@@ -245,6 +246,14 @@ pub mod ffi {
+             coords: &BridgeNormalizedCoords,
+         ) -> Box<BridgeHintingInstance>;
+         unsafe fn no_hinting_instance<'a>() -> Box<BridgeHintingInstance>;
++        // browser: the font's instructions run as DirectWrite's NATURAL mode
++        // runs them (no symmetric smoothing reported, no horizontal
++        // adjustment); the autohinter for fonts without instructions.
++        unsafe fn make_natural_hinting_instance<'a>(
++            outlines: &BridgeOutlineCollection,
++            size: f32,
++            coords: &BridgeNormalizedCoords,
++        ) -> Box<BridgeHintingInstance>;
+ 
+         fn lookup_glyph_or_zero(
+             font_ref: &BridgeFontRef,
+diff --git a/src/ports/fontations/src/hinting.rs b/src/ports/fontations/src/hinting.rs
+index 1158e04..4e6c7e3 100644
+--- a/src/ports/fontations/src/hinting.rs
++++ b/src/ports/fontations/src/hinting.rs
+@@ -111,6 +111,33 @@ pub unsafe fn make_hinting_instance<'a>(
+     Box::new(BridgeHintingInstance(hinting_instance))
+ }
+ 
++// browser: as make_hinting_instance in the smooth normal mode, with the
++// symmetric-rendering bit of GETINFO off and the outline left alone across
++// the line, which is how DirectWrite's NATURAL mode runs the instructions.
++pub unsafe fn make_natural_hinting_instance<'a>(
++    outlines: &BridgeOutlineCollection,
++    size: f32,
++    coords: &BridgeNormalizedCoords,
++) -> Box<BridgeHintingInstance> {
++    let hinting_instance = outlines.0.as_ref().and_then(|outlines| {
++        HintingInstance::new(
++            outlines,
++            Size::new(size),
++            &coords.normalized_coords,
++            HintingOptions {
++                engine: Engine::AutoFallback,
++                target: Target::Smooth {
++                    mode: SmoothMode::Normal,
++                    symmetric_rendering: false,
++                    preserve_linear_metrics: true,
++                },
++            },
++        )
++        .ok()
++    });
++    Box::new(BridgeHintingInstance(hinting_instance))
++}
++
+ pub unsafe fn make_mono_hinting_instance<'a>(
+     outlines: &BridgeOutlineCollection,
+     size: f32,
+-- 
+2.45.1.windows.1
+

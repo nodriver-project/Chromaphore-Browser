@@ -1,7 +1,7 @@
-From a51ea187c1ccc158a3cee883c46520df22a23e86 Mon Sep 17 00:00:00 2001
+From 01efc9eb2cc12eadd6176085094628c5cce458bd Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:03 -0500
-Subject: [PATCH 04/55] gesture-plumbing
+Date: Wed, 11 Nov 2026 03:22:52 -0500
+Subject: [PATCH 04/61] gesture-plumbing
 
 Synthetic-gesture overload that resolves its completion callback once
 events are dispatched, skipping the renderer input-processed round-trip.

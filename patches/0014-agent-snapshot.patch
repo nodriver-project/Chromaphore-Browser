@@ -1,24 +1,24 @@
-From e0a8ab7bd8e972e1e89512d715aa3f7715d85576 Mon Sep 17 00:00:00 2001
+From 07a3e24d1df5587fb0d82a0c128abbb39b246a08 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:36 -0500
-Subject: [PATCH 14/55] agent-snapshot
+Date: Wed, 11 Nov 2026 03:23:40 -0500
+Subject: [PATCH 14/61] agent-snapshot
 
 CDP Page.captureAgentSnapshot / Page.resolveAgentNode: cross-frame
 interactive-element perception with root-viewport geometry, plus the
 blink agent_snapshot collector module. Also carries the cursor-overlay
 wiring in page_handler.cc/.h.
 
-Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader interaction-origin hooks), id space, deltas, layers, live regions, hit check, frozen-frame redaction (holdForSecrets, agentFinishCapture), agentNavigateToHistoryEntry; page_handler.* and Page.pdl also carry the frame-stream commands and the Input action-outcome types.
+Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader interaction-origin hooks), id space, deltas, layers, live regions, hit check, frozen-frame redaction (holdForSecrets, agentFinishCapture), agentNavigateToHistoryEntry; page_handler.* and Page.pdl also carry the frame-stream commands and the Input action-outcome types; and video-recording's Page.agentMarkSecretField, which marks an element as holding a secret for a redacted recording: its handler in page_handler.*, the command in Page.pdl and on Blink's Page exclude list (inspector_protocol_config.json), and MarkSecretField and MarkFocusedField in agent_snapshot_collector.mojom and agent_snapshot_collector_impl.*. agent_card_fields.cc now calls the card field rule in core/paint/agent_redaction/agent_field_rules, which redacted recordings share, and GetCdpCursorOverlay leaves out the overlay a video recording makes that does not draw on the window.
 ---
  .../devtools/protocol/agent_id_space.cc       |  1062 ++
  .../devtools/protocol/agent_id_space.h        |   409 +
- .../browser/devtools/protocol/page_handler.cc |  5795 ++++++-
- .../browser/devtools/protocol/page_handler.h  |   278 +
+ .../browser/devtools/protocol/page_handler.cc |  5910 ++++++-
+ .../browser/devtools/protocol/page_handler.h  |   295 +
  .../browser/devtools/protocol/settle_join.cc  |  1321 ++
  .../browser/devtools/protocol/settle_join.h   |   402 +
- .../public/devtools_protocol/domains/Page.pdl |  1141 ++
+ .../public/devtools_protocol/domains/Page.pdl |  1185 ++
  third_party/blink/public/mojom/BUILD.gn       |     3 +
- .../agent_snapshot_collector.mojom            |  1462 ++
+ .../agent_snapshot_collector.mojom            |  1479 ++
  .../core/frame/web_frame_widget_impl.cc       |    35 +
  .../core/frame/web_frame_widget_impl.h        |    13 +
  .../inspector/inspector_protocol_config.json  |     2 +-
@@ -27,7 +27,7 @@ Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader inter
  third_party/blink/renderer/modules/BUILD.gn   |     1 +
  .../renderer/modules/agent_snapshot/BUILD.gn  |    29 +
  .../renderer/modules/agent_snapshot/DEPS      |    20 +
- .../agent_snapshot/agent_card_fields.cc       |    30 +
+ .../agent_snapshot/agent_card_fields.cc       |    17 +
  .../agent_snapshot/agent_card_fields.h        |    21 +
  .../modules/agent_snapshot/agent_freeze.cc    |   757 +
  .../modules/agent_snapshot/agent_freeze.h     |   152 +
@@ -35,14 +35,14 @@ Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader inter
  .../agent_snapshot/agent_live_regions.h       |   122 +
  .../agent_snapshot/agent_settle_watcher.cc    |  2489 +++
  .../agent_snapshot/agent_settle_watcher.h     |   528 +
- .../agent_snapshot_collector_impl.cc          | 12882 ++++++++++++++++
- .../agent_snapshot_collector_impl.h           |   347 +
+ .../agent_snapshot_collector_impl.cc          | 12926 ++++++++++++++++
+ .../agent_snapshot_collector_impl.h           |   352 +
  .../renderer/modules/modules_initializer.cc   |    10 +
  .../platform/loader/fetch/fetch_context.h     |     7 +
  .../platform/loader/fetch/resource_fetcher.cc |    71 +
  .../platform/loader/fetch/resource_fetcher.h  |    32 +
  .../platform/loader/fetch/resource_loader.h   |    20 +
- 32 files changed, 30095 insertions(+), 21 deletions(-)
+ 32 files changed, 30324 insertions(+), 21 deletions(-)
  create mode 100644 content/browser/devtools/protocol/agent_id_space.cc
  create mode 100644 content/browser/devtools/protocol/agent_id_space.h
  create mode 100644 content/browser/devtools/protocol/settle_join.cc
@@ -1545,7 +1545,7 @@ index 0000000000..c3a406ac95
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_AGENT_ID_SPACE_H_
 diff --git a/content/browser/devtools/protocol/page_handler.cc b/content/browser/devtools/protocol/page_handler.cc
-index c750e9a4e2..ddbc58192c 100644
+index c750e9a4e2..5505ea327d 100644
 --- a/content/browser/devtools/protocol/page_handler.cc
 +++ b/content/browser/devtools/protocol/page_handler.cc
 @@ -5,23 +5,35 @@
@@ -3082,7 +3082,7 @@ index c750e9a4e2..ddbc58192c 100644
    base::ThreadPool::PostTaskAndReplyWithResult(
        FROM_HERE, {base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
        base::BindOnce(
-@@ -1973,11 +3315,25 @@ void PageHandler::SendScreencastFrame(
+@@ -1973,11 +3315,29 @@ void PageHandler::SendScreencastFrame(
               BitmapEncoder encoder) -> std::optional<std::vector<uint8_t>> {
              return encoder.Run(bitmap);
            },
@@ -3099,17 +3099,21 @@ index c750e9a4e2..ddbc58192c 100644
 +  video_consumer_->RequestRefreshFrame();
 +}
 +
-+// browser: the tab's cursor overlay, if one is showing.
++// browser: the tab's cursor overlay, if one is showing. The overlay a
++// recording makes without --show-cdp-cursor only tracks the pointer, and
++// these frames leave it out.
 +CdpCursorOverlay* PageHandler::GetCdpCursorOverlay() {
 +  WebContentsImpl* contents =
 +      host_ ? WebContentsImpl::FromRenderFrameHostImpl(host_) : nullptr;
-+  return contents ? CdpCursorOverlay::FromWebContents(contents) : nullptr;
++  CdpCursorOverlay* cursor =
++      contents ? CdpCursorOverlay::FromWebContents(contents) : nullptr;
++  return cursor && cursor->draws_on_window() ? cursor : nullptr;
 +}
 +
  void PageHandler::ScreencastFrameEncoded(
      std::unique_ptr<Page::ScreencastFrameMetadata> page_metadata,
      std::optional<std::vector<uint8_t>> data) {
-@@ -2034,36 +3390,4435 @@ void PageHandler::ScreenshotCaptured(
+@@ -2034,36 +3394,4546 @@ void PageHandler::ScreenshotCaptured(
    request->callback->sendSuccess(Binary());
  }
  
@@ -7039,6 +7043,117 @@ index c750e9a4e2..ddbc58192c 100644
 +  callback->sendSuccess(verdict, text(hit), text(hit_kind));
 +}
 +
++// browser: Page.agentMarkSecretField. By id, the element is named as
++// Page.agentHitCheck names it and reached as Page.resolveAgentNode reaches
++// it; by focus, the local root the next key goes to is found as
++// InputHandler::ReadFocusedField finds it before Input.dispatchKeystrokes'
++// first key. Its AgentSnapshotCollector stores the mark (and, while a
++// redacted recording is armed, invalidates the document's paint) before it
++// replies, so the answer means the mark is in force.
++void PageHandler::AgentMarkSecretField(
++    std::optional<int> agent_node_id,
++    std::optional<int> backend_node_id,
++    std::optional<std::string> frame_id,
++    std::optional<bool> focused,
++    std::unique_ptr<AgentMarkSecretFieldCallback> callback) {
++  const bool by_focus = focused.value_or(false);
++  if (by_focus && (agent_node_id.has_value() || backend_node_id.has_value() ||
++                   frame_id.has_value())) {
++    callback->sendFailure(Response::InvalidParams(
++        "Name the element by an id or by focused, not both"));
++    return;
++  }
++  const std::string none = by_focus ? "nothing" : "gone";
++  AgentNodeKey entry;
++  if (by_focus) {
++    // The frame the keys go to: this session's own frame when it is a
++    // child's, else the focused frame, else the main frame.
++    RenderFrameHostImpl* root = nullptr;
++    if (host_ && host_->GetParent()) {
++      root = host_;
++    } else if (WebContentsImpl* web_contents =
++                   host_ ? WebContentsImpl::FromRenderFrameHostImpl(host_)
++                         : nullptr) {
++      root = web_contents->GetFocusedFrame();
++      if (!root) {
++        root = web_contents->GetPrimaryMainFrame();
++      }
++    }
++    while (root && !root->is_local_root()) {
++      root = root->GetParent();
++    }
++    if (!root) {
++      callback->sendSuccess(none);
++      return;
++    }
++    entry.local_root = root->GetGlobalId();
++  } else if (agent_node_id.has_value()) {
++    // browser: any id of the page's document.
++    AgentIdSpace* space = CurrentAgentIdSpace();
++    const AgentIdEntry* found = space ? space->Find(*agent_node_id) : nullptr;
++    if (!found) {
++      callback->sendSuccess(none);
++      return;
++    }
++    entry = found->key;
++  } else if (backend_node_id.has_value() && frame_id.has_value()) {
++    RenderFrameHostImpl* rfh = LocalRootByFrameToken(*frame_id);
++    if (!rfh) {
++      callback->sendFailure(
++          Response::InvalidParams("No frame with the given 'frameId'"));
++      return;
++    }
++    entry.local_root = rfh->GetGlobalId();
++    entry.dom_node_id = *backend_node_id;
++  } else {
++    callback->sendFailure(Response::InvalidParams(
++        "agentNodeId, backendNodeId with frameId, or focused is required"));
++    return;
++  }
++  RenderFrameHostImpl* rfh = RenderFrameHostImpl::FromID(entry.local_root);
++  // browser: only a document still in the page: one in the back-forward
++  // cache is frozen, and never answers.
++  service_manager::InterfaceProvider* remotes =
++      rfh && rfh->IsActive() && rfh->IsRenderFrameLive()
++          ? rfh->GetRemoteInterfaces()
++          : nullptr;
++  if (!remotes) {
++    callback->sendSuccess(none);
++    return;
++  }
++  mojo::Remote<blink::mojom::AgentSnapshotCollector> collector;
++  remotes->GetInterface(collector.BindNewPipeAndPassReceiver());
++  // The proxy pointer is read before the Remote moves into the reply
++  // callback, which keeps the pipe alive until the reply. A dropped pipe
++  // answers gone (or nothing) instead of hanging.
++  blink::mojom::AgentSnapshotCollector* raw = collector.get();
++  // browser: answered once: by the reply, or at kAgentCollectWait.
++  auto wait = std::make_unique<AgentMarkWait>(std::move(callback),
++                                              weak_factory_.GetWeakPtr());
++  auto reply = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++      base::BindOnce(&PageHandler::OnAgentSecretFieldMarked,
++                     weak_factory_.GetWeakPtr(), std::move(wait),
++                     std::move(collector)),
++      none);
++  if (by_focus) {
++    raw->MarkFocusedField(std::move(reply));
++  } else {
++    raw->MarkSecretField(entry.dom_node_id, std::move(reply));
++  }
++}
++
++void PageHandler::OnAgentSecretFieldMarked(
++    std::unique_ptr<AgentMarkWait> wait,
++    mojo::Remote<blink::mojom::AgentSnapshotCollector> collector,
++    const std::string& outcome) {
++  // browser: answered at kAgentCollectWait already: dropped.
++  AgentMarkSecretFieldCallback* const callback = wait->callback();
++  if (!callback) {
++    return;
++  }
++  callback->sendSuccess(outcome);
++}
++
 +// browser: Page.agentSettleArm: a settle armed for an action that is
 +// not input, through the session's outcome watch (SettleArm).
 +Response PageHandler::AgentSettleArm(int* out_arm_id) {
@@ -7565,7 +7680,7 @@ index c750e9a4e2..ddbc58192c 100644
    }
    return Response::ServerError("Unidentified lifecycle state");
 diff --git a/content/browser/devtools/protocol/page_handler.h b/content/browser/devtools/protocol/page_handler.h
-index 26067a3b45..5110476566 100644
+index 26067a3b45..93efd89e20 100644
 --- a/content/browser/devtools/protocol/page_handler.h
 +++ b/content/browser/devtools/protocol/page_handler.h
 @@ -13,7 +13,11 @@
@@ -7635,7 +7750,7 @@ index 26067a3b45..5110476566 100644
    Response ResetNavigationHistory() override;
  
    void CaptureScreenshot(
-@@ -158,6 +179,60 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -158,6 +179,68 @@ class PageHandler : public DevToolsDomainHandler,
        std::optional<bool> capture_beyond_viewport,
        std::optional<bool> optimize_for_speed,
        std::unique_ptr<CaptureScreenshotCallback> callback) override;
@@ -7683,6 +7798,14 @@ index 26067a3b45..5110476566 100644
 +                     std::optional<int> backend_node_id,
 +                     std::optional<std::string> frame_id,
 +                     std::unique_ptr<AgentHitCheckCallback> callback) override;
++  // browser: an element holds a secret, for redacted video recordings; see
++  // Page.pdl.
++  void AgentMarkSecretField(
++      std::optional<int> agent_node_id,
++      std::optional<int> backend_node_id,
++      std::optional<std::string> frame_id,
++      std::optional<bool> focused,
++      std::unique_ptr<AgentMarkSecretFieldCallback> callback) override;
 +  // browser: the settle; see Page.pdl and settle_join.h.
 +  Response AgentSettleArm(int* out_arm_id) override;
 +  void AgentSettle(std::optional<int> arm_id,
@@ -7696,7 +7819,7 @@ index 26067a3b45..5110476566 100644
    void CaptureSnapshot(
        std::optional<std::string> format,
        std::unique_ptr<CaptureSnapshotCallback> callback) override;
-@@ -178,6 +253,20 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -178,6 +261,20 @@ class PageHandler : public DevToolsDomainHandler,
    void OnMediaRecorderFlushed();
    Response StopScreencast() override;
    Response ScreencastFrameAck(int session_id) override;
@@ -7717,7 +7840,7 @@ index 26067a3b45..5110476566 100644
  
    Response HandleJavaScriptDialog(
        bool accept,
-@@ -231,6 +320,171 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -231,6 +328,180 @@ class PageHandler : public DevToolsDomainHandler,
   private:
    struct PendingScreenshotRequest;
  
@@ -7836,6 +7959,8 @@ index 26067a3b45..5110476566 100644
 +  class AgentReplyWait;
 +  using AgentNodeWait = AgentReplyWait<ResolveAgentNodeCallback>;
 +  using AgentHitWait = AgentReplyWait<AgentHitCheckCallback>;
++  // browser: a Page.agentMarkSecretField call while the page is asked.
++  using AgentMarkWait = AgentReplyWait<AgentMarkSecretFieldCallback>;
 +
 +  // browser: the local root of the frame a DevTools frame token names in this
 +  // page; null when there is none.
@@ -7877,6 +8002,13 @@ index 26067a3b45..5110476566 100644
 +      const std::string& hit,
 +      const std::string& hit_kind);
 +
++  // browser: Page.agentMarkSecretField's answer, the renderer's outcome.
++  // `collector` is bound only to keep the Mojo Remote alive until the reply.
++  void OnAgentSecretFieldMarked(
++      std::unique_ptr<AgentMarkWait> wait,
++      mojo::Remote<blink::mojom::AgentSnapshotCollector> collector,
++      const std::string& outcome);
++
 +  // `collector` is bound only to keep the Mojo Remote alive until the reply.
 +  void OnAgentNodeResolved(
 +      std::unique_ptr<AgentNodeWait> wait,
@@ -7889,7 +8021,7 @@ index 26067a3b45..5110476566 100644
    using BitmapEncoder =
        base::RepeatingCallback<std::optional<std::vector<uint8_t>>(
            const SkBitmap& bitmap)>;
-@@ -248,6 +502,10 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -248,6 +519,10 @@ class PageHandler : public DevToolsDomainHandler,
    void SendScreencastFrame(
        std::unique_ptr<Page::ScreencastFrameMetadata> metadata,
        const SkBitmap& bitmap);
@@ -7900,7 +8032,7 @@ index 26067a3b45..5110476566 100644
    void ScreencastFrameEncoded(
        std::unique_ptr<Page::ScreencastFrameMetadata> metadata,
        std::optional<std::vector<uint8_t>> data);
-@@ -298,7 +556,21 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -298,7 +573,21 @@ class PageHandler : public DevToolsDomainHandler,
    // and provides PageHandler with these frames via OnFrameFromVideoConsumer.
    // This is only used if Viz is enabled and if OS is not Android.
    std::unique_ptr<DevToolsVideoConsumer> video_consumer_;
@@ -7922,7 +8054,7 @@ index 26067a3b45..5110476566 100644
  
    // The last surface size used to determine if frames with new sizes need
    // to be requested. This changes due to window resizing.
-@@ -332,6 +604,12 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -332,6 +621,12 @@ class PageHandler : public DevToolsDomainHandler,
        std::optional<bool> include_command_line_api,
        std::string* identifier);
  
@@ -9671,10 +9803,10 @@ index 0000000000..0846999d13
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_SETTLE_JOIN_H_
 diff --git a/third_party/blink/public/devtools_protocol/domains/Page.pdl b/third_party/blink/public/devtools_protocol/domains/Page.pdl
-index 20b5db99c3..ae1c6a7729 100644
+index 20b5db99c3..767f7ebc81 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Page.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Page.pdl
-@@ -605,6 +605,1124 @@ domain Page
+@@ -605,6 +605,1168 @@ domain Page
        # Base64-encoded image data.
        binary data
  
@@ -10607,6 +10739,41 @@ index 20b5db99c3..ae1c6a7729 100644
 +      # element: dialog, alert or fullscreen.
 +      optional string hitKind
 +
++  # browser: tells the browser that an element holds a secret: from this
++  # answer on, and for as long as the element lives, a redacted video
++  # recording (Browser.startVideoRecording with redact) shows it as one black
++  # box of its own size, with nothing in it drawn (no text, no caret), in
++  # the file, in screenshots and in the viewer alike; a text field is black
++  # whole, its placeholder included, empty or not. Call it before putting the
++  # secret in. Nothing about the element changes for the page. It cannot be
++  # taken back: a field that later holds something else stays black. A frame
++  # element is never marked (mark the field inside the frame), and an
++  # element that draws itself (a canvas, an image, a video, a plugin) is not
++  # hidden by a mark. When a secret typed into a hidden field is passed on
++  # by the page's script to another editable element it focuses, that one is
++  # marked too. Fails "the page did not answer" when no answer has come
++  # within 10 s.
++  experimental command agentMarkSecretField
++    parameters
++      # The element by an agentNodeId of this document; or else
++      # backendNodeId with frameId; or else focused.
++      optional integer agentNodeId
++      # The element by its backend node id in the renderer of frameId's local
++      # root, as agentHitCheck takes it.
++      optional integer backendNodeId
++      optional string frameId
++      # With no id: the element that has focus where the next key goes (the
++      # focused frame, else the main frame; the innermost focused element,
++      # inside shadow trees, a part of a control's own date or time fields
++      # being the control), as Input.dispatchKeystrokes finds it before its
++      # first key.
++      optional boolean focused
++    returns
++      # marked; gone: the id names no element now; frame: the element is a
++      # frame element, and nothing is marked; nothing: with focused, no
++      # element has focus (the document's body or root, or nothing).
++      string outcome
++
 +  # One thing still changing (or, never blocking, still
 +  # running) when agentSettle answered.
 +  experimental type SettleChange extends object
@@ -10757,7 +10924,7 @@ index 20b5db99c3..ae1c6a7729 100644
 +  # encoded or sent over the protocol per frame, and the capture itself is
 +  # throttled to maxFps rather than only the delivery. Frames are captured
 +  # only when the page changes. One stream per session; it ends with
-+  # stopFrameStream or when the session detaches. Windows only.
++  # stopFrameStream or when the session detaches. Windows and Linux.
 +  #
 +  # The section holds a 4096-byte header and three frame slots of 32-bit
 +  # BGRA pixels, rows packed. Header, little-endian: magic "NFRM" (uint32,
@@ -10767,6 +10934,13 @@ index 20b5db99c3..ae1c6a7729 100644
 +  # width, height, stride (uint32 each), reserved (uint32), capture time in
 +  # microseconds since the Unix epoch (int64). The event is signalled after
 +  # each frame is published.
++  #
++  # On Windows the section is a named file mapping and the event a named
++  # auto-reset event. On Linux the section is a file in the shared-memory
++  # directory, mapped shared, and the event a FIFO beside it that receives
++  # one byte after each frame: a viewer that falls behind drains what is
++  # there and reads the newest frame. Both are owner-only and removed when
++  # the stream ends.
 +  experimental command startFrameStream
 +    parameters
 +      # Largest frame wanted, in physical pixels. Frames are scaled down to
@@ -10776,9 +10950,11 @@ index 20b5db99c3..ae1c6a7729 100644
 +      # Most frames per second, 1 to 60.
 +      integer maxFps
 +    returns
-+      # Name of the file mapping holding the frames.
++      # Name of the file mapping holding the frames; on Linux the path of
++      # the file to map.
 +      string sharedMemoryName
-+      # Name of the auto-reset event signalled after each frame.
++      # Name of the auto-reset event signalled after each frame; on Linux
++      # the path of the FIFO.
 +      string frameEventName
 +      # Size of the file mapping in bytes.
 +      integer sharedMemorySize
@@ -10799,7 +10975,7 @@ index 20b5db99c3..ae1c6a7729 100644
    # Returns a snapshot of the page as a string. For MHTML format, the serialization includes
    # iframes, shadow DOM, external resources, and element-inline styles.
    experimental command captureSnapshot
-@@ -943,6 +2061,29 @@ domain Page
+@@ -943,6 +2105,29 @@ domain Page
        # Unique id of the entry to navigate to.
        integer entryId
  
@@ -10852,10 +11028,10 @@ index bc43144f26..3ac8b248cc 100644
      "scroll/scroll_into_view_params.mojom",
 diff --git a/third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom b/third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom
 new file mode 100644
-index 0000000000..737c760099
+index 0000000000..34e4632816
 --- /dev/null
 +++ b/third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom
-@@ -0,0 +1,1462 @@
+@@ -0,0 +1,1479 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12062,6 +12238,23 @@ index 0000000000..737c760099
 +  // box. found is false when the node is gone or is not a laid-out element.
 +  ResolveNode(int32 local_dom_node_id) => (bool found, AgentElementBox box);
 +
++  // browser: marks the element `local_dom_node_id` names as holding a
++  // secret, for as long as the element lives: while a redacted video
++  // recording runs, it is one black box and nothing in it is drawn
++  // (AgentRedactionMarks). The reply comes once the mark is stored and,
++  // while a recording is armed, the document's paint invalidated. outcome:
++  // marked; gone (the id names no element still in a document under this
++  // local root); frame (a frame element, whose content a mark here would
++  // not hide: nothing is marked).
++  MarkSecretField(int32 local_dom_node_id) => (string outcome);
++
++  // browser: the same for the element that has focus in this local root's
++  // focused frame, as ReadField finds it before the first key (the
++  // innermost one, inside shadow trees; a part of a control's own
++  // user-agent shadow tree is the control). outcome: marked; nothing (the
++  // document's body or root has focus, or nothing); frame.
++  MarkFocusedField() => (string outcome);
++
 +  // Whether a mouse press at (x, y) would reach the node, decided by the hit
 +  // test a real press runs. The point is in this local root's widget, in
 +  // DIPs, as the browser's input routing hands it over. verdict is one of
@@ -12403,7 +12596,7 @@ index abb1bf2fcb..7f45aeaae5 100644
    // compositing. This is is max texture size for GPU compositing and a browser
    // chosen limit in software mode.
 diff --git a/third_party/blink/renderer/core/inspector/inspector_protocol_config.json b/third_party/blink/renderer/core/inspector/inspector_protocol_config.json
-index 6886876630..ec92fff2de 100644
+index 6886876630..4942b06d7a 100644
 --- a/third_party/blink/renderer/core/inspector/inspector_protocol_config.json
 +++ b/third_party/blink/renderer/core/inspector/inspector_protocol_config.json
 @@ -91,7 +91,7 @@
@@ -12411,7 +12604,7 @@ index 6886876630..ec92fff2de 100644
              {
                  "domain": "Page",
 -                "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
-+                "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "agentNavigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentSettleArm", "agentSettle", "agentFinishCapture", "startFrameStream", "updateFrameStream", "stopFrameStream", "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
++                "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "agentNavigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentMarkSecretField", "agentSettleArm", "agentSettle", "agentFinishCapture", "startFrameStream", "updateFrameStream", "stopFrameStream", "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
                              "getAppManifest", "getAnnotatedPageContent", "setControlNavigations", "processNavigation", "printToPDF", "bringToFront", "setDownloadBehavior", "navigate", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getSubApps", "getSiblingSubApps", "setSPCTransactionMode", "setRPHRegistrationMode", "setPrerenderingAllowed", "startScreenRecording", "stopScreenRecording"],
                  "pass_associated_data": [
                      "addScriptToEvaluateOnNewDocument",
@@ -12555,37 +12748,24 @@ index 0000000000..3e8386c224
 +}
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_card_fields.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_card_fields.cc
 new file mode 100644
-index 0000000000..be518fb959
+index 0000000000..2507f1cb4b
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_card_fields.cc
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,17 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "third_party/blink/renderer/modules/agent_snapshot/agent_card_fields.h"
 +
-+#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
-+#include "third_party/blink/renderer/core/html_names.h"
-+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
-+#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++#include "third_party/blink/renderer/core/paint/agent_redaction/agent_field_rules.h"
 +
 +namespace blink {
 +
++// One rule for screenshots and redacted recordings, kept in core, where the
++// recording's painter reads it.
 +bool IsCardSecretInput(const HTMLInputElement& input) {
-+  const AtomicString& autocomplete =
-+      input.FastGetAttribute(html_names::kAutocompleteAttr);
-+  if (autocomplete.empty()) {
-+    return false;
-+  }
-+  for (const String& token :
-+       autocomplete.GetString().SimplifyWhiteSpace().Split(' ')) {
-+    if (EqualIgnoringAsciiCase(token, "cc-number") ||
-+        EqualIgnoringAsciiCase(token, "cc-csc")) {
-+      return true;
-+    }
-+  }
-+  return false;
++  return AgentFieldRules::IsCardSecretInput(input);
 +}
 +
 +}  // namespace blink
@@ -17348,10 +17528,10 @@ index 0000000000..55882a76e5
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_AGENT_SNAPSHOT_AGENT_SETTLE_WATCHER_H_
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.cc
 new file mode 100644
-index 0000000000..ac4a2c9df7
+index 0000000000..55e84c9231
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.cc
-@@ -0,0 +1,12882 @@
+@@ -0,0 +1,12926 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -17449,6 +17629,7 @@ index 0000000000..ac4a2c9df7
 +#include "third_party/blink/renderer/core/page/page.h"
 +#include "third_party/blink/renderer/core/page/page_popup_client.h"
 +#include "third_party/blink/renderer/core/page/page_popup_controller.h"
++#include "third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_marks.h"
 +#include "third_party/blink/renderer/core/paint/paint_layer.h"
 +#include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 +#include "third_party/blink/renderer/core/scroll/scroll_types.h"
@@ -27455,6 +27636,49 @@ index 0000000000..ac4a2c9df7
 +                                         rect->width(), rect->height()));
 +}
 +
++namespace {
++
++// browser: Page.agentMarkSecretField's answer for a mark AgentRedactionMarks
++// took or refused.
++String MarkOutcomeName(AgentRedactionMarks::Outcome outcome) {
++  return outcome == AgentRedactionMarks::Outcome::kFrame ? "frame"
++                                                          : "marked";
++}
++
++}  // namespace
++
++// browser: Page.agentMarkSecretField. The id is resolved as ResolveNode
++// resolves it; the mark is stored, and while armed the document's paint
++// invalidated, before the reply, so the app's first keystroke after it is
++// painted black. No layout is needed: an element with no box is marked all
++// the same.
++void AgentSnapshotCollectorImpl::MarkSecretField(
++    int32_t local_dom_node_id,
++    MarkSecretFieldCallback callback) {
++  Element* element =
++      OwnedElement(GetSupplementable()->GetFrame(), local_dom_node_id);
++  if (!element) {
++    std::move(callback).Run("gone");
++    return;
++  }
++  std::move(callback).Run(
++      MarkOutcomeName(AgentRedactionMarks::Mark(*element)));
++}
++
++// browser: Page.agentMarkSecretField with focused: the element the next key
++// goes to, found as ReadField finds it (FocusedField).
++void AgentSnapshotCollectorImpl::MarkFocusedField(
++    MarkFocusedFieldCallback callback) {
++  LocalFrame* frame = nullptr;
++  Element* element = FocusedField(frame);
++  if (!element) {
++    std::move(callback).Run("nothing");
++    return;
++  }
++  std::move(callback).Run(
++      MarkOutcomeName(AgentRedactionMarks::Mark(*element)));
++}
++
 +// browser: Input.selectOptions' reading of a <select> (the mojom says what).
 +void AgentSnapshotCollectorImpl::ReadSelect(int32_t local_dom_node_id,
 +                                            const Vector<String>& values,
@@ -30236,10 +30460,10 @@ index 0000000000..ac4a2c9df7
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.h b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.h
 new file mode 100644
-index 0000000000..d241058e66
+index 0000000000..43a7aed3b1
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.h
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,352 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -30303,6 +30527,11 @@ index 0000000000..d241058e66
 +                            CollectFrameElementsCallback callback) override;
 +  void ResolveNode(int32_t local_dom_node_id,
 +                   ResolveNodeCallback callback) override;
++  // browser: Page.agentMarkSecretField (the mojom's MarkSecretField and
++  // MarkFocusedField).
++  void MarkSecretField(int32_t local_dom_node_id,
++                       MarkSecretFieldCallback callback) override;
++  void MarkFocusedField(MarkFocusedFieldCallback callback) override;
 +  void HitCheck(int32_t local_dom_node_id,
 +                double x,
 +                double y,

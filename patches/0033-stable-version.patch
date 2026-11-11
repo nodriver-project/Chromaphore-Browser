@@ -1,7 +1,7 @@
-From cefebea4690df5083876169c2be64fbe03f2aeea Mon Sep 17 00:00:00 2001
+From 5e64e8d70fba3ea03644e04ab3444ed261860287 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:44 -0500
-Subject: [PATCH 31/55] stable-version
+Date: Wed, 11 Nov 2026 03:25:30 -0500
+Subject: [PATCH 33/61] stable-version
 
 The full version in the user agent's client hints is the Chrome release
 of this major version that the stable channel serves now, not the one the
@@ -29,10 +29,10 @@ and only --use-chromium-defaults or an explicit brand version turns it off.
  create mode 100644 chrome/browser/stable_version/stable_version.h
 
 diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
-index 0870014cf9..6616583e7c 100644
+index 716f7bb4dc..170b5a848b 100644
 --- a/chrome/app/chrome_main_delegate.cc
 +++ b/chrome/app/chrome_main_delegate.cc
-@@ -201,6 +201,7 @@
+@@ -202,6 +202,7 @@
  #include "chrome/browser/headless/headless_mode_util.h"  // nogncheck
  #include "chrome/browser/lifetime/browser_shutdown.h"  // nogncheck
  #include "chrome/browser/metrics/chrome_feature_list_creator.h"  // nogncheck
@@ -40,7 +40,7 @@ index 0870014cf9..6616583e7c 100644
  #include "chrome/browser/startup_data.h"  // nogncheck
  #include "chrome/gpu/chrome_content_gpu_client.h"  // nogncheck
  #include "chrome/utility/chrome_content_utility_client.h"  // nogncheck
-@@ -1282,6 +1283,11 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+@@ -1306,6 +1307,11 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
    base::CommandLine* startup_command_line =
        base::CommandLine::ForCurrentProcess();
    if (!startup_command_line->HasSwitch(switches::kProcessType)) {

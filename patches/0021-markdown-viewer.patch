@@ -1,7 +1,7 @@
-From 97abd9ad4e820f3f245c1d476072017bed2d9c7f Mon Sep 17 00:00:00 2001
+From 6f1d460a374953f7858bfeae2eae4403baba2669 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:16 -0500
-Subject: [PATCH 20/55] markdown-viewer
+Date: Wed, 11 Nov 2026 03:24:56 -0500
+Subject: [PATCH 21/61] markdown-viewer
 
 A built-in viewer for text/markdown: a read-only MV2 component extension
 that takes every markdown response the way the PDF viewer takes PDFs,

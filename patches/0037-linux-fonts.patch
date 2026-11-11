@@ -1,0 +1,1354 @@
+From 2f98cfc8efda8ce2567cd995e7fab4373a629140 Mon Sep 17 00:00:00 2001
+From: The browser Authors <noreply@browser.invalid>
+Date: Wed, 11 Nov 2026 03:26:04 -0500
+Subject: [PATCH 37/61] linux-fonts
+
+A Linux build presenting Windows (see the user-agent commit) builds Chrome's
+fontconfig from the Windows fonts it ships and nothing else, as a Windows
+machine has none of Linux's fonts: the files a provider gives
+(gfx::SetFontconfigFontFilesProvider) or, without one, the default set in
+browser_fonts/base_win11 and emoji_v151 beside the binary, with Windows'
+generic families and grayscale, slightly hinted rendering. The configuration
+is made current before anything uses fontconfig, so the font service the
+renderers use reads it too. Without the shipped fonts, or with
+--use-chromium-defaults, the host's fonts stay. Such a build also falls back
+as Windows does (font_cache_skia_win.cc): the specified font at standard
+style, then Blink's Windows table (font_fallback_win.cc, compiled on Linux),
+then fontconfig over the same fonts; and system-ui is Windows' system font,
+Segoe UI, unless --system-font-family names one. Its default font
+preferences are the ones Windows registers (locale_settings_win.grd:
+Consolas as the fixed font, the script fonts for Japanese, Korean, Chinese
+and Devanagari, and Windows' Arabic, Cyrillic and Greek entries). Its
+ascent, descent and line gap are DirectWrite's (OS/2's Windows values, or
+its typographic ones under USE_TYPO_METRICS, and GDI's external leading),
+and its average character width is the width of 'x', as Blink takes it when
+DirectWrite reports none. Fonts answer to the family names DirectWrite lists
+(MS Sans Serif, MS Serif, Franklin Gothic, Segoe UI Variable Display, Text
+and Small, Sitka Banner, Display, Subheading, Heading, Small and Text; none
+of the Semilight names), and a family name that ends in a weight or a
+stretch word ("Segoe UI Light", "Bahnschrift Condensed") resolves as the
+base family at that weight or stretch, as font_cache_skia_win.cc resolves
+it. Where a face carries an embedded bitmap strike at the size, its advances
+are whole pixels, as DirectWrite measures such a face in GDI's classic mode
+(Cambria's space at 12 and 16 px). Text is blitted with Windows' gamma and
+contrast (sRGB, 1.0; Linux's are 1.2 and 0.2), so the shipped fonts are not
+drawn the way anti-detect products on Linux draw them, which Fingerprint
+names on sight; --text-contrast and --text-gamma still override. Glyph ink
+bounds come from the outline hinted by the font's own instructions, rounded
+out to whole pixels, as DirectWrite's texture bounds are, not from the
+light-hinted outline FreeType draws. The default font set is added file by
+file, as a persona's is, so the family-name rules reach it on every scan,
+whatever fontconfig's cache holds from an older build. The configuration has
+no aliases for generic names (a page naming "sans-serif" or "Mono" as a
+family gets the default font, as on Windows; the unquoted generics resolve
+through the preferences), and the advances Skia's FreeType port reports are
+scaled by the exact font size rather than the 1/64 px size FreeType was
+given, as DirectWrite's are, so text at 13.3333 px measures as on Windows.
+Glyphs are drawn as DirectWrite's natural mode draws them wherever
+DirectWrite would use that mode (a gasp range without symmetric smoothing,
+or up to 20 px on a face with instructions): the font's instructions run as
+that mode runs them, and the antialiasing goes across the line only, in 18
+steps. Linux draws text with Skia's Fontations port, which a patch to
+third_party/skia (fontations-natural-mode, skia/ in the export) teaches the
+mode; the first FontCache of each process switches it on.
+---
+ chrome/browser/ui/prefs/prefs_tab_helper.cc   |  98 +++++++++++
+ .../renderer_host/render_view_host_impl.cc    |   8 +
+ skia/ext/legacy_display_globals.cc            |  15 ++
+ third_party/blink/renderer/platform/BUILD.gn  |  12 ++
+ .../renderer/platform/fonts/font_cache.cc     |  28 +++-
+ .../renderer/platform/fonts/font_metrics.cc   |  17 ++
+ .../platform/fonts/linux/font_cache_linux.cc  |  39 +++++
+ .../fonts/linux/windows_gdi_advances.cc       | 153 ++++++++++++++++++
+ .../fonts/linux/windows_gdi_advances.h        |  30 ++++
+ .../fonts/linux/windows_vertical_metrics.cc   |  67 ++++++++
+ .../fonts/linux/windows_vertical_metrics.h    |  31 ++++
+ .../platform/fonts/shaping/harfbuzz_face.cc   |  39 ++++-
+ .../fonts/shaping/harfbuzz_font_data.h        |  26 +++
+ .../platform/fonts/simple_font_data.cc        |  76 +++++++++
+ .../platform/fonts/skia/font_cache_skia.cc    | 101 ++++++++++++
+ ui/gfx/BUILD.gn                               |   6 +
+ ui/gfx/linux/fontconfig_font_files.h          |  30 ++++
+ ui/gfx/linux/fontconfig_util.cc               | 141 ++++++++++++++++
+ 18 files changed, 913 insertions(+), 4 deletions(-)
+ create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc
+ create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h
+ create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc
+ create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h
+ create mode 100644 ui/gfx/linux/fontconfig_font_files.h
+
+diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/prefs/prefs_tab_helper.cc
+index 87dc1b8b9a..b618588717 100644
+--- a/chrome/browser/ui/prefs/prefs_tab_helper.cc
++++ b/chrome/browser/ui/prefs/prefs_tab_helper.cc
+@@ -42,6 +42,7 @@
+ #include "extensions/buildflags/buildflags.h"
+ #include "media/media_buildflags.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
+ #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/icu/source/common/unicode/uchar.h"
+@@ -312,6 +313,89 @@ void RegisterLocalizedFontPref(user_prefs::PrefRegistrySyncable* registry,
+ }
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++// browser: the font defaults Windows registers (locale_settings_win.grd and
++// the kFontDefaults entries Windows has), the fixed font as ClearType picks
++// it, for a Linux build presenting Windows.
++struct WindowsFontDefault {
++  const char* pref_name;
++  const char* family;
++};
++
++constexpr auto kWindowsFontDefaults = std::to_array<WindowsFontDefault>({
++    {prefs::kWebKitStandardFontFamily, "Times New Roman"},
++    {prefs::kWebKitFixedFontFamily, "Consolas"},
++    {prefs::kWebKitSerifFontFamily, "Times New Roman"},
++    {prefs::kWebKitSansSerifFontFamily, "Arial"},
++    {prefs::kWebKitCursiveFontFamily, "Comic Sans MS"},
++    {prefs::kWebKitFantasyFontFamily, "Impact"},
++    {prefs::kWebKitMathFontFamily, "Cambria Math"},
++    {prefs::kWebKitStandardFontFamilyJapanese,
++     ",Noto Sans JP,Noto Sans CJK JP,Meiryo,Yu Gothic"},
++    {prefs::kWebKitFixedFontFamilyJapanese, ",BIZ UDGothic,MS Gothic"},
++    {prefs::kWebKitSerifFontFamilyJapanese,
++     ",Noto Serif JP,Noto Serif CJK JP,Yu Mincho,MS PMincho"},
++    {prefs::kWebKitSansSerifFontFamilyJapanese,
++     ",Noto Sans JP,Noto Sans CJK JP,Meiryo,Yu Gothic"},
++    {prefs::kWebKitStandardFontFamilyKorean,
++     ",Noto Sans KR,Noto Sans CJK KR,Malgun Gothic"},
++    {prefs::kWebKitSerifFontFamilyKorean,
++     ",Noto Serif KR,Noto Serif CJK KR,Batang"},
++    {prefs::kWebKitSansSerifFontFamilyKorean,
++     ",Noto Sans KR,Noto Sans CJK KR,Malgun Gothic"},
++    {prefs::kWebKitStandardFontFamilySimplifiedHan,
++     ",Noto Sans SC,Noto Sans CJK SC,Microsoft YaHei"},
++    {prefs::kWebKitSerifFontFamilySimplifiedHan,
++     ",Noto Serif SC,Noto Serif CJK SC,Simsun"},
++    {prefs::kWebKitSansSerifFontFamilySimplifiedHan,
++     ",Noto Sans SC,Noto Sans CJK SC,Microsoft YaHei"},
++    {prefs::kWebKitStandardFontFamilyTraditionalHan,
++     ",Noto Sans TC,Noto Sans CJK TC,Microsoft JhengHei"},
++    {prefs::kWebKitSerifFontFamilyTraditionalHan,
++     ",Noto Serif TC,Noto Serif CJK TC,PMingLiU"},
++    {prefs::kWebKitSansSerifFontFamilyTraditionalHan,
++     ",Noto Sans TC,Noto Sans CJK TC,Microsoft JhengHei"},
++    {prefs::kWebKitStandardFontFamilyDevanagari, "Nirmala UI"},
++    {prefs::kWebKitFixedFontFamilyDevanagari, "Consolas"},
++    {prefs::kWebKitSerifFontFamilyDevanagari, "Nirmala UI"},
++    {prefs::kWebKitSansSerifFontFamilyDevanagari, "Nirmala UI"},
++    {"webkit.webprefs.fonts.cursive.Hans", "KaiTi"},
++    {"webkit.webprefs.fonts.cursive.Hant", "DFKai-SB"},
++    {"webkit.webprefs.fonts.fixed.Arab", "Courier New"},
++    {prefs::kWebKitSansSerifFontFamilyArabic, "Segoe UI"},
++    {"webkit.webprefs.fonts.standard.Cyrl", "Times New Roman"},
++    {"webkit.webprefs.fonts.fixed.Cyrl", "Courier New"},
++    {"webkit.webprefs.fonts.serif.Cyrl", "Times New Roman"},
++    {"webkit.webprefs.fonts.sansserif.Cyrl", "Arial"},
++    {"webkit.webprefs.fonts.standard.Grek", "Times New Roman"},
++    {"webkit.webprefs.fonts.fixed.Grek", "Courier New"},
++    {"webkit.webprefs.fonts.serif.Grek", "Times New Roman"},
++    {"webkit.webprefs.fonts.sansserif.Grek", "Arial"},
++    {prefs::kWebKitFixedFontFamilyKorean, "Gulimche"},
++    {"webkit.webprefs.fonts.cursive.Hang", "Gungsuh"},
++    {prefs::kWebKitFixedFontFamilySimplifiedHan, "NSimsun"},
++    {prefs::kWebKitFixedFontFamilyTraditionalHan, "MingLiU"},
++});
++
++// browser: registers kWindowsFontDefaults as RegisterProfilePrefs() registers
++// kFontDefaults, leaving out the browser locale's own script.
++void RegisterWindowsFontDefaults(user_prefs::PrefRegistrySyncable* registry,
++                                 UScriptCode browser_script,
++                                 std::set<std::string>& fonts_with_defaults) {
++  for (const WindowsFontDefault& pref : kWindowsFontDefaults) {
++    if (browser_script == GetScriptOfFontPref(pref.pref_name)) {
++      continue;
++    }
++    std::string value = pref.family;
++    if (value.starts_with(',')) {
++      value = gfx::FontList::FirstAvailableOrFirst(value);
++    }
++    registry->RegisterStringPref(pref.pref_name, value);
++    fonts_with_defaults.insert(pref.pref_name);
++  }
++}
++#endif  // BUILDFLAG(IS_LINUX)
++
+ }  // namespace
+ 
+ PrefsTabHelper::PrefsTabHelper(WebContents* contents)
+@@ -418,7 +502,21 @@ void PrefsTabHelper::RegisterProfilePrefs(
+   // Register font prefs that have defaults.
+   std::set<std::string> fonts_with_defaults;
+   UScriptCode browser_script = GetScriptOfBrowserLocale(locale);
++#if BUILDFLAG(IS_LINUX)
++  // browser: Windows' defaults in place of Linux's, for a Linux build
++  // presenting Windows.
++  const bool windows_font_defaults = blink::PresentsWindowsPlatform();
++  if (windows_font_defaults) {
++    RegisterWindowsFontDefaults(registry, browser_script,
++                                fonts_with_defaults);
++  }
++#endif
+   for (FontDefault pref : kFontDefaults) {
++#if BUILDFLAG(IS_LINUX)
++    if (windows_font_defaults) {
++      break;
++    }
++#endif
+ #if BUILDFLAG(IS_WIN)
+     if (pref.pref_name == prefs::kWebKitFixedFontFamily) {
+       if (ShouldUseAlternateDefaultFixedFont(
+diff --git a/content/browser/renderer_host/render_view_host_impl.cc b/content/browser/renderer_host/render_view_host_impl.cc
+index 512116f099..a367080b03 100644
+--- a/content/browser/renderer_host/render_view_host_impl.cc
++++ b/content/browser/renderer_host/render_view_host_impl.cc
+@@ -87,6 +87,7 @@
+ #include "services/network/public/cpp/features.h"
+ #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/page/prerender_page_param.mojom.h"
+ #include "third_party/perfetto/include/perfetto/tracing/traced_value.h"
+@@ -274,6 +275,13 @@ void RenderViewHostImpl::GetPlatformSpecificPrefs(
+         command_line->GetSwitchValueASCII(switches::kSystemFontFamily);
+   } else {
+     prefs->system_font_family_name = gfx::Font().GetFontName();
++#if BUILDFLAG(IS_LINUX)
++    // browser: a Linux build presenting Windows has Windows' system font,
++    // the message font its NONCLIENTMETRICS names.
++    if (blink::PresentsWindowsPlatform()) {
++      prefs->system_font_family_name = "Segoe UI";
++    }
++#endif
+   }
+ #elif BUILDFLAG(IS_FUCHSIA)
+   // Make Blink's "focus ring" invisible. The focus ring is a hairline border
+diff --git a/skia/ext/legacy_display_globals.cc b/skia/ext/legacy_display_globals.cc
+index 2cae07d71a..7f3a63629c 100644
+--- a/skia/ext/legacy_display_globals.cc
++++ b/skia/ext/legacy_display_globals.cc
+@@ -9,6 +9,7 @@
+ #include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/synchronization/lock.h"
++#include "build/build_config.h"
+ #include "skia/ext/switches.h"
+ #include "ui/base/ui_base_features.h"
+ 
+@@ -30,6 +31,20 @@ base::Lock& GetLock() {
+ void GetContrastAndGammaValuesFromCommandLine(float& out_contrast,
+                                               float& out_gamma) {
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows (components/browser's
++  // --use-chromium-defaults turns it off; blink::PresentsWindowsPlatform()
++  // is out of reach here) blits text with Windows' gamma and contrast
++  // (skia/BUILD.gn: sRGB and 1.0), not Linux's 1.2 and 0.2, so the Windows
++  // fonts it ships are not drawn the way anti-detect products on Linux draw
++  // them. The switches below still override, as on Windows.
++  static const bool presents_windows =
++      !command_line->HasSwitch("use-chromium-defaults");
++  if (presents_windows) {
++    out_contrast = 1.0f;
++    out_gamma = 0.0f;  // SK_GAMMA_SRGB
++  }
++#endif  // BUILDFLAG(IS_LINUX)
+   std::string contrast_string =
+       command_line->GetSwitchValueASCII(switches::kTextContrast);
+   double contrast_double;
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+index 02b7415ff1..5f771bafbe 100644
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -1765,6 +1765,18 @@ component("platform") {
+     ]
+   }
+ 
++  # browser: Windows' fallback table for a Linux build presenting Windows.
++  if (is_linux) {
++    sources += [
++      "fonts/linux/windows_gdi_advances.cc",
++      "fonts/linux/windows_gdi_advances.h",
++      "fonts/linux/windows_vertical_metrics.cc",
++      "fonts/linux/windows_vertical_metrics.h",
++      "fonts/win/font_fallback_win.cc",
++      "fonts/win/font_fallback_win.h",
++    ]
++  }
++
+   if (is_win) {
+     sources += [
+       "fonts/win/dwrite_font_format_support.cc",
+diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
+index 09a2d1c79e..3504312bf9 100644
+--- a/third_party/blink/renderer/platform/fonts/font_cache.cc
++++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
+@@ -74,6 +74,11 @@
+ #include "third_party/blink/renderer/platform/wtf/wtf.h"
+ #include "ui/gfx/font_list.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "third_party/skia/include/ports/SkTypeface_fontations.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include "third_party/skia/include/ports/SkTypeface_win.h"
+ #endif
+@@ -91,6 +96,23 @@ extern const char kNotoColorEmojiCompat[] = "Noto Color Emoji Compat";
+ float FontCache::device_scale_factor_ = 1.0;
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++namespace {
++
++// browser: a Linux build presenting Windows has Skia's Fontations port draw
++// text as DirectWrite's natural mode does (SkTypeface_fontations.h). Asked
++// once per process, from the first FontCache made in it.
++void SetWindowsNaturalModeAsWindows() {
++  static const bool done = [] {
++    SkTypeface_Fontations_SetWindowsNaturalMode(PresentsWindowsPlatform());
++    return true;
++  }();
++  (void)done;
++}
++
++}  // namespace
++#endif  // BUILDFLAG(IS_LINUX)
++
+ #if BUILDFLAG(IS_WIN)
+ bool FontCache::antialiased_text_enabled_ = false;
+ bool FontCache::lcd_text_enabled_ = false;
+@@ -123,7 +145,11 @@ FontCache& FontCache::Get() {
+   return FontGlobalContext::GetFontCache();
+ }
+ 
+-FontCache::FontCache() = default;
++FontCache::FontCache() {
++#if BUILDFLAG(IS_LINUX)
++  SetWindowsNaturalModeAsWindows();
++#endif
++}
+ 
+ FontCache::~FontCache() = default;
+ 
+diff --git a/third_party/blink/renderer/platform/fonts/font_metrics.cc b/third_party/blink/renderer/platform/fonts/font_metrics.cc
+index 11f9a7e8fc..3f5c246be2 100644
+--- a/third_party/blink/renderer/platform/fonts/font_metrics.cc
++++ b/third_party/blink/renderer/platform/fonts/font_metrics.cc
+@@ -39,6 +39,11 @@
+ #include "third_party/skia/include/core/SkFontMetrics.h"
+ #include "third_party/skia/include/core/SkTypeface.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h"
++#endif
++
+ namespace blink {
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
+@@ -66,6 +71,18 @@ void FontMetrics::AscentDescentWithHacks(
+   if (descent_override)
+     metrics.fDescent = platform_data.size() * descent_override.value();
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows takes ascent and descent as
++  // DirectWrite gives them.
++  if (!ascent_override && !descent_override && PresentsWindowsPlatform()) {
++    if (std::optional<WindowsVerticalMetrics> windows_metrics =
++            GetWindowsVerticalMetrics(*face, platform_data.size())) {
++      metrics.fAscent = -windows_metrics->ascent;
++      metrics.fDescent = windows_metrics->descent;
++    }
++  }
++#endif
++
+   int vdmx_ascent = 0, vdmx_descent = 0;
+   bool is_vdmx_valid = false;
+ 
+diff --git a/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc b/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc
+index 0880cdb41c..be2a8b45c0 100644
+--- a/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc
++++ b/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc
+@@ -27,6 +27,14 @@
+ #include "build/build_config.h"
+ #include "third_party/blink/public/platform/linux/web_sandbox_support.h"
+ #include "third_party/blink/public/platform/platform.h"
++
++#if BUILDFLAG(IS_LINUX)
++#include "skia/ext/font_utils.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "third_party/blink/renderer/platform/fonts/font_face_creation_params.h"
++#include "third_party/blink/renderer/platform/fonts/win/font_fallback_win.h"
++#include "third_party/blink/renderer/platform/text/character.h"
++#endif
+ #include "third_party/blink/renderer/platform/fonts/font_fallback_priority.h"
+ #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
+ #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
+@@ -68,6 +76,37 @@ const SimpleFontData* FontCache::PlatformFallbackFontForCharacter(
+     UChar32 c,
+     const SimpleFontData*,
+     FontFallbackPriority fallback_priority) {
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows falls back as Windows does
++  // (font_cache_skia_win.cc): the specified font at standard style, then
++  // Blink's Windows table (font_fallback_win.cc), and only after them
++  // fontconfig, which sees the same Windows fonts as DirectWrite would.
++  if (PresentsWindowsPlatform()) {
++    if (!IsEmojiPresentationEmoji(fallback_priority) &&
++        (font_description.Style() == kItalicSlopeValue ||
++         font_description.Weight() >= kBoldWeightValue)) {
++      if (const SimpleFontData* font_data =
++              FallbackOnStandardFontStyle(font_description, c)) {
++        return font_data;
++      }
++    }
++    FontFallbackPriority priority = fallback_priority;
++    if (priority == FontFallbackPriority::kText && Character::IsEmoji(c)) {
++      priority = FontFallbackPriority::kEmojiText;
++    }
++    UScriptCode script;
++    const AtomicString& family = GetFallbackFamily(
++        c, font_description.GenericFamily(), font_description.Locale(),
++        priority, *skia::DefaultFontMgr(), script);
++    if (!family.empty()) {
++      const FontPlatformData* data = GetFontPlatformData(
++          font_description, FontFaceCreationParams(family));
++      if (data && data->FontContainsCharacter(c)) {
++        return FontDataFromFontPlatformData(data);
++      }
++    }
++  }
++#endif  // BUILDFLAG(IS_LINUX)
+   if (IsEmojiPresentationEmoji(fallback_priority)) {
+     // FIXME crbug.com/591346: We're overriding the fallback character here
+     // with the FAMILY emoji in the hope to find a suitable emoji font.
+diff --git a/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc b/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc
+new file mode 100644
+index 0000000000..056b54e07c
+--- /dev/null
++++ b/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc
+@@ -0,0 +1,153 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h"
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "third_party/skia/include/core/SkFont.h"
++#include "third_party/skia/include/core/SkScalar.h"
++#include "third_party/skia/include/core/SkTypeface.h"
++#include "third_party/skia/include/core/SkTypes.h"
++
++namespace blink {
++
++namespace {
++
++constexpr SkFontTableTag kEblcTag = SkSetFourByteTag('E', 'B', 'L', 'C');
++constexpr SkFontTableTag kEbscTag = SkSetFourByteTag('E', 'B', 'S', 'C');
++constexpr SkFontTableTag kGaspTag = SkSetFourByteTag('g', 'a', 's', 'p');
++
++// EBLC and EBSC: version 2.0 and a size count, then one record per size.
++constexpr uint32_t kTableVersion = 0x00020000;
++constexpr size_t kTableHeaderSize = 8;
++constexpr size_t kBitmapSizeRecordSize = 48;
++constexpr size_t kBitmapScaleRecordSize = 28;
++constexpr uint32_t kMaxSizes = 1024;
++constexpr int kGaspGridfit = 0x0001;
++
++template <size_t N>
++uint32_t ReadUint16(const std::array<uint8_t, N>& data, size_t offset) {
++  return (uint32_t{data[offset]} << 8) | data[offset + 1];
++}
++
++template <size_t N>
++uint32_t ReadUint32(const std::array<uint8_t, N>& data, size_t offset) {
++  return (ReadUint16(data, offset) << 16) | ReadUint16(data, offset + 2);
++}
++
++struct PpemRange {
++  int min;
++  int max;
++};
++
++// The ppem range Skia tests for a strike: the size alone, or the whole gasp
++// range holding it when that range asks for grid-fitting only.
++PpemRange StrikeRange(const SkTypeface& typeface, int ppem) {
++  PpemRange range{ppem, ppem};
++  std::array<uint8_t, 4> header;
++  if (typeface.getTableData(kGaspTag, 0, header.size(), header.data()) !=
++      header.size()) {
++    return range;
++  }
++  const uint32_t count = ReadUint16(header, 2);
++  int min = 0;
++  for (uint32_t i = 0; i < count; ++i) {
++    std::array<uint8_t, 4> record;
++    if (typeface.getTableData(kGaspTag, 4 + 4 * i, record.size(),
++                              record.data()) != record.size()) {
++      break;
++    }
++    const int max = static_cast<int>(ReadUint16(record, 0));
++    if (ppem <= max) {
++      if (static_cast<int>(ReadUint16(record, 2)) == kGaspGridfit) {
++        range = PpemRange{min, max};
++      }
++      break;
++    }
++    min = max + 1;
++  }
++  return range;
++}
++
++// The number of size records of an EBLC or EBSC table, or 0.
++uint32_t SizeCount(const SkTypeface& typeface,
++                   SkFontTableTag tag,
++                   size_t record_size) {
++  std::array<uint8_t, kTableHeaderSize> header;
++  if (typeface.getTableData(tag, 0, header.size(), header.data()) !=
++          header.size() ||
++      ReadUint32(header, 0) != kTableVersion) {
++    return 0;
++  }
++  const uint32_t count = ReadUint32(header, 4);
++  if (count > kMaxSizes ||
++      typeface.getTableSize(tag) < kTableHeaderSize + record_size * count) {
++    return 0;
++  }
++  return count;
++}
++
++// As SkScalerContext_DW's has_bitmap_strike().
++bool HasBitmapStrike(const SkTypeface& typeface, PpemRange range) {
++  const uint32_t sizes =
++      SizeCount(typeface, kEblcTag, kBitmapSizeRecordSize);
++  for (uint32_t i = 0; i < sizes; ++i) {
++    // startGlyphIndex, endGlyphIndex, ppemX and ppemY, at 40 to 45.
++    std::array<uint8_t, 6> tail;
++    if (typeface.getTableData(kEblcTag,
++                              kTableHeaderSize + kBitmapSizeRecordSize * i + 40,
++                              tail.size(), tail.data()) != tail.size()) {
++      return false;
++    }
++    const int ppem_x = tail[4];
++    if (ppem_x == tail[5] && range.min <= ppem_x && ppem_x <= range.max &&
++        ReadUint16(tail, 2) >= ReadUint16(tail, 0) + 3) {
++      return true;
++    }
++  }
++  const uint32_t scales =
++      SizeCount(typeface, kEbscTag, kBitmapScaleRecordSize);
++  for (uint32_t i = 0; i < scales; ++i) {
++    // ppemX and ppemY, after the two 12-byte line metrics.
++    std::array<uint8_t, 2> ppem;
++    if (typeface.getTableData(kEbscTag,
++                              kTableHeaderSize + kBitmapScaleRecordSize * i + 24,
++                              ppem.size(), ppem.data()) != ppem.size()) {
++      return false;
++    }
++    if (ppem[0] == ppem[1] && range.min <= ppem[0] && ppem[0] <= range.max) {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
++float ExactAdvanceScale(const SkFont& font) {
++  if (!PresentsWindowsPlatform()) {
++    return 1.0f;
++  }
++  const float size = font.getSize();
++  // As SkScalarToFDot6: truncated to 26.6.
++  const float truncated = static_cast<float>(static_cast<int>(size * 64)) / 64;
++  return truncated > 0 && truncated != size ? size / truncated : 1.0f;
++}
++
++bool WindowsMeasuresWholePixels(const SkFont& font) {
++  const SkTypeface* typeface = font.getTypeface();
++  if (!typeface || !font.isEmbeddedBitmaps() || !PresentsWindowsPlatform()) {
++    return false;
++  }
++  // The size as SkScalerContext_DW rounds it, and the ppem it truncates to.
++  const SkScalar gdi_size = SkScalarRoundToScalar(font.getSize() * 64) / 64;
++  const int ppem = SkScalarTruncToInt(gdi_size);
++  return ppem > 0 && HasBitmapStrike(*typeface, StrikeRange(*typeface, ppem));
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h b/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h
+new file mode 100644
+index 0000000000..dd67c9fee8
+--- /dev/null
++++ b/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_GDI_ADVANCES_H_
++#define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_GDI_ADVANCES_H_
++
++class SkFont;
++
++namespace blink {
++
++// browser: Skia's DirectWrite backend measures a face in GDI's classic mode,
++// every advance a whole pixel, when embedded bitmaps are on and the face has
++// a bitmap strike at the size (SkScalerContext_DW's has_bitmap_strike()).
++// FreeType gives the glyphs inside a strike their bitmaps' whole-pixel
++// advances too, but the others their outlines' fractional ones (Cambria's
++// space at 12 and 16 px). True when a Linux build presenting Windows should
++// round `font`'s advances as Windows does.
++bool WindowsMeasuresWholePixels(const SkFont& font);
++
++// browser: Skia's FreeType port gives FreeType the size truncated to 1/64 px
++// and scales advances by that size; DirectWrite scales them by the exact
++// size (13.3333 px against 13.328125). The factor an advance Skia reports
++// for `font` is scaled by in a Linux build presenting Windows: requested
++// over truncated size, 1 at whole sizes and otherwise.
++float ExactAdvanceScale(const SkFont& font);
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_GDI_ADVANCES_H_
+diff --git a/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc b/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc
+new file mode 100644
+index 0000000000..d070e7487d
+--- /dev/null
++++ b/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc
+@@ -0,0 +1,67 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h"
++
++#include <algorithm>
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++#include "third_party/skia/include/core/SkTypeface.h"
++#include "third_party/skia/include/core/SkTypes.h"
++
++namespace blink {
++
++namespace {
++
++constexpr SkFontTableTag kOs2Tag = SkSetFourByteTag('O', 'S', '/', '2');
++constexpr SkFontTableTag kHheaTag = SkSetFourByteTag('h', 'h', 'e', 'a');
++
++// OS/2 version 0 ends with usWinDescent, at 78 bytes; hhea's lineGap ends at
++// 10.
++constexpr size_t kOs2Size = 78;
++constexpr size_t kHheaSize = 10;
++constexpr int kUseTypoMetrics = 1 << 7;
++
++template <size_t N>
++int ReadUint16(const std::array<uint8_t, N>& table, size_t offset) {
++  return (table[offset] << 8) | table[offset + 1];
++}
++
++template <size_t N>
++int ReadInt16(const std::array<uint8_t, N>& table, size_t offset) {
++  return static_cast<int16_t>(ReadUint16(table, offset));
++}
++
++}  // namespace
++
++std::optional<WindowsVerticalMetrics> GetWindowsVerticalMetrics(
++    const SkTypeface& face,
++    float size) {
++  const int units_per_em = face.getUnitsPerEm();
++  std::array<uint8_t, kOs2Size> os2;
++  std::array<uint8_t, kHheaSize> hhea;
++  if (units_per_em <= 0 ||
++      face.getTableData(kOs2Tag, 0, os2.size(), os2.data()) != os2.size() ||
++      face.getTableData(kHheaTag, 0, hhea.size(), hhea.data()) !=
++          hhea.size()) {
++    return std::nullopt;
++  }
++  const float scale = size / units_per_em;
++  if (ReadUint16(os2, 62) & kUseTypoMetrics) {
++    return WindowsVerticalMetrics{ReadInt16(os2, 68) * scale,
++                                  -ReadInt16(os2, 70) * scale,
++                                  ReadInt16(os2, 72) * scale};
++  }
++  const int win_ascent = ReadUint16(os2, 74);
++  const int win_descent = ReadUint16(os2, 76);
++  const int hhea_spacing =
++      ReadInt16(hhea, 4) - ReadInt16(hhea, 6) + ReadInt16(hhea, 8);
++  const int line_gap = std::max(0, hhea_spacing - (win_ascent + win_descent));
++  return WindowsVerticalMetrics{win_ascent * scale, win_descent * scale,
++                                line_gap * scale};
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h b/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h
+new file mode 100644
+index 0000000000..b59483aebf
+--- /dev/null
++++ b/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_VERTICAL_METRICS_H_
++#define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_VERTICAL_METRICS_H_
++
++#include <optional>
++
++class SkTypeface;
++
++namespace blink {
++
++// browser: a font's ascent, descent and line gap, in pixels at `size`, as
++// DirectWrite gives them: OS/2's typographic values when the font sets
++// USE_TYPO_METRICS, otherwise usWinAscent and usWinDescent with GDI's
++// external leading (hhea's line spacing beyond them) as the line gap. For a
++// Linux build presenting Windows. Nullopt when the font lacks the tables.
++struct WindowsVerticalMetrics {
++  float ascent;
++  float descent;
++  float line_gap;
++};
++
++std::optional<WindowsVerticalMetrics> GetWindowsVerticalMetrics(
++    const SkTypeface& face,
++    float size);
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_VERTICAL_METRICS_H_
+diff --git a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc
+index 99f7c8fc72..462994d760 100644
+--- a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc
++++ b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc
+@@ -302,6 +302,18 @@ static unsigned int HarfBuzzGetNominalGlyphs(
+   return done;
+ }
+ 
++// browser: whether the advances keep their fractions; not where a Linux
++// build presenting Windows rounds them as Windows does
++// (fonts/linux/windows_gdi_advances.h).
++static bool AdvancesAreSubpixel(HarfBuzzFontData* hb_font_data) {
++#if BUILDFLAG(IS_LINUX)
++  if (hb_font_data->MeasuresWholePixelsAsWindows()) {
++    return false;
++  }
++#endif
++  return hb_font_data->font_.isSubpixel();
++}
++
+ static hb_position_t HarfBuzzGetGlyphHorizontalAdvance(hb_font_t* hb_font,
+                                                        void* font_data,
+                                                        hb_codepoint_t glyph,
+@@ -310,8 +322,15 @@ static hb_position_t HarfBuzzGetGlyphHorizontalAdvance(hb_font_t* hb_font,
+       reinterpret_cast<HarfBuzzFontData*>(font_data);
+   hb_position_t advance = 0;
+   SkFontGetGlyphWidthForHarfBuzz(hb_font_data->EnsureStrikeRef(),
+-                                 hb_font_data->font_.isSubpixel(), glyph,
++                                 AdvancesAreSubpixel(hb_font_data), glyph,
+                                  &advance);
++#if BUILDFLAG(IS_LINUX)
++  // browser: at the exact size, as DirectWrite's (windows_gdi_advances.h).
++  const float exact = ExactAdvanceScale(hb_font_data->font_);
++  if (exact != 1.0f) {
++    advance = static_cast<hb_position_t>(lroundf(advance * exact));
++  }
++#endif
+   return advance;
+ }
+ 
+@@ -329,8 +348,22 @@ static void HarfBuzzGetGlyphHorizontalAdvances(
+   CHECK_EQ(glyph_stride % 4, 0u);
+   CHECK_EQ(advance_stride % 4, 0u);
+   SkFontGetGlyphWidthForHarfBuzz(
+-      hb_font_data->EnsureStrikeRef(), hb_font_data->font_.isSubpixel(), count,
+-      first_glyph, glyph_stride / 4, first_advance, advance_stride / 4);
++      hb_font_data->EnsureStrikeRef(), AdvancesAreSubpixel(hb_font_data),
++      count, first_glyph, glyph_stride / 4, first_advance,
++      advance_stride / 4);
++#if BUILDFLAG(IS_LINUX)
++  // browser: at the exact size, as DirectWrite's (windows_gdi_advances.h).
++  const float exact = ExactAdvanceScale(hb_font_data->font_);
++  if (exact != 1.0f) {
++    hb_position_t* advance = first_advance;
++    for (unsigned i = 0; i < count; ++i) {
++      *advance = static_cast<hb_position_t>(lroundf(*advance * exact));
++      // SAFETY: HarfBuzz sizes the advance buffer for `count` entries at
++      // this stride, as for SkFontGetGlyphWidthForHarfBuzz above.
++      UNSAFE_BUFFERS(advance += advance_stride / 4);
++    }
++  }
++#endif
+ }
+ 
+ static hb_bool_t HarfBuzzGetGlyphVerticalOrigin(hb_font_t* hb_font,
+diff --git a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h
+index 4a3bd2b950..8d91702104 100644
+--- a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h
++++ b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h
+@@ -7,8 +7,10 @@
+ 
+ #include <hb-cplusplus.hh>
+ #include <memory>
++#include <optional>
+ 
+ #include "base/check_op.h"
++#include "build/build_config.h"
+ #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
+ #include "third_party/blink/renderer/platform/fonts/opentype/open_type_vertical_data.h"
+ #include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.h"
+@@ -16,6 +18,10 @@
+ #include "third_party/skia/include/core/SkFont.h"
+ #include "third_party/skia/include/core/SkStrikeRef.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h"
++#endif
++
+ struct hb_font_t;
+ 
+ namespace blink {
+@@ -56,6 +62,11 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
+     if (strike_ref_ && font_ != new_font) {
+       strike_ref_ = SkStrikeRef();
+     }
++#if BUILDFLAG(IS_LINUX)
++    if (font_ != new_font) {
++      whole_pixel_advances_.reset();
++    }
++#endif
+     font_ = std::move(new_font);
+ 
+     if (vertical_layout == HarfBuzzFace::kPrepareForVerticalLayout)
+@@ -102,6 +113,17 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
+     return vertical_data_.Get();
+   }
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: whether Windows measures `font_` in whole pixels
++  // (fonts/linux/windows_gdi_advances.h), asked once per font.
++  bool MeasuresWholePixelsAsWindows() {
++    if (!whole_pixel_advances_.has_value()) {
++      whole_pixel_advances_ = WindowsMeasuresWholePixels(font_);
++    }
++    return *whole_pixel_advances_;
++  }
++#endif
++
+   VariationSelectorMode GetVariationSelectorMode() const {
+     return variation_selector_mode_;
+   }
+@@ -114,6 +136,10 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
+   // Lazily-populated cached strike for the HarfBuzz advance callbacks; reset
+   // when `font_` changes. See `UpdateFallbackMetricsAndScale`.
+   SkStrikeRef strike_ref_;
++#if BUILDFLAG(IS_LINUX)
++  // Reset with `font_`. See `MeasuresWholePixelsAsWindows`.
++  std::optional<bool> whole_pixel_advances_;
++#endif
+ 
+   // Capture these scaled fallback metrics from FontPlatformData so that a
+   // OpenTypeVerticalData object can be constructed from them when needed.
+diff --git a/third_party/blink/renderer/platform/fonts/simple_font_data.cc b/third_party/blink/renderer/platform/fonts/simple_font_data.cc
+index a3afa4fa66..ee8ff37433 100644
+--- a/third_party/blink/renderer/platform/fonts/simple_font_data.cc
++++ b/third_party/blink/renderer/platform/fonts/simple_font_data.cc
+@@ -62,6 +62,12 @@
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "v8/include/v8.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h"
++#include "third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.h"
++#endif
++
+ namespace blink {
+ 
+ constexpr float kSmallCapsFontSizeMultiplier = 0.7f;
+@@ -173,6 +179,17 @@ void SimpleFontData::PlatformInit(bool subpixel_ascent_descent,
+   } else {
+     line_gap = metrics.fLeading;
+   }
++#if BUILDFLAG(IS_LINUX)
++  // browser: and the line gap DirectWrite gives, for a Linux build
++  // presenting Windows.
++  if (!metrics_override.line_gap_override && PresentsWindowsPlatform()) {
++    if (std::optional<WindowsVerticalMetrics> windows_metrics =
++            GetWindowsVerticalMetrics(*font_.getTypeface(),
++                                      platform_data_->size())) {
++      line_gap = windows_metrics->line_gap;
++    }
++  }
++#endif
+   font_metrics_.SetLineGap(line_gap);
+   font_metrics_.SetLineSpacing(lroundf(ascent) + lroundf(descent) +
+                                lroundf(line_gap));
+@@ -201,6 +218,14 @@ void SimpleFontData::PlatformInit(bool subpixel_ascent_descent,
+ 
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: DirectWrite gives no average character width, so Windows
++  // takes the width of 'x' below; a Linux build presenting Windows does
++  // too.
++  if (PresentsWindowsPlatform()) {
++    metrics.fAvgCharWidth = 0;
++  }
++#endif
+ #if !BUILDFLAG(IS_APPLE)
+   if (metrics.fAvgCharWidth) {
+     avg_char_width_ = metrics.fAvgCharWidth;
+@@ -498,6 +523,36 @@ const HanKerning::FontData& SimpleFontData::HanKerningData(
+   return new_entry.data;
+ }
+ 
++#if BUILDFLAG(IS_LINUX)
++namespace {
++
++// browser: DirectWrite reports a glyph's bounds as the whole pixels its
++// antialiased texture covers, the outline hinted vertically by the font's
++// own instructions; FreeType reports the box of the outline its light
++// autohinter made for drawing, whose snapped stems cross a pixel boundary
++// and add a pixel. A Linux build presenting Windows takes the bounds from
++// the outline hinted by the font's own instructions (FreeType's v40
++// interpreter: vertical only, as DirectWrite's natural modes), rounded out
++// as DirectWrite's texture bounds are; the glyphs are still drawn with the
++// light autohinter.
++SkFont InstructedOutlineFont(const SkFont& font) {
++  SkFont instructed(font);
++  instructed.setHinting(SkFontHinting::kNormal);
++  return instructed;
++}
++
++void RoundOutAsDirectWrite(SkRect* bounds) {
++  if (bounds->isEmpty()) {
++    return;
++  }
++  SkIRect whole;
++  bounds->roundOut(&whole);
++  bounds->set(whole);
++}
++
++}  // namespace
++#endif  // BUILDFLAG(IS_LINUX)
++
+ gfx::RectF SimpleFontData::PlatformBoundsForGlyph(Glyph glyph) const {
+   if (!platform_data_->size()) {
+     return gfx::RectF();
+@@ -506,6 +561,13 @@ gfx::RectF SimpleFontData::PlatformBoundsForGlyph(Glyph glyph) const {
+   static_assert(sizeof(glyph) == 2, "Glyph id should not be truncated.");
+ 
+   SkRect bounds;
++#if BUILDFLAG(IS_LINUX)
++  if (PresentsWindowsPlatform()) {
++    SkFontGetBoundsForGlyph(InstructedOutlineFont(font_), glyph, &bounds);
++    RoundOutAsDirectWrite(&bounds);
++    return gfx::SkRectToRectF(bounds);
++  }
++#endif
+   SkFontGetBoundsForGlyph(font_, glyph, &bounds);
+   return gfx::SkRectToRectF(bounds);
+ }
+@@ -545,6 +607,15 @@ void SimpleFontData::BoundsForGlyphs(const Vector<Glyph, 256>& glyphs,
+   }
+ 
+   DCHECK_EQ(bounds->size(), glyphs.size());
++#if BUILDFLAG(IS_LINUX)
++  if (PresentsWindowsPlatform()) {
++    SkFontGetBoundsForGlyphs(InstructedOutlineFont(font_), glyphs, *bounds);
++    for (SkRect& rect : *bounds) {
++      RoundOutAsDirectWrite(&rect);
++    }
++    return;
++  }
++#endif
+   SkFontGetBoundsForGlyphs(font_, glyphs, *bounds);
+ }
+ 
+@@ -555,7 +626,12 @@ float SimpleFontData::WidthForGlyph(Glyph glyph) const {
+ 
+   static_assert(sizeof(glyph) == 2, "Glyph id should not be truncated.");
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: at the exact size, as DirectWrite's (windows_gdi_advances.h).
++  return SkFontGetWidthForGlyph(font_, glyph) * ExactAdvanceScale(font_);
++#else
+   return SkFontGetWidthForGlyph(font_, glyph);
++#endif
+ }
+ 
+ inline float SimpleFontData::ZeroInlineSize() const {
+diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+index 31af2c1f7c..1c2c1d4e04 100644
+--- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
++++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
+@@ -61,6 +61,11 @@
+ #include "third_party/skia/include/core/SkStream.h"
+ #include "third_party/skia/include/core/SkTypeface.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
++#endif
++
+ #if BUILDFLAG(IS_MAC)
+ #error This file should not be used by MacOS.
+ #endif
+@@ -95,6 +100,76 @@ const FontPlatformData* CreateFontPlatformDataForTypeface(
+       font_description.TextRendering(), ResolvedFontFeatures(),
+       font_description.Orientation());
+ }
++
++#if BUILDFLAG(IS_LINUX)
++// browser: Windows resolves a family name that ends in a weight or a stretch
++// word ("Segoe UI Light", "Bahnschrift Condensed", "Sitka Small Semibold") as
++// the base family at that weight or stretch, with these tables
++// (font_cache_skia_win.cc); a Linux build presenting Windows does the same
++// for a name fontconfig has no family for.
++bool FamilyHasWeightSuffix(const AtomicString& family,
++                           AtomicString& adjusted_name,
++                           FontSelectionValue& variant_weight) {
++  struct FamilyWeightSuffix {
++    const char* suffix;
++    wtf_size_t length;
++    FontSelectionValue weight;
++  };
++  const static FamilyWeightSuffix kVariantForSuffix[] = {
++      {" thin", 5, FontSelectionValue(100)},
++      {" extralight", 11, FontSelectionValue(200)},
++      {" ultralight", 11, FontSelectionValue(200)},
++      {" light", 6, FontSelectionValue(300)},
++      {" regular", 8, FontSelectionValue(400)},
++      {" medium", 7, FontSelectionValue(500)},
++      {" demibold", 9, FontSelectionValue(600)},
++      {" semibold", 9, FontSelectionValue(600)},
++      {" extrabold", 10, FontSelectionValue(800)},
++      {" ultrabold", 10, FontSelectionValue(800)},
++      {" black", 6, FontSelectionValue(900)},
++      {" heavy", 6, FontSelectionValue(900)}};
++  for (const auto& entry : kVariantForSuffix) {
++    if (family.EndsWithIgnoringAsciiCase(entry.suffix)) {
++      StringView family_name(family);
++      family_name.remove_suffix(entry.length);
++      adjusted_name = AtomicString(family_name);
++      variant_weight = entry.weight;
++      return true;
++    }
++  }
++  return false;
++}
++
++bool FamilyHasStretchSuffix(const AtomicString& family,
++                            AtomicString& adjusted_name,
++                            FontSelectionValue& variant_stretch) {
++  struct FamilyStretchSuffix {
++    const char* suffix;
++    wtf_size_t length;
++    FontSelectionValue stretch;
++  };
++  const static FamilyStretchSuffix kVariantForSuffix[] = {
++      {" ultracondensed", 15, kUltraCondensedWidthValue},
++      {" extracondensed", 15, kExtraCondensedWidthValue},
++      {" condensed", 10, kCondensedWidthValue},
++      {" narrow", 7, kCondensedWidthValue},
++      {" semicondensed", 14, kSemiCondensedWidthValue},
++      {" semiexpanded", 13, kSemiExpandedWidthValue},
++      {" expanded", 9, kExpandedWidthValue},
++      {" extraexpanded", 14, kExtraExpandedWidthValue},
++      {" ultraexpanded", 14, kUltraExpandedWidthValue}};
++  for (const auto& entry : kVariantForSuffix) {
++    if (family.EndsWithIgnoringAsciiCase(entry.suffix)) {
++      StringView family_name(family);
++      family_name.remove_suffix(entry.length);
++      adjusted_name = AtomicString(family_name);
++      variant_stretch = entry.stretch;
++      return true;
++    }
++  }
++  return false;
++}
++#endif  // BUILDFLAG(IS_LINUX)
+ }  // namespace
+ 
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_WIN)
+@@ -337,6 +412,32 @@ const FontPlatformData* FontCache::CreateFontPlatformData(
+   } else {
+     typeface = CreateTypeface(font_description, creation_params, name);
+   }
++#if BUILDFLAG(IS_LINUX)
++  // browser: see FamilyHasWeightSuffix().
++  if (!typeface && PresentsWindowsPlatform() &&
++      creation_params.CreationType() == kCreateFontByFamily &&
++      alternate_name != AlternateFontName::kLocalUniqueFace &&
++      alternate_name != AlternateFontName::kLastResort) {
++    AtomicString adjusted_name;
++    FontSelectionValue variant_weight;
++    FontSelectionValue variant_stretch;
++    if (FamilyHasWeightSuffix(creation_params.Family(), adjusted_name,
++                              variant_weight)) {
++      FontFaceCreationParams adjusted_params(adjusted_name);
++      FontDescription adjusted_font_description = font_description;
++      adjusted_font_description.SetWeight(variant_weight);
++      typeface =
++          CreateTypeface(adjusted_font_description, adjusted_params, name);
++    } else if (FamilyHasStretchSuffix(creation_params.Family(), adjusted_name,
++                                      variant_stretch)) {
++      FontFaceCreationParams adjusted_params(adjusted_name);
++      FontDescription adjusted_font_description = font_description;
++      adjusted_font_description.SetStretch(variant_stretch);
++      typeface =
++          CreateTypeface(adjusted_font_description, adjusted_params, name);
++    }
++  }
++#endif  // BUILDFLAG(IS_LINUX)
+ #else
+   typeface = CreateTypeface(font_description, creation_params, name);
+ #endif
+diff --git a/ui/gfx/BUILD.gn b/ui/gfx/BUILD.gn
+index 9da1b20464..b683836ef7 100644
+--- a/ui/gfx/BUILD.gn
++++ b/ui/gfx/BUILD.gn
+@@ -245,6 +245,12 @@ component("gfx") {
+     deps += [ "//third_party/fontconfig" ]
+   }
+ 
++  # browser: the Windows fonts of a Linux build presenting Windows.
++  if (is_linux) {
++    sources += [ "linux/fontconfig_font_files.h" ]
++    deps += [ "//components/browser:browser_switches" ]
++  }
++
+   if (is_apple) {
+     sources += [ "font_render_params_mac.cc" ]
+     frameworks = [ "IOSurface.framework" ]
+diff --git a/ui/gfx/linux/fontconfig_font_files.h b/ui/gfx/linux/fontconfig_font_files.h
+new file mode 100644
+index 0000000000..cb1f6d4090
+--- /dev/null
++++ b/ui/gfx/linux/fontconfig_font_files.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef UI_GFX_LINUX_FONTCONFIG_FONT_FILES_H_
++#define UI_GFX_LINUX_FONTCONFIG_FONT_FILES_H_
++
++#include <vector>
++
++#include "base/component_export.h"
++#include "base/files/file_path.h"
++#include "base/functional/callback.h"
++
++namespace gfx {
++
++// browser: the font files a Linux build presenting Windows makes visible
++// through fontconfig, in place of the host's. Without a provider, or with one
++// that answers nothing, the shipped default set is used
++// (<exe dir>/browser_fonts/base_win11 and emoji_v151).
++using FontconfigFontFilesProvider =
++    base::RepeatingCallback<std::vector<base::FilePath>()>;
++
++// browser: sets the provider. Call before InitializeFonts(), which builds the
++// fontconfig configuration, in the browser process only.
++COMPONENT_EXPORT(GFX)
++void SetFontconfigFontFilesProvider(FontconfigFontFilesProvider provider);
++
++}  // namespace gfx
++
++#endif  // UI_GFX_LINUX_FONTCONFIG_FONT_FILES_H_
+diff --git a/ui/gfx/linux/fontconfig_util.cc b/ui/gfx/linux/fontconfig_util.cc
+index a1aecb9e48..cbab0588dc 100644
+--- a/ui/gfx/linux/fontconfig_util.cc
++++ b/ui/gfx/linux/fontconfig_util.cc
+@@ -10,8 +10,20 @@
+ #include "base/environment.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/no_destructor.h"
++#include "build/build_config.h"
+ #include "ui/gfx/font_render_params.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "base/base_paths.h"
++#include "base/command_line.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/path_service.h"
++#include "components/browser/browser_switches.h"
++#include "ui/gfx/linux/fontconfig_font_files.h"
++#endif  // BUILDFLAG(IS_LINUX)
++
+ #if BUILDFLAG(IS_CHROMEOS)
+ #include "base/check_deref.h"
+ #include "base/containers/flat_set.h"
+@@ -23,6 +35,120 @@ namespace gfx {
+ 
+ namespace {
+ 
++#if BUILDFLAG(IS_LINUX)
++FontconfigFontFilesProvider& FontFilesProvider() {
++  static base::NoDestructor<FontconfigFontFilesProvider> provider;
++  return *provider;
++}
++
++// browser: Windows' generic families and its rendering for the configuration
++// below. Fonts are cached where the host's fontconfig caches its own.
++constexpr char kWindowsFontConfig[] = R"(<?xml version="1.0"?>
++<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
++<fontconfig>
++  <cachedir prefix="xdg">fontconfig</cachedir>
++  <alias binding="same"><family>system-ui</family><prefer><family>Segoe UI</family></prefer></alias>
++  <alias binding="same"><family>sans</family><prefer><family>Times New Roman</family></prefer></alias>
++  <alias binding="same"><family>serif</family><prefer><family>Times New Roman</family></prefer></alias>
++  <alias binding="same"><family>monospace</family><prefer><family>Times New Roman</family></prefer></alias>
++  <match target="scan"><test name="family"><string>Microsoft Sans Serif</string></test><edit name="family" mode="append"><string>MS Sans Serif</string></edit></match>
++  <match target="scan"><test name="family"><string>Times New Roman</string></test><edit name="family" mode="append"><string>MS Serif</string></edit></match>
++  <match target="scan"><test name="family"><string>Franklin Gothic Medium</string></test><edit name="family" mode="append"><string>Franklin Gothic</string></edit></match>
++  <match target="scan"><test name="family"><string>Segoe UI Variable</string></test><test name="variable"><bool>true</bool></test><edit name="family" mode="assign"><string>Segoe UI Variable Text</string></edit></match>
++  <match target="scan"><test name="family"><string>Segoe UI Variable</string></test><test name="style" compare="contains"><string>Display</string></test><edit name="family" mode="assign"><string>Segoe UI Variable Display</string></edit></match>
++  <match target="scan"><test name="family"><string>Segoe UI Variable</string></test><test name="style" compare="contains"><string>Small</string></test><edit name="family" mode="assign"><string>Segoe UI Variable Small</string></edit></match>
++  <match target="scan"><test name="family"><string>Segoe UI Variable</string></test><test name="style" compare="contains"><string>Text</string></test><edit name="family" mode="assign"><string>Segoe UI Variable Text</string></edit></match>
++  <match target="scan"><test name="family"><string>Segoe UI Variable</string></test><test name="style"><string>Regular</string></test><edit name="family" mode="assign"><string>Segoe UI Variable Text</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="variable"><bool>true</bool></test><edit name="family" mode="assign"><string>Sitka Text</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="style" compare="contains"><string>Banner</string></test><edit name="family" mode="assign"><string>Sitka Banner</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="style" compare="contains"><string>Display</string></test><edit name="family" mode="assign"><string>Sitka Display</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="style" compare="contains"><string>Subheading</string></test><edit name="family" mode="assign"><string>Sitka Subheading</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="style" compare="contains"><string>Heading</string></test><edit name="family" mode="assign"><string>Sitka Heading</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="style" compare="contains"><string>Small</string></test><edit name="family" mode="assign"><string>Sitka Small</string></edit></match>
++  <match target="scan"><test name="family"><string>Sitka</string></test><test name="style" compare="contains"><string>Text</string></test><edit name="family" mode="assign"><string>Sitka Text</string></edit></match>
++  <match target="scan"><test name="family"><string>Malgun Gothic Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="scan"><test name="family"><string>맑은 고딕 Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="scan"><test name="family"><string>Segoe UI Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="scan"><test name="family"><string>Leelawadee UI Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="scan"><test name="family"><string>Nirmala UI Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="scan"><test name="family"><string>Nirmala Text Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="scan"><test name="family"><string>Yu Gothic UI Semilight</string></test><edit name="family" mode="delete"/></match>
++  <match target="font">
++    <edit name="antialias" mode="assign"><bool>true</bool></edit>
++    <edit name="hinting" mode="assign"><bool>true</bool></edit>
++    <edit name="hintstyle" mode="assign"><const>hintslight</const></edit>
++    <edit name="rgba" mode="assign"><const>none</const></edit>
++  </match>
++</fontconfig>
++)";
++
++// browser: a Linux build presenting Windows sees only the Windows fonts it
++// ships, with Windows' generic families: a Windows machine has none of
++// Linux's fonts. Null, leaving the host's configuration, with
++// --use-chromium-defaults, without the shipped fonts, and in every process
++// but the browser.
++FcConfig* CreateWindowsFontConfig() {
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kUseChromiumDefaults)) {
++    return nullptr;
++  }
++  // Only the browser process builds it ("type" is content's switch for a
++  // child's kind; the browser has none). The browser answers a renderer's
++  // font questions (the font service), and a sandboxed process can do
++  // neither thing this needs: base::DIR_EXE cannot be resolved there, which
++  // PathService treats as fatal, and no font file can be opened. A renderer
++  // gets here through gfx::Font, which Chrome's error page asks for its font
++  // family (webui::GetFontFamily()): without this, every network error page
++  // killed the renderer that was to show it.
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch("type")) {
++    return nullptr;
++  }
++  std::vector<base::FilePath> files;
++  if (FontFilesProvider()) {
++    files = FontFilesProvider().Run();
++  }
++  std::vector<base::FilePath> dirs;
++  if (files.empty()) {
++    base::FilePath exe_dir;
++    if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
++      return nullptr;
++    }
++    const base::FilePath root = exe_dir.Append("browser_fonts");
++    dirs = {root.Append("base_win11"), root.Append("emoji_v151")};
++    if (!base::DirectoryExists(dirs[0])) {
++      LOG(WARNING) << "browser: no Windows fonts at " << dirs[0]
++                   << "; the host's fonts stay visible";
++      return nullptr;
++    }
++  }
++  FcConfig* config = FcConfigCreate();
++  if (!FcConfigParseAndLoadFromMemory(
++          config, reinterpret_cast<const FcChar8*>(kWindowsFontConfig),
++          FcTrue) ||
++      !FcConfigBuildFonts(config)) {
++    FcConfigDestroy(config);
++    return nullptr;
++  }
++  // The default set file by file, like the provider's, never as
++  // directories: fontconfig serves a directory from its cache, with the
++  // family names as scanned when the cache was written, so the scan rules
++  // above would not reach fonts cached by an older build.
++  for (const base::FilePath& dir : dirs) {
++    base::FileEnumerator fonts(dir, /*recursive=*/false,
++                               base::FileEnumerator::FILES);
++    for (base::FilePath file = fonts.Next(); !file.empty();
++         file = fonts.Next()) {
++      files.push_back(file);
++    }
++  }
++  for (const base::FilePath& file : files) {
++    FcConfigAppFontAddFile(
++        config, reinterpret_cast<const FcChar8*>(file.value().c_str()));
++  }
++  return config;
++}
++#endif  // BUILDFLAG(IS_LINUX)
++
+ #if BUILDFLAG(IS_CHROMEOS)
+ constexpr base::FilePath::CharType kGoogleSansVariablePath[] =
+     FILE_PATH_LITERAL("/usr/share/fonts/google-sans/variable");
+@@ -57,6 +183,15 @@ class COMPONENT_EXPORT(GFX) GlobalFontConfig {
+     // interface.
+     FcInit();
+ 
++#if BUILDFLAG(IS_LINUX)
++    // browser: see CreateWindowsFontConfig(). Current takes its own
++    // reference.
++    if (FcConfig* windows_config = CreateWindowsFontConfig()) {
++      FcConfigSetCurrent(windows_config);
++      FcConfigDestroy(windows_config);
++    }
++#endif
++
+     // Increment the reference counter to avoid the config to be deleted while
+     // being used (see http://crbug.com/1004254).
+     fc_config_ = FcConfigGetCurrent();
+@@ -205,6 +340,12 @@ bool GetFontConfigPropertyAsBool(FcPattern* pattern, const char* property) {
+ 
+ }  // namespace
+ 
++#if BUILDFLAG(IS_LINUX)
++void SetFontconfigFontFilesProvider(FontconfigFontFilesProvider provider) {
++  FontFilesProvider() = std::move(provider);
++}
++#endif
++
+ FcConfig* GetGlobalFontConfig() {
+   return GlobalFontConfig::GetInstance()->Get();
+ }
+-- 
+2.45.1.windows.1
+

@@ -1,0 +1,292 @@
+From db7f1b4561b723e070f0b28e22066912d99719b9 Mon Sep 17 00:00:00 2001
+From: The browser Authors <noreply@browser.invalid>
+Date: Wed, 11 Nov 2026 03:25:28 -0500
+Subject: [PATCH 32/61] timer-uptime
+
+Pages no longer see how long the machine has been up. Chrome clamps
+DOMHighResTimeStamps (performance.now(), event and animation frame times) as
+values of the monotonic clock, which counts from boot, and subtracts two
+clamped values, so the rounding of the difference grows with the clock's
+size: pages could tell the machine's uptime band, the same for every session
+and profile until it reboots, and in principle the boot time itself. The
+browser now draws an uptime for the session, 2 to 30 days when it started,
+and gives every renderer the offset to its monotonic clock
+(--timer-uptime-offset, an internal switch the browser sets on each
+renderer's command line); renderers clamp on that clock instead. The values
+pages see are unchanged; only their rounding follows the session's clock.
+Media stream frames a page reads (a VideoFrame from
+MediaStreamTrackProcessor, an AudioData from a microphone track), whose
+timestamps are the monotonic clock itself, carry the session's clock too
+(core/timing/session_clock_offset.h): a WebRTC loopback no longer reads
+the machine's real uptime, and a frame written back to a
+VideoTrackGenerator is judged on that clock when its timestamp is taken
+as the capture time. Not with --use-chromium-defaults. The switch
+declaration rides in switch-resolver.
+---
+ .../renderer_host/render_process_host_impl.cc | 25 ++++++++++++++
+ .../blink/renderer/core/timing/build.gni      |  1 +
+ .../blink/renderer/core/timing/performance.cc | 34 +++++++++++++++++--
+ .../core/timing/session_clock_offset.h        | 24 +++++++++++++
+ .../frame_queue_underlying_source.cc          |  8 +++--
+ ...ia_stream_audio_track_underlying_source.cc |  4 ++-
+ ...edia_stream_video_track_underlying_sink.cc | 11 ++++--
+ 7 files changed, 100 insertions(+), 7 deletions(-)
+ create mode 100644 third_party/blink/renderer/core/timing/session_clock_offset.h
+
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 6551558d19..d342aa6cf1 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3803,6 +3803,23 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
+     command_line->AppendSwitch(switches::kEnableMainFrameBeforeActivation);
+ }
+ 
++namespace {
++
++// browser: the uptime this browser session's pages see, 2 to 30 days when
++// it started, drawn once, as the offset renderers add to their monotonic
++// clock (switches::kTimerUptimeOffset).
++int64_t TimerUptimeOffsetMicroseconds() {
++  static const int64_t offset = [] {
++    const uint64_t spread = base::Days(28).InMicroseconds();
++    const base::TimeDelta uptime =
++        base::Days(2) + base::Microseconds(base::RandGenerator(spread));
++    return (uptime - base::TimeTicks::Now().since_origin()).InMicroseconds();
++  }();
++  return offset;
++}
++
++}  // namespace
++
+ void RenderProcessHostImpl::AppendRendererCommandLine(
+     base::CommandLine* command_line) {
+   // Pass the process type first, so it shows first in process listings.
+@@ -3841,6 +3858,14 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
+       *base::CommandLine::ForCurrentProcess();
+   PropagateBrowserCommandLineToRenderer(browser_command_line, command_line);
+ 
++  // browser: the session's clock for DOMHighResTimeStamps (see above); none
++  // with --use-chromium-defaults.
++  if (!browser_command_line.HasSwitch(switches::kUseChromiumDefaults)) {
++    command_line->AppendSwitchASCII(
++        switches::kTimerUptimeOffset,
++        base::NumberToString(TimerUptimeOffsetMicroseconds()));
++  }
++
+   // Pass on the browser locale.
+   const std::string locale =
+       GetContentClient()->browser()->GetApplicationLocale();
+diff --git a/third_party/blink/renderer/core/timing/build.gni b/third_party/blink/renderer/core/timing/build.gni
+index 83fd57ba76..47de7a2537 100644
+--- a/third_party/blink/renderer/core/timing/build.gni
++++ b/third_party/blink/renderer/core/timing/build.gni
+@@ -106,6 +106,7 @@ blink_core_sources_timing = [
+   "responsiveness_metrics.h",
+   "render_blocking_metrics_reporter.cc",
+   "render_blocking_metrics_reporter.h",
++  "session_clock_offset.h",
+   "speculation_data.cc",
+   "speculation_data.h",
+   "speculation_navigation_data.cc",
+diff --git a/third_party/blink/renderer/core/timing/performance.cc b/third_party/blink/renderer/core/timing/performance.cc
+index ecda8175b8..a3a4297e8f 100644
+--- a/third_party/blink/renderer/core/timing/performance.cc
++++ b/third_party/blink/renderer/core/timing/performance.cc
+@@ -35,12 +35,15 @@
+ #include <optional>
+ 
+ #include "base/check_op.h"
++#include "base/command_line.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/default_clock.h"
+ #include "base/time/time.h"
+ #include "base/values.h"
++#include "components/browser/browser_switches.h"
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/mojom/permissions_policy/document_policy_feature.mojom-blink.h"
+@@ -92,6 +95,7 @@
+ #include "third_party/blink/renderer/core/timing/performance_user_timing.h"
+ #include "third_party/blink/renderer/core/timing/profiler.h"
+ #include "third_party/blink/renderer/core/timing/profiler_group.h"
++#include "third_party/blink/renderer/core/timing/session_clock_offset.h"
+ #include "third_party/blink/renderer/core/timing/time_clamper.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+ #include "third_party/blink/renderer/platform/heap/persistent.h"
+@@ -132,6 +136,22 @@ base::TimeDelta GetUnixAtZeroMonotonic(const base::Clock* clock) {
+   return unix_time_now - time_since_origin;
+ }
+ 
++// browser: this browser session's offset to the monotonic clock
++// (switches::kTimerUptimeOffset), read once; none without the switch.
++base::TimeDelta TimerUptimeOffset() {
++  static const base::TimeDelta offset = [] {
++    int64_t microseconds = 0;
++    if (!base::StringToInt64(
++            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++                ::switches::kTimerUptimeOffset),
++            &microseconds)) {
++      microseconds = 0;
++    }
++    return base::Microseconds(microseconds);
++  }();
++  return offset;
++}
++
+ void RecordLongTaskUkm(ExecutionContext* execution_context,
+                        base::TimeDelta start_time,
+                        base::TimeDelta duration) {
+@@ -1324,6 +1344,10 @@ DOMHighResTimeStamp Performance::ClampTimeResolution(
+       .InMillisecondsF();
+ }
+ 
++base::TimeDelta SessionClockOffset() {
++  return TimerUptimeOffset();
++}
++
+ // static
+ DOMHighResTimeStamp Performance::MonotonicTimeToDOMHighResTimeStamp(
+     base::TimeTicks time_origin,
+@@ -1334,10 +1358,16 @@ DOMHighResTimeStamp Performance::MonotonicTimeToDOMHighResTimeStamp(
+   if (monotonic_time.is_null() || time_origin.is_null())
+     return 0.0;
+ 
++  // browser: both times are clamped as values of the monotonic clock, which
++  // counts from boot, and the rounding of their difference grows with the
++  // clock's size: pages would see the machine's uptime band, the same in
++  // every session until it reboots. They are clamped on this browser
++  // session's clock instead (TimerUptimeOffset()).
++  const base::TimeDelta offset = TimerUptimeOffset();
+   DOMHighResTimeStamp clamped_time =
+-      ClampTimeResolution(monotonic_time.since_origin(),
++      ClampTimeResolution(monotonic_time.since_origin() + offset,
+                           cross_origin_isolated_capability) -
+-      ClampTimeResolution(time_origin.since_origin(),
++      ClampTimeResolution(time_origin.since_origin() + offset,
+                           cross_origin_isolated_capability);
+   if (clamped_time < 0 && !allow_negative_value)
+     return 0.0;
+diff --git a/third_party/blink/renderer/core/timing/session_clock_offset.h b/third_party/blink/renderer/core/timing/session_clock_offset.h
+new file mode 100644
+index 0000000000..7b94176ad4
+--- /dev/null
++++ b/third_party/blink/renderer/core/timing/session_clock_offset.h
+@@ -0,0 +1,24 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_SESSION_CLOCK_OFFSET_H_
++#define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_SESSION_CLOCK_OFFSET_H_
++
++#include "base/time/time.h"
++#include "third_party/blink/renderer/core/core_export.h"
++
++namespace blink {
++
++// browser: this browser session's offset to the monotonic clock, which
++// counts from boot (switches::kTimerUptimeOffset): pages see an uptime of 2
++// to 30 days drawn when the session started, not the machine's. Zero without
++// the switch (--use-chromium-defaults). DOMHighResTimeStamps are clamped on
++// the clock plus it (Performance::MonotonicTimeToDOMHighResTimeStamp()); a
++// timestamp a page reads as time since boot, such as a media stream frame's,
++// adds it.
++CORE_EXPORT base::TimeDelta SessionClockOffset();
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_SESSION_CLOCK_OFFSET_H_
+diff --git a/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc b/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc
+index 727877a720..a5e4fc7e6c 100644
+--- a/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc
++++ b/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc
+@@ -15,6 +15,7 @@
+ #include "third_party/blink/renderer/core/dom/dom_exception.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/streams/readable_stream_default_controller_with_script_scope.h"
++#include "third_party/blink/renderer/core/timing/session_clock_offset.h"
+ #include "third_party/blink/renderer/core/timing/time_clamper.h"
+ #include "third_party/blink/renderer/modules/webcodecs/audio_data.h"
+ #include "third_party/blink/renderer/modules/webcodecs/video_frame.h"
+@@ -535,12 +536,15 @@ FrameQueueUnderlyingSource<scoped_refptr<media::VideoFrame>>::MakeBlinkFrame(
+   auto timestamp = media_frame->timestamp();
+   if (base::FeatureList::IsEnabled(
+           kBreakoutBoxPreferCaptureTimestampInVideoFrames)) {
++    // browser: on this session's clock (session_clock_offset.h).
+     if (auto cbt = media_frame->metadata().capture_begin_time) {
+       timestamp = time_clamper_.ClampTimeResolution(
+-          *cbt - base::TimeTicks(), ec->CrossOriginIsolatedCapability());
++          *cbt - base::TimeTicks() + SessionClockOffset(),
++          ec->CrossOriginIsolatedCapability());
+     } else if (auto rt = media_frame->metadata().reference_time) {
+       timestamp = time_clamper_.ClampTimeResolution(
+-          *rt - base::TimeTicks(), ec->CrossOriginIsolatedCapability());
++          *rt - base::TimeTicks() + SessionClockOffset(),
++          ec->CrossOriginIsolatedCapability());
+     }
+   }
+ 
+diff --git a/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc b/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc
+index 6383719008..9440e6d935 100644
+--- a/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc
++++ b/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc
+@@ -16,6 +16,7 @@
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/streams/readable_stream_transferring_optimizer.h"
+ #include "third_party/blink/renderer/core/timing/performance.h"
++#include "third_party/blink/renderer/core/timing/session_clock_offset.h"
+ #include "third_party/blink/renderer/modules/breakout_box/breakout_box_util.h"
+ #include "third_party/blink/renderer/modules/breakout_box/frame_queue_transferring_optimizer.h"
+ #include "third_party/blink/renderer/modules/breakout_box/metrics.h"
+@@ -83,7 +84,8 @@ class AudioBufferPoolImpl
+               is_cross_origin_isolated);
+       timestamp = base::Milliseconds(page_relative_timestamp);
+     } else {
+-      timestamp = capture_time - base::TimeTicks();
++      // browser: on this session's clock (session_clock_offset.h).
++      timestamp = capture_time - base::TimeTicks() + SessionClockOffset();
+     }
+ 
+     auto buffer = TakeUnusedBuffer();
+diff --git a/third_party/blink/renderer/modules/breakout_box/media_stream_video_track_underlying_sink.cc b/third_party/blink/renderer/modules/breakout_box/media_stream_video_track_underlying_sink.cc
+index 3564abf171..6cc4ec9e3b 100644
+--- a/third_party/blink/renderer/modules/breakout_box/media_stream_video_track_underlying_sink.cc
++++ b/third_party/blink/renderer/modules/breakout_box/media_stream_video_track_underlying_sink.cc
+@@ -14,6 +14,7 @@
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_video_frame.h"
+ #include "third_party/blink/renderer/core/dom/dom_exception.h"
+ #include "third_party/blink/renderer/core/streams/writable_stream_transferring_optimizer.h"
++#include "third_party/blink/renderer/core/timing/session_clock_offset.h"
+ #include "third_party/blink/renderer/modules/breakout_box/metrics.h"
+ #include "third_party/blink/renderer/modules/webcodecs/video_frame.h"
+ #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+@@ -105,7 +106,12 @@ ScriptPromise<IDLUndefined> MediaStreamVideoTrackUnderlyingSink::write(
+   }
+ 
+   static const base::TimeDelta kLongDelta = base::Minutes(1);
+-  base::TimeDelta now = base::TimeTicks::Now() - base::TimeTicks();
++  // browser: frames read from a MediaStreamTrackProcessor carry this
++  // session's clock (session_clock_offset.h): compare on it, and store the
++  // capture time on the monotonic clock.
++  const base::TimeDelta session_offset = SessionClockOffset();
++  base::TimeDelta now =
++      base::TimeTicks::Now() - base::TimeTicks() + session_offset;
+   if (base::FeatureList::IsEnabled(
+           kBreakoutBoxWriteVideoFrameCaptureTimestamp) &&
+       should_try_to_write_capture_time_ &&
+@@ -118,7 +124,8 @@ ScriptPromise<IDLUndefined> MediaStreamVideoTrackUnderlyingSink::write(
+ 
+     if (should_try_to_write_capture_time_) {
+       media_frame->metadata().capture_begin_time =
+-          base::TimeTicks() + video_frame->handle()->timestamp();
++          base::TimeTicks() + video_frame->handle()->timestamp() -
++          session_offset;
+     }
+   }
+ 
+-- 
+2.45.1.windows.1
+

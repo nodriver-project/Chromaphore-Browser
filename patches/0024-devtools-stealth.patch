@@ -1,7 +1,7 @@
-From fd38c9899146e9919c747be2c8d193136e74436c Mon Sep 17 00:00:00 2001
+From 29226b2c8577ad3e83a0fbcf569d933534820172 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:20 -0500
-Subject: [PATCH 23/55] devtools-stealth
+Date: Wed, 11 Nov 2026 03:25:02 -0500
+Subject: [PATCH 24/61] devtools-stealth
 
 Suppress the "controlled by automated test software" infobar, whose
 ~30 px innerHeight delta is detectable from JavaScript.

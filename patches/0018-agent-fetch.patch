@@ -1,7 +1,7 @@
-From c502b09a31e0cd1ae667a9d43d300ecdac62eb9f Mon Sep 17 00:00:00 2001
+From 99f09e979a55f53caec2ab523acd544c457f4203 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:02 -0500
-Subject: [PATCH 17/55] agent-fetch
+Date: Wed, 11 Nov 2026 03:24:42 -0500
+Subject: [PATCH 18/61] agent-fetch
 
 Browser.agentFetch and agentFetchCancel: reads a URL the way a tab would,
 in a page that is never shown and never appears as a target, renders and
@@ -13,7 +13,12 @@ off-screen page.
 
 This commit owns the Browser-domain hub (browser_handler.*, Browser.pdl,
 the chrome DevTools session and protocol config) and so also registers
-recording and fingerprint-report; chrome/browser/devtools/BUILD.gn and
+recording and fingerprint-report; Browser.pdl also carries
+video-recording's VideoRecordingResult type, its commands
+startVideoRecording, setVideoRecordingTarget, pauseVideoRecording,
+resumeVideoRecording, markVideoRecording, stopVideoRecording and
+videoRecordingStatus, and its videoRecordingEnded event, whose handler
+is content's; chrome/browser/devtools/BUILD.gn and
 devtools_http_handler.cc hold their public state here, the production
 commit adds its own hunks on top.
 ---
@@ -42,7 +47,7 @@ commit adds its own hunks on top.
  .../browser/agent_fetch_response_taker.h      |   46 +
  third_party/blink/public/BUILD.gn             |    3 +
  third_party/blink/public/blink_resources.grd  |    4 +
- .../devtools_protocol/domains/Browser.pdl     |  209 +
+ .../devtools_protocol/domains/Browser.pdl     |  443 +++
  .../mojom/agent_snapshot/agent_fetch.mojom    |  161 +
  .../agent_snapshot/agent_fetch_agent.cc       | 3524 +++++++++++++++++
  .../agent_snapshot/agent_fetch_agent.h        |  126 +
@@ -54,7 +59,7 @@ commit adds its own hunks on top.
  ui/views/win/hwnd_message_handler.cc          |    5 +-
  ui/views/win/hwnd_message_handler.h           |    6 +-
  ui/views/win/hwnd_message_handler_headless.cc |   13 +
- 37 files changed, 8616 insertions(+), 19 deletions(-)
+ 37 files changed, 8850 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/devtools/protocol/agent_fetch_body_sink.cc
  create mode 100644 chrome/browser/devtools/protocol/agent_fetch_body_sink.h
  create mode 100644 chrome/browser/devtools/protocol/agent_fetch_challenge.cc
@@ -4857,10 +4862,10 @@ index 8ec7eabf20..656d23a4d3 100644
        <include name="IDR_VALIDATION_BUBBLE_CSS" file="../renderer/core/html/forms/resources/validation_bubble.css" type="BINDATA" compress="brotli"/>
        <if expr="not is_android">
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 142bd94887..9c64723ef4 100644
+index 142bd94887..e44c38beaf 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-@@ -343,6 +343,215 @@ domain Browser
+@@ -343,6 +343,449 @@ domain Browser
      parameters
        string url
  
@@ -5072,6 +5077,240 @@ index 142bd94887..9c64723ef4 100644
 +      string reason
 +      string path
 +      string summary
++
++  # browser: what a video recording left behind, and how it ended.
++  experimental type VideoRecordingResult extends object
++    properties
++      string path
++      string eventsPath
++      # The file's length.
++      number durationMs
++      # Samples in the file.
++      integer frames
++      # Of them, repeats of a page that had not changed.
++      integer repeated
++      # Ticks with no sample because the encoder was more than two frames
++      # behind, or dropped the frame: the sample before lasts longer instead,
++      # so the file still plays at real speed.
++      integer dropped
++      number bytes
++      integer width
++      integer height
++      integer fps
++      # hardware: the GPU's H.264 encoder (High profile); software: OpenH264
++      # (Baseline).
++      string encoder
++      # aac, opus or none: the codec of the file's sound; none when the file
++      # got no sound, whatever startVideoRecording answered.
++      string audio
++      # The sound's length, at most durationMs: shorter when the sound failed
++      # on the way (the sidecar's audioLost line).
++      number audioDurationMs
++      # Whether the recording was redacted (startVideoRecording's redact).
++      boolean redacted
++      # stopped, timeLimit, targetClosed, sessionClosed or error (a capture
++      # or encoder failure, a failed write, or an encoder sending more than
++      # its bitrate allows).
++      string reason
++      optional string error
++
++  # browser: records one tab to an H.264 MP4 at a constant frame rate. The
++  # tab is captured at a fixed size without touching its window, so the page
++  # sees nothing; the frames are paced and muxed in a sandboxed process,
++  # which encodes them itself or with the GPU process's encoder, and the file
++  # is written as fragments of about a second, so a file cut short still
++  # plays up to its last complete one. One at a time in the browser; it ends
++  # itself at the time limit, when the tab it shows closes (unless a move
++  # left another tab that is still open: see setVideoRecordingTarget), and
++  # when the session that started it detaches. A hardware encoder that fails
++  # mid-recording ends it
++  # with reason error, as any encoder failure does. A start that has not
++  # answered after 20 seconds fails. Browser target only; the client must be
++  # allowed to write local files.
++  experimental command startVideoRecording
++    parameters
++      # The tab to record: a page target.
++      Target.TargetID targetId
++      # Absolute path of the .mp4 to write; its directory is created. The
++      # events sidecar is written beside it, as <path without .mp4>
++      # .events.ndjson. Neither may exist yet: a recording never replaces a
++      # file.
++      string path
++      # Frames per second of the file, 1-60. The file holds exactly this
++      # rate: a still page repeats its last frame.
++      integer fps
++      # The file's size in pixels, clamped to the page's size (no
++      # upscaling) and rounded down to even numbers; a page of another shape
++      # is letterboxed in black. Without them, the page's own size when the
++      # recording starts. With one of them, the other follows the page's
++      # shape. The answer's width and height give the size used.
++      optional integer width
++      optional integer height
++      # Target bitrate, 100-100000; default from the size and rate (about
++      # 0.1 bit per pixel per frame, 2-20 Mbps).
++      optional integer bitrateKbps
++      # The recording ends itself after this many minutes of recorded time
++      # (time paused does not count); default 10, at most 120.
++      optional integer maxMinutes
++      # Which H.264 encoder: auto (the default) uses the GPU's hardware
++      # encoder when one starts and passes its self-test, else OpenH264;
++      # hardware fails the start instead of falling back; software always
++      # uses OpenH264.
++      optional enum encoder
++        auto
++        hardware
++        software
++      # Draws the browser's synthetic mouse cursor (the pointer that mouse
++      # input to the page moves: CDP input and, in a window, the person's own
++      # mouse) and its click mark into the frames; default true. It appears
++      # once input has placed it; the system's own cursor image is never
++      # recorded. With it, each mouse press writes a "click" line to the
++      # sidecar, with the file's time as "t" and the point in the file's
++      # pixels as "x" and "y" (outside the frame for a point off the page).
++      # The sidecar's start line says "cursor": true or false.
++      optional boolean cursor
++      # Records the tab's sound into the file, 48 kHz stereo; default true.
++      # AAC when Windows' encoder is available, else Opus. The sound is the
++      # tab the file shows: after a move, the new tab's from the moment the
++      # move took effect. Sound captured while paused is left out. A browser
++      # started with --mute-audio still records the tab's sound. Speech
++      # synthesis and protected (DRM) playback are not captured: they do not
++      # pass through the browser's audio service. The sidecar's start line
++      # says "audio": aac, opus or none; if the sound fails, an "audioLost"
++      # line says when, and the file goes on without it.
++      optional boolean audio
++      # Which audio codec: auto (the default) uses AAC through the GPU
++      # process's encoder when one starts and passes its self-test, else
++      # Opus, else records no sound; aac or opus fails the start instead of
++      # falling back.
++      optional enum audioCodec
++        auto
++        aac
++        opus
++      # Whether the recording is redacted; default false. Redacted, card
++      # number and security code fields, and every element marked with
++      # Page.agentMarkSecretField, are each one black box with nothing in it
++      # drawn, in the page while it runs: in the file, in screenshots and in
++      # the viewer alike. Text elsewhere is not hidden, a secret a page
++      # prints as text included. A
++      # part of the page that has not confirmed it is drawn that way is black
++      # in the file. The sidecar's start line says "redacted": true or false;
++      # a redacted recording's start and target lines carry no "url", since a
++      # page's address can hold a secret.
++      optional boolean redact
++    returns
++      string recordingId
++      integer width
++      integer height
++      # hardware: the GPU's H.264 encoder (High profile); software: OpenH264
++      # (Baseline). One encoder runs for the whole file.
++      string encoder
++      # aac, opus or none: the codec of the file's sound (none when it was
++      # turned off or no audio encoder started).
++      string audio
++      # Whether the recording is redacted (redact was true).
++      boolean redacted
++      string eventsPath
++      # When the time limit ends it if it is never paused, in ms since the
++      # epoch: a pause stops the limit's clock (videoRecordingStatus gives
++      # the exact time left).
++      number endsAt
++
++  # browser: moves the recording to another tab. The file keeps its size
++  # (letterboxed); the old tab is recorded until the new one delivers a
++  # frame, or for a second. Success means the move began: the sidecar gets
++  # a "target" line when it takes effect, or a "targetFailed" line when the
++  # new tab fails or closes meanwhile and the old one goes on. An unknown
++  # target is refused and the old tab keeps recording; the tab already
++  # recorded cancels a move under way. When the tab moved to closes later
++  # and the tab this move left is still open, the recording goes back to it
++  # the same way, and the target line says "returned": true; if that tab
++  # fails or closes meanwhile, or none is open, the recording ends with
++  # targetClosed. Browser target only.
++  experimental command setVideoRecordingTarget
++    parameters
++      string recordingId
++      Target.TargetID targetId
++
++  # browser: pauses the recording; the file's time holds until it resumes,
++  # so the file has no gap. Browser target only.
++  experimental command pauseVideoRecording
++    parameters
++      string recordingId
++      # Written to the sidecar's pause line.
++      optional string label
++    returns
++      # The file's own time: what a player shows at this point.
++      number mediaTimeMs
++
++  # browser: resumes a paused recording. Browser target only.
++  experimental command resumeVideoRecording
++    parameters
++      string recordingId
++      # Written to the sidecar's resume line.
++      optional string label
++    returns
++      # The file's own time: what a player shows at this point.
++      number mediaTimeMs
++
++  # browser: writes one line to the events sidecar. Browser target only.
++  experimental command markVideoRecording
++    parameters
++      string recordingId
++      # A JSON object (as text, at most 16 KB): written to the sidecar as one
++      # line, with the file's time added as "t" and "type" set to "mark"
++      # unless it has one. A "type" must be a string, and not one of the
++      # recorder's own: start, end, pause, resume, target, targetFailed,
++      # click, audioLost.
++      string event
++    returns
++      number mediaTimeMs
++
++  # browser: ends the recording and answers once the file is closed. A
++  # recording already ending on its own is waited for the same way; a second
++  # stop while one waits is refused. Browser target only.
++  experimental command stopVideoRecording
++    parameters
++      string recordingId
++    returns
++      VideoRecordingResult result
++
++  # browser: the browser's video recording, whoever started it. Without one,
++  # recording is false and nothing else is given. It changes nothing.
++  # Browser target only.
++  experimental command videoRecordingStatus
++    returns
++      boolean recording
++      optional string recordingId
++      optional enum state
++        starting
++        recording
++        paused
++        stopping
++      # The tab the file shows now; once a return to the previous tab has
++      # begun (see setVideoRecordingTarget), that tab; while stopping, the
++      # tab it showed last.
++      optional Target.TargetID targetId
++      optional string path
++      # The file's own time so far.
++      optional number mediaTimeMs
++      # Frames of the page taken so far. The file holds exactly its frame
++      # rate (a still page's last frame is repeated); its own count is in
++      # the stop's result.
++      optional integer frames
++      # Bytes of the file the encoder has sent so far.
++      optional number bytes
++      optional boolean redacted
++      # Recorded time left before the time limit ends it; time paused does
++      # not count.
++      optional number remainingMs
++
++  # browser: a recording ended without a stop: the time limit, the tab
++  # closing, or an error. Sent to the session that started it.
++  experimental event videoRecordingEnded
++    parameters
++      string recordingId
++      VideoRecordingResult result
 +
    # Gets the current globally-applied privacy control status
    # See https://www.w3.org/TR/gpc/#get-global-privacy-control

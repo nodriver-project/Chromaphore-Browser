@@ -1,25 +1,27 @@
-From 4e87ae6dccf7f72d076a348787d4494ea5bdfa17 Mon Sep 17 00:00:00 2001
+From 46261e8d42dd06fdef3aa47d2b68a8701d6ac923 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:37 -0500
-Subject: [PATCH 15/55] frame-stream
+Date: Wed, 11 Nov 2026 03:23:42 -0500
+Subject: [PATCH 15/61] frame-stream
 
 Page.startFrameStream, updateFrameStream and stopFrameStream: uncompressed
 frames of the page written to named shared memory, one event signalled per
-frame, for a viewer that draws the page live. Windows only. The handler
-wiring rides in agent-snapshot (page_handler.*, Page.pdl).
+frame, for a viewer that draws the page live. On Linux the section is a
+file in the shared-memory directory and the event a FIFO beside it that
+receives a byte per frame. The handler wiring rides in agent-snapshot
+(page_handler.*, Page.pdl).
 ---
- .../browser/devtools/devtools_frame_stream.cc | 297 ++++++++++++++++++
- .../browser/devtools/devtools_frame_stream.h  | 147 +++++++++
- 2 files changed, 444 insertions(+)
+ .../browser/devtools/devtools_frame_stream.cc | 373 ++++++++++++++++++
+ .../browser/devtools/devtools_frame_stream.h  | 154 ++++++++
+ 2 files changed, 527 insertions(+)
  create mode 100644 content/browser/devtools/devtools_frame_stream.cc
  create mode 100644 content/browser/devtools/devtools_frame_stream.h
 
 diff --git a/content/browser/devtools/devtools_frame_stream.cc b/content/browser/devtools/devtools_frame_stream.cc
 new file mode 100644
-index 0000000000..d88d990c4c
+index 0000000000..816b4a1c9d
 --- /dev/null
 +++ b/content/browser/devtools/devtools_frame_stream.cc
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,373 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -51,6 +53,17 @@ index 0000000000..d88d990c4c
 +
 +#if BUILDFLAG(IS_WIN)
 +#include <windows.h>
++#elif BUILDFLAG(IS_LINUX)
++#include <fcntl.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <tuple>
++
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/posix/eintr_wrapper.h"
 +#endif
 +
 +namespace content {
@@ -85,8 +98,8 @@ index 0000000000..d88d990c4c
 +std::string DevToolsFrameStream::Start(const viz::FrameSinkId& frame_sink_id,
 +                                       const gfx::Size& max_size,
 +                                       int max_fps) {
-+#if !BUILDFLAG(IS_WIN)
-+  return "Frame streams are only available on Windows.";
++#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(IS_LINUX)
++  return "Frame streams are only available on Windows and Linux.";
 +#else
 +  if (view_) {
 +    return "A frame stream is already running in this session.";
@@ -109,6 +122,7 @@ index 0000000000..d88d990c4c
 +  std::array<uint8_t, 16> nonce;
 +  base::RandBytes(nonce);
 +  const std::string suffix = base::HexEncode(nonce);
++#if BUILDFLAG(IS_WIN)
 +  section_name_ = "Local\\nd4j-frames-" + suffix;
 +  event_name_ = "Local\\nd4j-frames-" + suffix + "-ready";
 +
@@ -144,6 +158,51 @@ index 0000000000..d88d990c4c
 +    Release();
 +    return "Could not create the frame event.";
 +  }
++#elif BUILDFLAG(IS_LINUX)
++  // On Linux the section is a file in the shared-memory directory and the
++  // event a FIFO beside it, both owner-only; their paths are the names the
++  // viewer opens.
++  base::FilePath shm_dir;
++  if (!base::GetShmemTempDir(/*executable=*/false, &shm_dir)) {
++    return "Could not create the frame section.";
++  }
++  section_name_ = shm_dir.Append("nd4j-frames-" + suffix).value();
++  event_name_ = section_name_ + "-ready";
++
++  section_fd_.reset(HANDLE_EINTR(open(section_name_.c_str(),
++                                      O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC,
++                                      S_IRUSR | S_IWUSR)));
++  if (!section_fd_.is_valid() ||
++      HANDLE_EINTR(ftruncate(section_fd_.get(), static_cast<off_t>(total))) !=
++          0) {
++    Release();
++    return "Could not create the frame section.";
++  }
++  void* view = mmap(nullptr, static_cast<size_t>(total),
++                    PROT_READ | PROT_WRITE, MAP_SHARED, section_fd_.get(), 0);
++  if (view == MAP_FAILED) {
++    Release();
++    return "Could not map the frame section.";
++  }
++  view_ = static_cast<uint8_t*>(view);
++  view_size_ = static_cast<size_t>(total);
++  slot_bytes_ = static_cast<size_t>(slot_bytes);
++
++  // One byte a frame, written without blocking: a viewer that falls behind
++  // drains what is there and reads the newest frame.
++  if (mkfifo(event_name_.c_str(), S_IRUSR | S_IWUSR) != 0) {
++    Release();
++    return "Could not create the frame event.";
++  }
++  // Opened for reading too, so a write never fails for want of a reader.
++  event_fd_.reset(HANDLE_EINTR(
++      open(event_name_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++  if (!event_fd_.is_valid()) {
++    unlink(event_name_.c_str());
++    Release();
++    return "Could not create the frame event.";
++  }
++#endif  // BUILDFLAG(IS_WIN)
 +
 +  SectionHeader* header = new (view_.get()) SectionHeader();
 +  header->magic = kMagic;
@@ -297,6 +356,11 @@ index 0000000000..d88d990c4c
 +
 +#if BUILDFLAG(IS_WIN)
 +  ::SetEvent(event_.get());
++#elif BUILDFLAG(IS_LINUX)
++  // A full FIFO means the viewer is behind; it reads the newest frame when
++  // it catches up, so the byte is not needed.
++  const char ready = 1;
++  std::ignore = HANDLE_EINTR(write(event_fd_.get(), &ready, 1));
 +#endif
 +}
 +
@@ -310,6 +374,20 @@ index 0000000000..d88d990c4c
 +  }
 +  event_.Close();
 +  mapping_.Close();
++#elif BUILDFLAG(IS_LINUX)
++  if (view_) {
++    munmap(view_.get(), view_size_);
++  }
++  // The names this stream created go; the viewer keeps what it has mapped
++  // or opened.
++  if (event_fd_.is_valid()) {
++    unlink(event_name_.c_str());
++    event_fd_.reset();
++  }
++  if (section_fd_.is_valid()) {
++    unlink(section_name_.c_str());
++    section_fd_.reset();
++  }
 +#endif
 +  view_ = nullptr;
 +  view_size_ = 0;
@@ -319,10 +397,10 @@ index 0000000000..d88d990c4c
 +}  // namespace content
 diff --git a/content/browser/devtools/devtools_frame_stream.h b/content/browser/devtools/devtools_frame_stream.h
 new file mode 100644
-index 0000000000..2f257c101c
+index 0000000000..b66dbce16a
 --- /dev/null
 +++ b/content/browser/devtools/devtools_frame_stream.h
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,154 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -348,6 +426,8 @@ index 0000000000..2f257c101c
 +
 +#if BUILDFLAG(IS_WIN)
 +#include "base/win/scoped_handle.h"
++#elif BUILDFLAG(IS_LINUX)
++#include "base/files/scoped_file.h"
 +#endif
 +
 +namespace media {
@@ -455,6 +535,11 @@ index 0000000000..2f257c101c
 +#if BUILDFLAG(IS_WIN)
 +  base::win::ScopedHandle mapping_;
 +  base::win::ScopedHandle event_;
++#elif BUILDFLAG(IS_LINUX)
++  // The section's file and the FIFO signalled after each frame; their
++  // paths are |section_name_| and |event_name_|.
++  base::ScopedFD section_fd_;
++  base::ScopedFD event_fd_;
 +#endif
 +  // The mapped section. Not heap memory: it is mapped from the file mapping
 +  // above and unmapped in Release().

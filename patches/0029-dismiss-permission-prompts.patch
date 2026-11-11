@@ -1,7 +1,7 @@
-From 385a5ad4f966b3b0d07957e5029182d9063ae562 Mon Sep 17 00:00:00 2001
+From 2c2a028a8c36c8d3fdea722f22b2bd6839810bab Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:39 -0500
-Subject: [PATCH 28/55] dismiss-permission-prompts
+Date: Wed, 11 Nov 2026 03:25:22 -0500
+Subject: [PATCH 29/61] dismiss-permission-prompts
 
 --dismiss-permission-prompts: permission prompts, File System Access
 prompts included, are built unseen and dismissed after a short random

@@ -1,7 +1,7 @@
-From 7b1134bcbd7bc89a1bfa324ce0f7b4b675966ad1 Mon Sep 17 00:00:00 2001
+From 4c1286f27626acfd4b4a4753c934c9492b2e5362 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:22 -0500
-Subject: [PATCH 11/55] input-actions
+Date: Wed, 11 Nov 2026 03:23:21 -0500
+Subject: [PATCH 11/61] input-actions
 
 The Input domain's actions that move like a hand: dispatchKeystrokes and
 dispatchMousePath (with outcomes, read-back and typo rules), revealElement,
@@ -12,14 +12,29 @@ file sessions, the action-outcome watch (navigations, new tabs, refused
 popups, prints), synthetic-event fidelity (real screen coordinates, lock
 keys, wheel ticks) and a timer-driven gesture clock.
 
+Typed text has one person's rhythm: each key is timed from the key
+before it, by a gap that depends on the two keys, and is held for a time
+of its own, so a quick typist has the next key down before the last is
+up; Shift is a key of its own, and a Shift held alone repeats; one
+identity is one typist, drawn from the persona seed; and every key event
+waits for the keyboard's next report (every 8 ms) and is stamped as it
+goes. The tables are in keyboard_typing_tables.inc: without the private
+layer's measured block it types as a plain typist.
+
 Riders in files this commit owns: Input.pdl carries the
 permissionPromptDismissed event (dismiss-permission-prompts);
 content/browser/BUILD.gn lists the agent-snapshot and frame-stream
-sources; protocol_config.json registers the Page agent and frame-stream
-commands; input_handler.cc holds the per-tab cursor lookup
-(cursor-overlay) and the private-clipboard check (dispatchPaste).
+sources and video-recording's (the recorder and its loopback of a tab's
+sound, and the encoding service's mojom as a dependency);
+protocol_config.json registers the Page agent and frame-stream
+commands, video-recording's Browser commands and its Page command
+agentMarkSecretField; input_handler.cc holds the per-tab cursor lookup
+(cursor-overlay) and the private-clipboard check (dispatchPaste). In a
+Linux build presenting Windows the three Windows-only behaviours take
+Windows' form: NumLock on in the lock-key state, wheel notches reported
+as notches, and CRLF line breaks in a paste.
 ---
- content/browser/BUILD.gn                      |   32 +
+ content/browser/BUILD.gn                      |   39 +
  .../devtools/devtools_instrumentation.cc      |   42 +-
  .../devtools/devtools_instrumentation.h       |   33 +
  .../devtools/protocol/action_outcome_watch.cc | 1096 +++
@@ -36,10 +51,11 @@ commands; input_handler.cc holds the per-tab cursor lookup
  .../devtools/protocol/handler_helpers.h       |   55 +
  .../devtools/protocol/human_path_planner.cc   | 1380 ++++
  .../devtools/protocol/human_path_planner.h    |  340 +
- .../devtools/protocol/input_handler.cc        | 6054 +++++++++++++-
+ .../devtools/protocol/input_handler.cc        | 6058 +++++++++++++-
  .../browser/devtools/protocol/input_handler.h | 1010 ++-
- .../protocol/keyboard_typing_session.cc       |  973 +++
- .../protocol/keyboard_typing_session.h        |  236 +
+ .../protocol/keyboard_typing_session.cc       | 1903 +++++
+ .../protocol/keyboard_typing_session.h        |  292 +
+ .../protocol/keyboard_typing_tables.inc       |  224 +
  .../browser/devtools/protocol/move_session.cc | 1281 +++
  .../browser/devtools/protocol/move_session.h  |  332 +
  .../devtools/protocol/scroll_session.cc       |  900 +++
@@ -48,8 +64,8 @@ commands; input_handler.cc holds the per-tab cursor lookup
  .../devtools/protocol/select_session.h        |  381 +
  .../devtools/protocol/temporal_session.cc     | 1017 +++
  .../devtools/protocol/temporal_session.h      |  297 +
- content/browser/devtools/protocol_config.json |    7 +-
- .../input/lock_key_event_flags.h              |   33 +
+ content/browser/devtools/protocol_config.json |   11 +-
+ .../input/lock_key_event_flags.h              |   39 +
  .../input/synthetic_gesture_target_aura.cc    |   55 +-
  .../renderer_host/render_frame_host_impl.cc   |   10 +
  .../render_widget_host_view_event_handler.cc  |   34 +-
@@ -57,11 +73,11 @@ commands; input_handler.cc holds the per-tab cursor lookup
  .../browser/web_contents/file_chooser_impl.cc |   10 +
  content/common/input/synthetic_gesture.cc     |    6 +
  content/common/input/synthetic_gesture.h      |    7 +
- .../devtools_protocol/domains/Input.pdl       | 1136 +++
+ .../devtools_protocol/domains/Input.pdl       | 1146 +++
  .../core/exported/web_page_popup_impl.cc      |    1 +
  .../core/exported/web_page_popup_impl.h       |    7 +
- ui/events/blink/web_input_event.cc            |   16 +
- 42 files changed, 30195 insertions(+), 26 deletions(-)
+ ui/events/blink/web_input_event.cc            |   29 +
+ 43 files changed, 31449 insertions(+), 26 deletions(-)
  create mode 100644 content/browser/devtools/protocol/action_outcome_watch.cc
  create mode 100644 content/browser/devtools/protocol/action_outcome_watch.h
  create mode 100644 content/browser/devtools/protocol/color_session.cc
@@ -76,6 +92,7 @@ commands; input_handler.cc holds the per-tab cursor lookup
  create mode 100644 content/browser/devtools/protocol/human_path_planner.h
  create mode 100644 content/browser/devtools/protocol/keyboard_typing_session.cc
  create mode 100644 content/browser/devtools/protocol/keyboard_typing_session.h
+ create mode 100644 content/browser/devtools/protocol/keyboard_typing_tables.inc
  create mode 100644 content/browser/devtools/protocol/move_session.cc
  create mode 100644 content/browser/devtools/protocol/move_session.h
  create mode 100644 content/browser/devtools/protocol/scroll_session.cc
@@ -87,7 +104,7 @@ commands; input_handler.cc holds the per-tab cursor lookup
  create mode 100644 content/browser/renderer_host/input/lock_key_event_flags.h
 
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index 6d2c55f92d..10eac7d503 100644
+index 6d2c55f92d..fb34daa4b4 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
 @@ -146,6 +146,7 @@ source_set("browser") {
@@ -98,8 +115,24 @@ index 6d2c55f92d..10eac7d503 100644
      "//components/browsing_data/core:cookie_or_cache_deletion_choice",
      "//components/cbor",
      "//components/discardable_memory/common",
-@@ -782,6 +783,8 @@ source_set("browser") {
+@@ -229,6 +230,8 @@ source_set("browser") {
+     "//content/public/common:common_sources",
+     "//content/public/common:content_descriptor_keys",
+     "//content/public/common/zygote:buildflags",
++    # browser: the video recorder's encoding service.
++    "//content/services/agent_video_encoding_service/public/mojom",
+     "//content/services/devtools_media_encoding_service/public/mojom",
+     "//crypto",
+     "//device/base",
+@@ -780,8 +783,15 @@ source_set("browser") {
+     "device_posture/device_posture_platform_provider_default.h",
+     "device_posture/device_posture_provider_impl.cc",
      "device_posture/device_posture_provider_impl.h",
++    # browser: the video recorder's loopback capture of a tab's sound.
++    "devtools/agent_audio_capture.cc",
++    "devtools/agent_audio_capture.h",
++    "devtools/agent_video_recorder.cc",
++    "devtools/agent_video_recorder.h",
      "devtools/browser_devtools_agent_host.cc",
      "devtools/browser_devtools_agent_host.h",
 +    "devtools/cdp_cursor_overlay.cc",
@@ -107,7 +140,7 @@ index 6d2c55f92d..10eac7d503 100644
      "devtools/cross_thread_protocol_callback.h",
      "devtools/dedicated_worker_devtools_agent_host.cc",
      "devtools/dedicated_worker_devtools_agent_host.h",
-@@ -790,6 +793,8 @@ source_set("browser") {
+@@ -790,6 +800,8 @@ source_set("browser") {
      "devtools/devtools_background_services_context_impl.cc",
      "devtools/devtools_background_services_context_impl.h",
      "devtools/devtools_device_request_prompt_info.h",
@@ -116,7 +149,7 @@ index 6d2c55f92d..10eac7d503 100644
      "devtools/devtools_http_handler.cc",
      "devtools/devtools_http_handler.h",
      "devtools/devtools_instrumentation.cc",
-@@ -828,12 +833,18 @@ source_set("browser") {
+@@ -828,12 +840,18 @@ source_set("browser") {
      "devtools/frame_auto_attacher.h",
      "devtools/network_service_devtools_observer.cc",
      "devtools/network_service_devtools_observer.h",
@@ -135,7 +168,7 @@ index 6d2c55f92d..10eac7d503 100644
      "devtools/protocol/debugger_handler.cc",
      "devtools/protocol/debugger_handler.h",
      "devtools/protocol/device_access_handler.cc",
-@@ -852,30 +863,42 @@ source_set("browser") {
+@@ -852,30 +870,42 @@ source_set("browser") {
      "devtools/protocol/digital_credentials_handler.h",
      "devtools/protocol/dom_handler.cc",
      "devtools/protocol/dom_handler.h",
@@ -178,7 +211,7 @@ index 6d2c55f92d..10eac7d503 100644
      "devtools/protocol/native_input_event_builder.h",
      "devtools/protocol/network_handler.cc",
      "devtools/protocol/network_handler.h",
-@@ -887,10 +910,16 @@ source_set("browser") {
+@@ -887,10 +917,16 @@ source_set("browser") {
      "devtools/protocol/preload_handler.h",
      "devtools/protocol/schema_handler.cc",
      "devtools/protocol/schema_handler.h",
@@ -195,7 +228,7 @@ index 6d2c55f92d..10eac7d503 100644
      "devtools/protocol/storage_handler.cc",
      "devtools/protocol/storage_handler.h",
      "devtools/protocol/system_info_handler.cc",
-@@ -899,6 +928,8 @@ source_set("browser") {
+@@ -899,6 +935,8 @@ source_set("browser") {
      "devtools/protocol/target_auto_attacher.h",
      "devtools/protocol/target_handler.cc",
      "devtools/protocol/target_handler.h",
@@ -204,7 +237,7 @@ index 6d2c55f92d..10eac7d503 100644
      "devtools/protocol/tethering_handler.cc",
      "devtools/protocol/tethering_handler.h",
      "devtools/protocol/tracing_handler.cc",
-@@ -1677,6 +1708,7 @@ source_set("browser") {
+@@ -1677,6 +1715,7 @@ source_set("browser") {
      "renderer_host/input/fling_scheduler.h",
      "renderer_host/input/input_injector_impl.cc",
      "renderer_host/input/input_injector_impl.h",
@@ -15148,7 +15181,7 @@ index 0000000000..bfd400f1fe
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_HUMAN_PATH_PLANNER_H_
 diff --git a/content/browser/devtools/protocol/input_handler.cc b/content/browser/devtools/protocol/input_handler.cc
-index 8468f4d256..3d93bcf870 100644
+index 8468f4d256..acfcb41149 100644
 --- a/content/browser/devtools/protocol/input_handler.cc
 +++ b/content/browser/devtools/protocol/input_handler.cc
 @@ -6,33 +6,65 @@
@@ -15217,7 +15250,7 @@ index 8468f4d256..3d93bcf870 100644
  #include "content/common/input/synthetic_pinch_gesture.h"
  #include "content/common/input/synthetic_pinch_gesture_params.h"
  #include "content/common/input/synthetic_pointer_action.h"
-@@ -43,23 +75,51 @@
+@@ -43,23 +75,52 @@
  #include "content/common/input/synthetic_tap_gesture_params.h"
  #include "content/public/common/content_features.h"
  #include "content/public/common/url_constants.h"
@@ -15227,6 +15260,7 @@ index 8468f4d256..3d93bcf870 100644
  #include "third_party/blink/public/common/dom/dom_node_id.h"
  #include "third_party/blink/public/common/input/web_input_event.h"
  #include "third_party/blink/public/common/page/page_zoom.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
 +#include "third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom.h"
  #include "ui/base/clipboard/clipboard_constants.h"
 +#include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -15269,7 +15303,7 @@ index 8468f4d256..3d93bcf870 100644
  gfx::PointF CssPixelsToPointF(double x, double y, float scale_factor) {
    return gfx::PointF(x * scale_factor, y * scale_factor);
  }
-@@ -631,6 +691,59 @@ gfx::PointF ConvertWidgetPointToScreenPoint(
+@@ -631,6 +692,59 @@ gfx::PointF ConvertWidgetPointToScreenPoint(
    return point_in_widget + view_bounds_in_screen.OffsetFromOrigin();
  }
  
@@ -15329,7 +15363,7 @@ index 8468f4d256..3d93bcf870 100644
  }  // namespace
  
  // FailSafe sends a failure to a given backend callback if the wrapper is never
-@@ -1134,6 +1247,299 @@ void InputHandler::DragController::EndDraggingWithRenderWidgetHostAtPoint(
+@@ -1134,6 +1248,299 @@ void InputHandler::DragController::EndDraggingWithRenderWidgetHostAtPoint(
                       std::move(callback)));
  }
  
@@ -15629,7 +15663,7 @@ index 8468f4d256..3d93bcf870 100644
  InputHandler::InputHandler(bool allow_file_access,
                             bool allow_sending_input_to_browser)
      : DevToolsDomainHandler(Input::Metainfo::domainName),
-@@ -1143,6 +1549,44 @@ InputHandler::InputHandler(bool allow_file_access,
+@@ -1143,6 +1550,44 @@ InputHandler::InputHandler(bool allow_file_access,
  
  InputHandler::~InputHandler() = default;
  
@@ -15674,7 +15708,7 @@ index 8468f4d256..3d93bcf870 100644
  // static
  std::vector<InputHandler*> InputHandler::ForAgentHost(
      DevToolsAgentHostImpl* host) {
-@@ -1153,12 +1597,33 @@ void InputHandler::SetRenderer(int process_host_id,
+@@ -1153,12 +1598,33 @@ void InputHandler::SetRenderer(int process_host_id,
                                 RenderFrameHostImpl* frame_host) {
    if (frame_host == host_)
      return;
@@ -15708,7 +15742,7 @@ index 8468f4d256..3d93bcf870 100644
    if (ignore_input_events_ && old_web_contents != web_contents_) {
      if (web_contents_) {
        scoped_ignore_input_events_ =
-@@ -1169,6 +1634,25 @@ void InputHandler::SetRenderer(int process_host_id,
+@@ -1169,6 +1635,25 @@ void InputHandler::SetRenderer(int process_host_id,
    }
  }
  
@@ -15734,7 +15768,7 @@ index 8468f4d256..3d93bcf870 100644
  void InputHandler::Wire(UberDispatcher* dispatcher) {
    frontend_ = std::make_unique<Input::Frontend>(dispatcher->channel());
    Input::Dispatcher::wire(dispatcher, this);
-@@ -1176,6 +1660,9 @@ void InputHandler::Wire(UberDispatcher* dispatcher) {
+@@ -1176,6 +1661,9 @@ void InputHandler::Wire(UberDispatcher* dispatcher) {
  
  Response InputHandler::Disable() {
    ClearInputState();
@@ -15744,7 +15778,7 @@ index 8468f4d256..3d93bcf870 100644
    scoped_ignore_input_events_.reset();
    ignore_input_events_ = false;
    pointer_ids_.clear();
-@@ -1200,6 +1687,8 @@ void InputHandler::DispatchKeyEvent(
+@@ -1200,6 +1688,8 @@ void InputHandler::DispatchKeyEvent(
      std::optional<int> location,
      std::unique_ptr<Array<std::string>> commands,
      std::unique_ptr<DispatchKeyEventCallback> callback) {
@@ -15753,7 +15787,7 @@ index 8468f4d256..3d93bcf870 100644
    blink::WebInputEvent::Type web_event_type;
  
    if (type == Input::DispatchKeyEvent::TypeEnum::KeyDown) {
-@@ -1278,8 +1767,658 @@ void InputHandler::DispatchKeyEvent(
+@@ -1278,8 +1768,665 @@ void InputHandler::DispatchKeyEvent(
        ->InjectKeyboardEvent(event, std::move(commands), std::move(callback));
  }
  
@@ -16330,6 +16364,13 @@ index 8468f4d256..3d93bcf870 100644
 +  // put its text there.
 +  {
 +    std::u16string text16 = base::UTF8ToUTF16(text);
++#if BUILDFLAG(IS_LINUX)
++    // browser: and in a Linux build presenting Windows.
++    if (blink::PresentsWindowsPlatform()) {
++      base::ReplaceSubstringsAfterOffset(&text16, 0, u"\r\n", u"\n");
++      base::ReplaceSubstringsAfterOffset(&text16, 0, u"\n", u"\r\n");
++    }
++#endif
 +#if BUILDFLAG(IS_WIN)
 +    // Line breaks as Chrome's own copies write them on Windows.
 +    base::ReplaceSubstringsAfterOffset(&text16, 0, u"\r\n", u"\n");
@@ -16412,7 +16453,7 @@ index 8468f4d256..3d93bcf870 100644
    std::u16string text16 = base::UTF8ToUTF16(text);
    if (!host_ || !host_->GetRenderWidgetHost()) {
      callback->sendFailure(Response::InternalError());
-@@ -1310,6 +2449,7 @@ void InputHandler::ImeSetComposition(
+@@ -1310,6 +2457,7 @@ void InputHandler::ImeSetComposition(
      std::optional<int> replacement_start,
      std::optional<int> replacement_end,
      std::unique_ptr<ImeSetCompositionCallback> callback) {
@@ -16420,7 +16461,7 @@ index 8468f4d256..3d93bcf870 100644
    std::u16string text16 = base::UTF8ToUTF16(text);
    if (!host_ || !host_->GetRenderWidgetHost() || !web_contents_) {
      callback->sendFailure(Response::InternalError());
-@@ -1376,6 +2516,23 @@ void InputHandler::DispatchMouseEvent(
+@@ -1376,6 +2524,23 @@ void InputHandler::DispatchMouseEvent(
      std::optional<double> delta_y,
      std::optional<std::string> pointer_type,
      std::unique_ptr<DispatchMouseEventCallback> callback) {
@@ -16444,7 +16485,7 @@ index 8468f4d256..3d93bcf870 100644
    base::expected<std::unique_ptr<blink::WebMouseEvent>, protocol::Response>
        maybe_event = CreateWebMouseEvent(
            event_type, x, y, ScaleFactor(), std::move(modifiers),
-@@ -1388,6 +2545,25 @@ void InputHandler::DispatchMouseEvent(
+@@ -1388,6 +2553,25 @@ void InputHandler::DispatchMouseEvent(
      callback->sendFailure(std::move(maybe_event).error());
      return;
    }
@@ -16470,7 +16511,7 @@ index 8468f4d256..3d93bcf870 100644
  
    HandleMouseEvent(std::move(maybe_event).value(), std::move(callback));
  }
-@@ -1440,6 +2616,17 @@ void InputHandler::DispatchDragEvent(
+@@ -1440,6 +2624,17 @@ void InputHandler::DispatchDragEvent(
      std::unique_ptr<Input::DragData> data,
      std::optional<int> modifiers,
      std::unique_ptr<DispatchDragEventCallback> callback) {
@@ -16488,7 +16529,7 @@ index 8468f4d256..3d93bcf870 100644
    if (HasFileRelatedItem(data.get()) && !allow_file_access_) {
      callback->sendFailure(Response::InvalidParams("Not allowed"));
      return;
-@@ -1576,6 +2763,8 @@ float InputHandler::ScaleFactor() {
+@@ -1576,6 +2771,8 @@ float InputHandler::ScaleFactor() {
  void InputHandler::StartDragging(const content::DropData& drop_data,
                                   const blink::mojom::DragData& drag_data,
                                   blink::DragOperationsMask drag_operations_mask,
@@ -16497,7 +16538,7 @@ index 8468f4d256..3d93bcf870 100644
                                   bool* intercepted) {
    // Only allow when Input.setInterceptDrags is disabled.
    if (!intercept_drags_) {
-@@ -1592,6 +2781,32 @@ void InputHandler::StartDragging(const content::DropData& drop_data,
+@@ -1592,6 +2789,32 @@ void InputHandler::StartDragging(const content::DropData& drop_data,
      return;
    }
    *intercepted = true;
@@ -16530,7 +16571,7 @@ index 8468f4d256..3d93bcf870 100644
  
    auto items =
        std::make_unique<protocol::Array<protocol::Input::DragDataItem>>();
-@@ -1614,24 +2829,4273 @@ void InputHandler::StartDragging(const content::DropData& drop_data,
+@@ -1614,22 +2837,4271 @@ void InputHandler::StartDragging(const content::DropData& drop_data,
                                   .SetDragOperationsMask(drag_operations_mask)
                                   .SetItems(std::move(items))
                                   .Build());
@@ -16594,8 +16635,6 @@ index 8468f4d256..3d93bcf870 100644
 -    std::unique_ptr<DispatchMouseEventCallback> callback,
 -    std::unique_ptr<blink::WebMouseEvent> event,
 -    base::WeakPtr<RenderWidgetHostViewBase> target,
--    std::optional<gfx::PointF> point) {
--  if (!target || !point.has_value()) {
 +// browser: a coordinate in device pixels, put on the whole pixel `held` it is
 +// on until it is past the neighbour's middle by a margin. A mouse resting on
 +// its pad is held there by its own friction through a hand's small sway; on
@@ -20811,12 +20850,10 @@ index 8468f4d256..3d93bcf870 100644
 +    std::unique_ptr<DispatchMouseEventCallback> callback,
 +    std::unique_ptr<blink::WebMouseEvent> event,
 +    base::WeakPtr<RenderWidgetHostViewBase> target,
-+    std::optional<gfx::PointF> point) {
-+  if (!target || !point.has_value()) {
+     std::optional<gfx::PointF> point) {
+   if (!target || !point.has_value()) {
      callback->sendFailure(Response::InternalError());
-     return;
-   }
-@@ -1656,6 +7120,9 @@ void InputHandler::DispatchTouchEvent(
+@@ -1656,6 +7128,9 @@ void InputHandler::DispatchTouchEvent(
      std::optional<int> modifiers,
      std::optional<double> timestamp,
      std::unique_ptr<DispatchTouchEventCallback> callback) {
@@ -20826,7 +20863,7 @@ index 8468f4d256..3d93bcf870 100644
    if (base::FeatureList::IsEnabled(features::kSyntheticPointerActions)) {
      DispatchSyntheticPointerActionTouch(
          event_type, std::move(touch_points), std::move(modifiers),
-@@ -1670,6 +7137,9 @@ void InputHandler::DispatchTouchEvent(
+@@ -1670,6 +7145,9 @@ void InputHandler::DispatchTouchEvent(
  
  void InputHandler::CancelDragging(
      std::unique_ptr<CancelDraggingCallback> callback) {
@@ -20836,7 +20873,7 @@ index 8468f4d256..3d93bcf870 100644
    if (!drag_controller_.IsDragging()) {
      callback->sendSuccess();
      return;
-@@ -1973,6 +7443,9 @@ Response InputHandler::EmulateTouchFromMouseEvent(
+@@ -1973,6 +7451,9 @@ Response InputHandler::EmulateTouchFromMouseEvent(
      std::optional<double> delta_y,
      std::optional<int> modifiers,
      std::optional<int> click_count) {
@@ -20846,7 +20883,7 @@ index 8468f4d256..3d93bcf870 100644
    blink::WebInputEvent::Type event_type;
    if (type == Input::EmulateTouchFromMouseEvent::TypeEnum::MouseWheel) {
      event_type = blink::WebInputEvent::Type::kMouseWheel;
-@@ -2094,6 +7567,9 @@ void InputHandler::SynthesizePinchGesture(
+@@ -2094,6 +7575,9 @@ void InputHandler::SynthesizePinchGesture(
      std::optional<int> relative_speed,
      std::optional<std::string> gesture_source_type,
      std::unique_ptr<SynthesizePinchGestureCallback> callback) {
@@ -20856,7 +20893,7 @@ index 8468f4d256..3d93bcf870 100644
    if (!host_ || !host_->GetRenderWidgetHost()) {
      callback->sendFailure(Response::InternalError());
      return;
-@@ -2146,6 +7622,9 @@ void InputHandler::SynthesizeScrollGesture(
+@@ -2146,6 +7630,9 @@ void InputHandler::SynthesizeScrollGesture(
      std::optional<int> repeat_delay_ms,
      std::optional<std::string> interaction_marker_name,
      std::unique_ptr<SynthesizeScrollGestureCallback> callback) {
@@ -20866,7 +20903,7 @@ index 8468f4d256..3d93bcf870 100644
    if (!host_ || !host_->GetRenderWidgetHost()) {
      callback->sendFailure(Response::InternalError());
      return;
-@@ -2253,6 +7732,9 @@ void InputHandler::SynthesizeTapGesture(
+@@ -2253,6 +7740,9 @@ void InputHandler::SynthesizeTapGesture(
      std::optional<int> tap_count,
      std::optional<std::string> gesture_source_type,
      std::unique_ptr<SynthesizeTapGestureCallback> callback) {
@@ -20876,7 +20913,7 @@ index 8468f4d256..3d93bcf870 100644
    if (!host_ || !host_->GetRenderWidgetHost()) {
      callback->sendFailure(Response::InternalError());
      return;
-@@ -2301,11 +7783,546 @@ void InputHandler::SynthesizeTapGesture(
+@@ -2301,11 +7791,546 @@ void InputHandler::SynthesizeTapGesture(
    }
  }
  
@@ -21423,7 +21460,7 @@ index 8468f4d256..3d93bcf870 100644
  }
  
  bool InputHandler::PointIsWithinContents(gfx::PointF point) const {
-@@ -2337,4 +8354,17 @@ RenderWidgetHostViewBase* InputHandler::GetRootView() {
+@@ -2337,4 +8362,17 @@ RenderWidgetHostViewBase* InputHandler::GetRootView() {
    return view->GetRootView();
  }
  
@@ -22591,10 +22628,10 @@ index 4c25a8c1c2..715a2385c6 100644
  
 diff --git a/content/browser/devtools/protocol/keyboard_typing_session.cc b/content/browser/devtools/protocol/keyboard_typing_session.cc
 new file mode 100644
-index 0000000000..6513a78650
+index 0000000000..d03769b5f6
 --- /dev/null
 +++ b/content/browser/devtools/protocol/keyboard_typing_session.cc
-@@ -0,0 +1,973 @@
+@@ -0,0 +1,1903 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -22604,13 +22641,18 @@ index 0000000000..6513a78650
 +#include <algorithm>
 +#include <array>
 +#include <cmath>
++#include <map>
++#include <numbers>
++#include <optional>
 +#include <string_view>
 +#include <utility>
 +
++#include "base/check_op.h"
 +#include "base/functional/bind.h"
 +#include "base/numerics/safe_conversions.h"
-+#include "base/strings/string_util.h"
 +#include "base/strings/utf_string_conversions.h"
++#include "base/task/delay_policy.h"
++#include "components/browser/movement_persona.h"
 +#include "components/input/native_web_keyboard_event.h"
 +#include "content/browser/renderer_host/input/lock_key_event_flags.h"
 +#include "content/browser/renderer_host/render_widget_host_impl.h"
@@ -22655,51 +22697,44 @@ index 0000000000..6513a78650
 +// A key is not held forever: the caller lets go long before this.
 +constexpr base::TimeDelta kMaxHold = base::Seconds(60);
 +
-+// However fast the typing, a key is held as long as a person holds one:
-+// speed shortens the time between keys far more than the time each is down.
++// A chord's keys: however fast it is pressed, a key is held as long as a
++// person holds one. Typed text takes its holds from the typist (below).
 +constexpr int kMinHoldMs = 45;
 +constexpr int kMinHoldRangeTopMs = 70;
 +
-+// Events whose scheduled time has arrived within this slack are dispatched
-+// in the same task instead of arming a zero-delay timer for each, which
-+// keeps the sequence tight when the per-key gap is below timer resolution.
-+constexpr base::TimeDelta kBatchDispatchSlack = base::Microseconds(500);
++// browser: how near a wake must be to be a precise one: under base's
++// kMaxPreciseDelay (36 ms), and more than a tick of Windows' timer, by which
++// the ordinary wake before it may come late.
++constexpr base::TimeDelta kPreciseWakeWithin = base::Milliseconds(30);
++// browser: an event is sent at its time on the keyboard's clock, to a few
++// microseconds. No wake is that fine: Windows' message pump waits in whole
++// milliseconds, so even a precise wake comes up to a millisecond or two
++// late, and a keyboard's reports reach a page within a fifth of one (two
++// recorded keyboards; sent as the wakes came, the clock was four times as
++// wide as theirs). So the session is woken a little before each event and
++// waits out the rest on the clock itself. How long before: what the wakes
++// have lately come late, and a margin, within these bounds. The upper one is
++// a tick of Windows' ordinary timer, which is all the precision there is on
++// battery power or behind another window; it is also the most one task
++// waits in all. A repeat is not waited for: it is the system's own, on no
++// clock a page can check.
++constexpr base::TimeDelta kWaitOutLeast = base::Milliseconds(2);
++constexpr base::TimeDelta kWaitOutMost = base::Milliseconds(16);
++// The wait looks at the clock at most this often: it ends on a clock that
++// stands still (a test's).
++constexpr int kWaitOutLooks = 20'000'000;
++// A slow chord leaves no key down alone for the keyboard's repeat delay: a
++// time that long is drawn again from this range, in ms.
++constexpr int kAloneLeastMs = 360;
++constexpr int kAloneMostMs = 470;
 +
-+// Typo corrections fire backspaces faster than normal keystrokes and bracket
-+// the burst with realization / recovery pauses, so the rhythm changes the way
-+// it does for a real typist.
-+constexpr int kBackspaceMinMs = 50;
-+constexpr int kBackspaceMaxMs = 100;
++// A typo's correction is bracketed by a pause to notice it and a pause to
++// find the place again, so the rhythm breaks the way it does for a typist.
++// The backspaces between them are timed as any key pressed again and again.
 +constexpr int kRealizePauseMinMs = 200;
 +constexpr int kRealizePauseMaxMs = 400;
 +constexpr int kPostCorrectionMinMs = 150;
 +constexpr int kPostCorrectionMaxMs = 300;
-+
-+// Common English bigrams are typed faster than baseline.
-+constexpr std::string_view kCommonBigrams[] = {
-+    "th", "he", "in", "er", "an", "re", "on", "at", "en", "nd",
-+    "ti", "es", "or", "te", "of", "ed", "is", "it", "al", "ar",
-+    "st", "to", "nt", "ng", "se", "ha", "as", "ou", "io", "le"};
-+
-+bool IsCommonBigram(char32_t prev, char32_t curr) {
-+  if (prev > 0x7F || curr > 0x7F) {
-+    return false;
-+  }
-+  const char a = base::ToLowerASCII(static_cast<char>(prev));
-+  const char b = base::ToLowerASCII(static_cast<char>(curr));
-+  for (std::string_view bigram : kCommonBigrams) {
-+    if (bigram[0] == a && bigram[1] == b) {
-+      return true;
-+    }
-+  }
-+  return false;
-+}
-+
-+bool IsAsciiPunctuation(char32_t c) {
-+  return c == U'.' || c == U',' || c == U'!' || c == U'?' || c == U';' ||
-+         c == U':' || c == U'\'' || c == U'"' || c == U'-' || c == U'(' ||
-+         c == U')';
-+}
 +
 +// QWERTY neighbours of the alphanumeric block. Keys outside it never get
 +// adjacent-key typos, though they can still get doubled / omission typos.
@@ -22744,6 +22779,9 @@ index 0000000000..6513a78650
 +  int windows_vkey = 0;
 +  bool needs_shift = false;
 +  std::u16string text;  // the event's 'text' field
++  // The key's own character, the one it gives without Shift ('a' for "A",
++  // '1' for "!", '\n' for Enter); 0 for a key a chord names.
++  char base = 0;
 +};
 +
 +// Punctuation keys as (unshifted, shifted, code, virtual key).
@@ -22766,46 +22804,78 @@ index 0000000000..6513a78650
 +// without a known mapping.
 +bool BuildKeyMapping(char32_t c, KeyMapping* out) {
 +  if (c == U'\n' || c == U'\r') {
-+    *out = {"Enter", "Enter", 13, false, u"\r"};
++    *out = {"Enter", "Enter", 13, false, u"\r", '\n'};
 +    return true;
 +  }
 +  if (c == U'\t') {
-+    *out = {"Tab", "Tab", 9, false, u"\t"};
++    *out = {"Tab", "Tab", 9, false, u"\t", '\t'};
 +    return true;
 +  }
 +  if (c == U' ') {
-+    *out = {" ", "Space", 32, false, u" "};
++    *out = {" ", "Space", 32, false, u" ", ' '};
 +    return true;
 +  }
 +  const std::string key(1, static_cast<char>(c));
 +  const std::u16string text(1, static_cast<char16_t>(c));
 +  if (c >= U'a' && c <= U'z') {
 +    const char upper = static_cast<char>('A' + (c - U'a'));
-+    *out = {key, std::string("Key") + upper, upper, false, text};
++    *out = {key,  std::string("Key") + upper, upper, false,
++            text, static_cast<char>(c)};
 +    return true;
 +  }
 +  if (c >= U'A' && c <= U'Z') {
-+    *out = {key, std::string("Key") + static_cast<char>(c), static_cast<int>(c),
-+            true, text};
++    *out = {key,
++            std::string("Key") + static_cast<char>(c),
++            static_cast<int>(c),
++            true,
++            text,
++            static_cast<char>('a' + (c - U'A'))};
 +    return true;
 +  }
 +  if (c >= U'0' && c <= U'9') {
-+    *out = {key, std::string("Digit") + static_cast<char>(c),
-+            static_cast<int>(c), false, text};
++    *out = {key,
++            std::string("Digit") + static_cast<char>(c),
++            static_cast<int>(c),
++            false,
++            text,
++            static_cast<char>(c)};
 +    return true;
 +  }
 +  if (const char digit = UnshiftDigitSymbol(c)) {
-+    *out = {key, std::string("Digit") + digit, digit, true, text};
++    *out = {key, std::string("Digit") + digit, digit, true, text, digit};
 +    return true;
 +  }
 +  for (const PunctuationKey& punct : kPunctuationKeys) {
 +    if (c == punct.plain || c == punct.shifted) {
-+      *out = {key, std::string(punct.code), punct.windows_vkey,
-+              c == punct.shifted, text};
++      *out = {key,
++              std::string(punct.code),
++              punct.windows_vkey,
++              c == punct.shifted,
++              text,
++              static_cast<char>(punct.plain)};
 +      return true;
 +    }
 +  }
 +  return false;
++}
++
++// What a key reports as its `key` with Shift up or down: `base` is the key's
++// own character. Empty for a key whose name does not change (Enter, Tab,
++// the space bar) and for one outside the map.
++std::string KeyUnderShift(char base, bool shift) {
++  if (base >= 'a' && base <= 'z') {
++    return std::string(1, shift ? static_cast<char>(base - 'a' + 'A') : base);
++  }
++  if (base >= '0' && base <= '9') {
++    return std::string(1, shift ? kShiftedDigits[base - '0'] : base);
++  }
++  for (const PunctuationKey& punct : kPunctuationKeys) {
++    if (static_cast<char32_t>(base) == punct.plain) {
++      return std::string(
++          1, static_cast<char>(shift ? punct.shifted : punct.plain));
++    }
++  }
++  return std::string();
 +}
 +
 +// Decodes UTF-8 into UTF-32 codepoints. Invalid sequences become U+FFFD, so
@@ -22899,6 +22969,610 @@ index 0000000000..6513a78650
 +  return BuildKeyMapping(c, out);
 +}
 +
++// browser: typed text is timed as one person types it. The model follows
++// what a study of 136 million keystrokes by 168,000 people copying sentences
++// found (Dhakal, Feit, Kristensson and Oulasvirta, "Observations on Typing
++// from 136 Million Keystrokes", CHI 2018):
++//  - each press is timed from the press before it, by a gap drawn for that
++//    pair of keys (which hands and fingers, and how often the two letters
++//    meet), as a share of the typist's own median gap;
++//  - each key is held for a time drawn on its own, which hardly changes with
++//    speed. A quick typist's gaps are often shorter than the holds, so the
++//    next key goes down while the last is still down: that overlap is not
++//    drawn, it follows;
++//  - a key comes up before the key pressed after it does, nearly always;
++//  - Shift is a key of its own: it goes down a while after the key before
++//    it came up, its key follows by a lead, and it comes up around that
++//    key's release, so a capital costs time.
++//    A Shift held alone for the keyboard's repeat delay repeats its keydown,
++//    as any held key does.
++// A hand's times do not pile up on a limit: where one would cross a limit it
++// is bent or folded back smoothly, or the limit itself is drawn.
++// One identity is one typist: the speed, the hold and how widely both spread
++// come from the persona seed. A pace a caller asks for is a typist of that
++// speed, read from the same tables. And the browser has one keyboard, which
++// reports on its own clock, every kKeyboardReportMs or very nearly: the
++// persona seed says how far its clock runs off the system's.
++
++// The pairs of keys a gap lies between.
++enum KeyPair {
++  kOtherHand,
++  kSameHand,    // another finger of the same hand
++  kSameFinger,  // another key under the same finger
++  kSameKey,
++  kToSpace,    // a key, then the space bar
++  kFromSpace,  // the space bar, then a key
++  kKeyPairCount,
++};
++constexpr int kTypistSpeedCount = 6;
++constexpr int kGapQuantileCount = 9;
++constexpr int kShiftWaitQuantileCount = 7;
++enum ShiftTail { kTailWait, kTailLead, kTailUp, kTailNext, kShiftTailCount };
++// Where the tails begin.
++constexpr double kTailFrom = 0.95;
++
++// The tables, by typing speed: the measured ones, or a plain typist's where
++// the source is published without them. The file says what each holds.
++#include "content/browser/devtools/protocol/keyboard_typing_tables.inc"
++
++static_assert(std::size(kTypistSpeeds) == kTypistSpeedCount);
++static_assert(std::size(kShiftWaitProbabilities) == kShiftWaitQuantileCount);
++static_assert(std::size(kGapProbabilities) == kGapQuantileCount);
++static_assert(std::size(kMedianGapMs) == kTypistSpeedCount);
++static_assert(std::size(kMedianHoldMs) == kTypistSpeedCount);
++
++// How far a hold leans on the gap after it, by pair: this much is taken off
++// the hold's logarithm for each standard deviation the gap is above its
++// middle. Before a key of the same hand a short gap goes with a longer hold
++// (the hand rolls over the keys); before a key of the other hand, with a
++// shorter one. Set so that each pair overlaps as often as measured.
++constexpr double kHoldLean[kKeyPairCount] = {-0.1, 0.25, 0.15,
++                                             0.0,  0.05, -0.05};
++// A hold that would be shorter than this is folded back above it (people's
++// shortest holds are a little under 40 ms).
++constexpr double kMinTypedHoldMs = 28;
++// Under the keyboard's repeat delay: a typed key never repeats. A hold is
++// bent under it from the knee on.
++constexpr double kMaxTypedHoldMs = 450;
++constexpr double kHoldKneeMs = 380;
++// The typist's median hold against the measured one at their speed: a
++// lognormal factor, drawn again past this many standard deviations, so that
++// no typist sits on an end.
++constexpr double kHoldFactorSd = 0.19;
++constexpr double kHoldFactorMost = 2.3;
++// The caller's hold range stretches the holds by no more than this.
++constexpr double kHoldDialLeast = 0.6;
++constexpr double kHoldDialMost = 1.6;
++// The fastest typing a caller's pace can ask for, in words a minute: a little
++// past the tables' fastest column.
++constexpr double kFastestWpm = 110;
++// A key still down when the next one is released comes up first after all,
++// this often, and then this long before it on average (an exponential
++// spread).
++constexpr double kKeepReleaseOrder = 0.84;
++constexpr double kKeepReleaseOrderMs = 14;
++// A very short overlap is lifted a little: left to the holds alone, 16 in
++// 100 overlaps would be shorter than 8 ms, where two recorded runs have 6
++// and 8 and the dataset about 6. This gives 7 to 8.
++constexpr double kOverlapLiftMs = 9;
++// The middles of the default delay and hold ranges, which leave the typist's
++// own pace and holds.
++constexpr double kDefaultDelayMiddleMs = 160;
++constexpr double kDefaultHoldMiddleMs = 97.5;
++// The time between two reports of a keyboard, in ms: most keyboards are
++// polled 125 times a second.
++constexpr double kKeyboardReportMs = 8;
++// The keyboard's clock is not the system's: it runs this many parts in a
++// million fast or slow, by identity (two recorded runs, very likely of one
++// keyboard, were about 1 fast).
++constexpr double kKeyboardDriftLeastPpm = 0.3;
++constexpr double kKeyboardDriftMostPpm = 2.0;
++// A held key's repeat, in ms: the first comes kRepeatDelayMs and up to this
++// much more after the keydown; one interval in twenty is 5 to 15 ms longer.
++constexpr double kRepeatDelaySpanMs = 8;
++constexpr double kRepeatHiccupShare = 0.05;
++constexpr double kRepeatHiccupLeastMs = 5;
++constexpr double kRepeatHiccupMostMs = 15;
++
++// The typing model's draws (splitmix64). The reference model the numbers
++// above were fitted with draws the same stream, so a schedule can be checked
++// against it event by event.
++class TypingDraws {
++ public:
++  explicit TypingDraws(uint64_t seed) : state_(seed) {}
++
++  uint64_t Next() {
++    state_ += 0x9E3779B97F4A7C15ull;
++    uint64_t z = state_;
++    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
++    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
++    return z ^ (z >> 31);
++  }
++  // In [0, 1).
++  double Unit() { return static_cast<double>(Next() >> 11) * 0x1.0p-53; }
++  double Between(double lo, double hi) { return lo + Unit() * (hi - lo); }
++  // From the standard normal.
++  double Normal() {
++    const double u1 = Unit();
++    const double u2 = Unit();
++    return std::sqrt(-2.0 * std::log(1.0 - u1)) *
++           std::cos(2.0 * std::numbers::pi * u2);
++  }
++
++ private:
++  uint64_t state_;
++};
++
++// Which hand and finger presses a key, by the key's own character. Fingers
++// count from the little finger, 0, to the index finger, 3.
++struct Finger {
++  bool right = false;
++  int finger = 0;
++};
++
++std::optional<Finger> FingerOf(char base) {
++  struct FingerKeys {
++    Finger finger;
++    std::string_view keys;
++  };
++  static constexpr FingerKeys kFingers[] = {
++      {{false, 0}, "qaz1`\t"}, {{false, 1}, "wsx2"},
++      {{false, 2}, "edc3"},    {{false, 3}, "rfvtgb45"},
++      {{true, 3}, "yhnujm67"}, {{true, 2}, "ik8,"},
++      {{true, 1}, "ol9."},     {{true, 0}, "p0;/'-[]=\\\n\b"},
++  };
++  if (base == 0) {
++    return std::nullopt;
++  }
++  for (const FingerKeys& entry : kFingers) {
++    if (entry.keys.find(base) != std::string_view::npos) {
++      return entry.finger;
++    }
++  }
++  return std::nullopt;
++}
++
++// The pair `first` then `second` make, by their own characters; nothing for
++// a key no finger is known for.
++std::optional<KeyPair> PairOf(char first, char second) {
++  if (second == ' ' && first != ' ') {
++    return kToSpace;
++  }
++  if (first == ' ' && second != ' ') {
++    return kFromSpace;
++  }
++  const std::optional<Finger> a = FingerOf(first);
++  const std::optional<Finger> b = FingerOf(second);
++  if (!a || !b) {
++    return std::nullopt;
++  }
++  if (first == second) {
++    return kSameKey;
++  }
++  if (a->right != b->right) {
++    return kOtherHand;
++  }
++  return a->finger == b->finger ? kSameFinger : kSameHand;
++}
++
++// How long the gap between two letters is against their kind of pair's.
++double LetterPairFactor(char first, char second) {
++  const auto index = [](char c) {
++    return c == ' ' ? 26 : (c >= 'a' && c <= 'z') ? c - 'a' : -1;
++  };
++  const int a = index(first);
++  const int b = index(second);
++  if (a < 0 || b < 0 || first == second) {
++    return 1.0;
++  }
++  return kLetterPairPercent[a][b] / 100.0;
++}
++
++// A measured row's value at a speed: between its two nearest columns.
++double AtSpeed(const double (&row)[kTypistSpeedCount], double wpm) {
++  if (wpm <= kTypistSpeeds[0]) {
++    return row[0];
++  }
++  for (int i = 1; i < kTypistSpeedCount; ++i) {
++    if (wpm <= kTypistSpeeds[i]) {
++      const double share = (wpm - kTypistSpeeds[i - 1]) /
++                           (kTypistSpeeds[i] - kTypistSpeeds[i - 1]);
++      return row[i - 1] + (row[i] - row[i - 1]) * share;
++    }
++  }
++  return row[kTypistSpeedCount - 1];
++}
++
++// The probability of a draw `z` from the standard normal.
++double UnitOf(double z) {
++  return 0.5 * (1.0 + std::erf(z / std::numbers::sqrt2));
++}
++
++// The value at probability `u` of a spread measured at kGapProbabilities:
++// straight lines between the measured values on a logarithmic scale, and a
++// short tail past each end.
++double AtProbability(const std::array<double, kGapQuantileCount>& q, double u) {
++  const double top = kGapProbabilities[kGapQuantileCount - 1];
++  if (u <= kGapProbabilities[0]) {
++    return q[0] * (0.85 + 0.15 * u / kGapProbabilities[0]);
++  }
++  if (u > top) {
++    return q[kGapQuantileCount - 1] * (1.0 + 0.25 * (u - top) / (1.0 - top));
++  }
++  int i = 1;
++  while (u > kGapProbabilities[i]) {
++    ++i;
++  }
++  const double share = (u - kGapProbabilities[i - 1]) /
++                       (kGapProbabilities[i] - kGapProbabilities[i - 1]);
++  return std::exp(std::log(q[i - 1]) +
++                  share * (std::log(q[i]) - std::log(q[i - 1])));
++}
++
++// A value past kTailFrom: `value` is the one at kTailFrom, and beyond it the
++// spread thins out exponentially, by `scale` ms.
++double TailPast(double value, double scale, double u) {
++  return value +
++         scale * std::log((1.0 - kTailFrom) / (1.0 - std::min(u, 1.0 - 1e-6)));
++}
++
++// The same for a spread that crosses zero, measured at
++// kShiftWaitProbabilities: straight lines on the value itself. Below the
++// first value the first line goes on; above the last (kTailFrom) comes an
++// exponential tail of scale `tail`.
++double AtProbabilityLinear(const std::array<double, kShiftWaitQuantileCount>& q,
++                           double u,
++                           double tail) {
++  const int last = kShiftWaitQuantileCount - 1;
++  if (u <= kShiftWaitProbabilities[0]) {
++    return q[0] - (q[1] - q[0]) * (kShiftWaitProbabilities[0] - u) /
++                      (kShiftWaitProbabilities[1] - kShiftWaitProbabilities[0]);
++  }
++  for (int i = 1; i <= last; ++i) {
++    if (u <= kShiftWaitProbabilities[i]) {
++      const double share =
++          (u - kShiftWaitProbabilities[i - 1]) /
++          (kShiftWaitProbabilities[i] - kShiftWaitProbabilities[i - 1]);
++      return q[i - 1] + share * (q[i] - q[i - 1]);
++    }
++  }
++  return TailPast(q[last], tail, u);
++}
++
++// `value`, bent smoothly under `limit` from `knee` on, so that nothing piles
++// up on the limit itself.
++double BentUnder(double limit, double knee, double value) {
++  if (value <= knee) {
++    return value;
++  }
++  return knee +
++         (limit - knee) * (1.0 - std::exp(-(value - knee) / (limit - knee)));
++}
++
++// One identity's hands on a keyboard, at the pace a caller asks for.
++struct Typist {
++  double gap_ms = 0;       // the median gap from one press to the next
++  double hold_ms = 0;      // the median hold
++  double spread = 1;       // the gaps' spread, as a power of the measured one
++  double hold_log_sd = 0;  // the holds' spread
++  // What the pace asked for leaves to the gaps alone, past the speeds the
++  // tables hold: over 1 below their slowest, under 1 above their fastest.
++  double stretch = 1;
++  // The keyboard: the time between two of its reports, in ms on the system's
++  // clock.
++  double report_ms = kKeyboardReportMs;
++  // Each pair's gap as a share of gap_ms, at kGapProbabilities.
++  std::array<std::array<double, kGapQuantileCount>, kKeyPairCount> gap = {};
++  // The hold of the key before each pair, as a share of hold_ms.
++  std::array<double, kKeyPairCount> hold_before = {};
++  // Shift, in ms, as the tables have it at this typist's speed.
++  std::array<double, kShiftWaitQuantileCount> shift_wait = {};
++  std::array<double, kGapQuantileCount> shift_lead = {};
++  std::array<double, kShiftWaitQuantileCount> shift_up = {};
++  std::array<double, kShiftWaitQuantileCount> shift_next = {};
++  std::array<double, kShiftTailCount> shift_tail = {};
++
++  // The gap that ends `pair`, for a draw `z` from the standard normal.
++  double Gap(std::optional<KeyPair> pair, double z) const {
++    const std::array<double, kGapQuantileCount>& q =
++        gap[pair.value_or(kOtherHand)];
++    const double middle = q[kGapQuantileCount / 2];
++    return gap_ms * middle *
++           std::pow(AtProbability(q, UnitOf(z)) / middle, spread);
++  }
++
++  // For a draw `z` from the standard normal, in ms: from the key before
++  // coming up to Shift going down (under zero with that key still down);
++  // from Shift going down to its key going down; from that key coming up to
++  // Shift coming up (under zero with Shift up first); and from Shift coming
++  // up to the next key going down.
++  double ShiftWait(double z) const {
++    return AtProbabilityLinear(shift_wait, UnitOf(z), shift_tail[kTailWait]);
++  }
++  double ShiftLead(double z) const {
++    const double u = UnitOf(z);
++    // Its table's last value is the end of the measurement, not of the
++    // spread: the tail takes over one value before it.
++    static_assert(kGapProbabilities[kGapQuantileCount - 2] == kTailFrom);
++    return u <= kTailFrom ? AtProbability(shift_lead, u)
++                          : TailPast(shift_lead[kGapQuantileCount - 2],
++                                     shift_tail[kTailLead], u);
++  }
++  double ShiftUp(double z) const {
++    return AtProbabilityLinear(shift_up, UnitOf(z), shift_tail[kTailUp]);
++  }
++  double ShiftNext(double z) const {
++    return AtProbabilityLinear(shift_next, UnitOf(z), shift_tail[kTailNext]);
++  }
++
++  // How long the key `base` is held: `next` is the pair it makes with the
++  // key after it, `z` a draw from the standard normal, `lean` what the gap
++  // after it adds (kHoldLean) and `scale` the caller's stretch.
++  double Hold(char base,
++              std::optional<KeyPair> next,
++              double z,
++              double lean,
++              double scale) const {
++    double factor = 1.0;
++    if (const std::optional<Finger> finger = FingerOf(base)) {
++      // The little finger holds longer, the index finger a little shorter.
++      factor = finger->finger == 0 ? 1.12 : finger->finger == 3 ? 0.97 : 1.0;
++    }
++    if (next) {
++      factor *= hold_before[*next];
++    }
++    double hold = hold_ms * scale * factor * std::exp(hold_log_sd * z + lean);
++    if (hold < kMinTypedHoldMs) {
++      // Folded back above the least hold, at half the distance.
++      hold = kMinTypedHoldMs + 0.5 * (kMinTypedHoldMs - hold);
++    }
++    return BentUnder(kMaxTypedHoldMs, kHoldKneeMs, hold);
++  }
++};
++
++// The typist of the identity `persona_seed`, typing at `pace`: 1.0 is their
++// own speed, 2.0 half of it, 0.5 twice.
++Typist MakeTypist(int64_t persona_seed, double pace) {
++  TypingDraws draws(static_cast<uint64_t>(persona_seed) ^
++                    0x545950495354ull);  // "TYPIST"
++  // The typist's own speed, from the middle of the measured typists: 40 to
++  // 75 words a minute.
++  double own_wpm = 54.0 + 11.0 * draws.Normal();
++  while (own_wpm < 40.0 || own_wpm > 75.0) {
++    own_wpm = 54.0 + 11.0 * draws.Normal();
++  }
++  // Their holds against the measured ones at their speed.
++  double hold_z = draws.Normal();
++  while (std::abs(hold_z) > kHoldFactorMost) {
++    hold_z = draws.Normal();
++  }
++  Typist typist;
++  // Under 1 on average: a kind of pair's measured spread holds the
++  // differences between its pairs of letters, which kLetterPairPercent adds
++  // back.
++  typist.spread = draws.Between(0.84, 1.04);
++  typist.hold_log_sd = draws.Between(0.17, 0.27);
++  // The keyboard's clock against the system's.
++  double drift_ppm =
++      draws.Between(kKeyboardDriftLeastPpm, kKeyboardDriftMostPpm);
++  if (draws.Unit() < 0.5) {
++    drift_ppm = -drift_ppm;
++  }
++  typist.report_ms = kKeyboardReportMs * (1.0 + drift_ppm * 1e-6);
++  // The pace asked for is a typist of that speed, as far as the tables go:
++  // people who type faster do not type the same rhythm sooner, they overlap
++  // more and hold a little shorter. What the tables do not hold is left to
++  // the gaps alone.
++  const double target = std::min(own_wpm / std::max(pace, 1e-6), kFastestWpm);
++  const double wpm = std::clamp(target, kTypistSpeeds[0],
++                                kTypistSpeeds[kTypistSpeedCount - 1]);
++  typist.stretch = wpm / target;
++  typist.gap_ms = AtSpeed(kMedianGapMs, wpm);
++  typist.hold_ms =
++      AtSpeed(kMedianHoldMs, wpm) * std::exp(kHoldFactorSd * hold_z);
++  for (int pair = 0; pair < kKeyPairCount; ++pair) {
++    for (int q = 0; q < kGapQuantileCount; ++q) {
++      double column[kTypistSpeedCount];
++      for (int speed = 0; speed < kTypistSpeedCount; ++speed) {
++        column[speed] = kGapOverMedian[pair][speed][q];
++      }
++      typist.gap[pair][q] = AtSpeed(column, wpm);
++    }
++    typist.hold_before[pair] = AtSpeed(kHoldBeforePair[pair], wpm);
++  }
++  // A Shift table's row at the typist's speed.
++  const auto row_at_speed = [wpm](const auto& table, auto& row) {
++    for (size_t q = 0; q < row.size(); ++q) {
++      double column[kTypistSpeedCount];
++      for (int speed = 0; speed < kTypistSpeedCount; ++speed) {
++        column[speed] = table[speed][q];
++      }
++      row[q] = AtSpeed(column, wpm);
++    }
++  };
++  row_at_speed(kShiftWaitMs, typist.shift_wait);
++  row_at_speed(kShiftLeadMs, typist.shift_lead);
++  row_at_speed(kShiftUpMs, typist.shift_up);
++  row_at_speed(kShiftNextMs, typist.shift_next);
++  for (int tail = 0; tail < kShiftTailCount; ++tail) {
++    typist.shift_tail[tail] = AtSpeed(kShiftTailMs[tail], wpm);
++  }
++  return typist;
++}
++
++// How long after its poll a keyboard's report reaches the browser's UI
++// thread, which stamps it, in ms, for a draw `z` from the standard normal:
++// the input stack and the thread's wake. Small, never negative, now and then
++// longer; the same as a mouse's report (synthetic_mouse_path_gesture.cc).
++double ReportLatencyMs(double z) {
++  return std::min(1.5, 0.030 + 0.120 * std::exp(0.8 * z));
++}
++
++// A key going down or coming up under a hand, at `ms`.
++struct HandEvent {
++  double ms = 0;
++  bool is_down = false;
++  bool is_shift = false;
++};
++
++// An event as the browser gets it, at `ms` from the first report: the hand's
++// event `source`, or a held Shift's keydown again (`repeat`).
++struct ReportedEvent {
++  double ms = 0;
++  size_t source = 0;
++  bool repeat = false;
++};
++
++// What the keyboard and the system make of a hand's `events`, which are in
++// the order of their times. A keyboard reports on its own clock, every
++// `report_ms`: each event waits for the next report and reaches the browser
++// a small, uneven moment after it. The events of one report follow each
++// other closely, its releases before its presses: a report says which keys
++// are down, not in what order they got there, and the system hands on the
++// keys let go first. With `repeat_shift`, a Shift that stays the last key
++// pressed for the keyboard's repeat delay repeats its keydown, on the
++// system's own clock, until another key goes down or it comes up. The
++// reports are counted from `origin`, and the times given are from there.
++// Every event takes the same two draws from a stream of its own (`seed`),
++// and every repeat three from its Shift press's own.
++std::vector<ReportedEvent> ReportEvents(const std::vector<HandEvent>& events,
++                                        double origin,
++                                        double report_ms,
++                                        uint64_t seed,
++                                        bool repeat_shift) {
++  std::vector<ReportedEvent> out;
++  if (events.empty()) {
++    return out;
++  }
++  out.reserve(events.size());
++  std::vector<double> grids(events.size());
++  std::vector<size_t> order(events.size());
++  for (size_t k = 0; k < events.size(); ++k) {
++    grids[k] = std::ceil((events[k].ms - origin) / report_ms) * report_ms;
++    order[k] = k;
++  }
++  std::ranges::stable_sort(order, [&](size_t a, size_t b) {
++    return grids[a] < grids[b] ||
++           (grids[a] == grids[b] && !events[a].is_down && events[b].is_down);
++  });
++  TypingDraws draws(seed ^ 0x5245504F5254ull);  // "REPORT"
++  double last = 0;
++  double last_grid = -1;  // no report yet
++  std::optional<double> repeat_at;
++  size_t repeating = 0;
++  TypingDraws repeats(0);
++  for (size_t n = 0; n < order.size(); ++n) {
++    const size_t k = order[n];
++    const HandEvent& event = events[k];
++    const double z_late = draws.Normal();
++    const double u_same = draws.Unit();
++    const double grid = grids[k];
++    double stamp;
++    if (grid == last_grid) {
++      // The same report: the system hands its events on one by one.
++      stamp = last + 0.05 + 0.10 * u_same;
++    } else {
++      stamp = grid + ReportLatencyMs(z_late);
++      if (last_grid >= 0) {
++        stamp = std::max(stamp, last + 0.05 + 0.10 * u_same);
++      }
++    }
++    // The repeats that fall before it.
++    while (repeat_at && *repeat_at < stamp) {
++      out.push_back({*repeat_at, repeating, /*repeat=*/true});
++      const double u_gap = repeats.Unit();
++      const double u_if = repeats.Unit();
++      const double u_more = repeats.Unit();
++      *repeat_at += kRepeatIntervalMinMs +
++                    (kRepeatIntervalMaxMs - kRepeatIntervalMinMs) * u_gap;
++      if (u_if < kRepeatHiccupShare) {
++        *repeat_at += kRepeatHiccupLeastMs +
++                      (kRepeatHiccupMostMs - kRepeatHiccupLeastMs) * u_more;
++      }
++    }
++    if (event.is_down || event.is_shift) {
++      repeat_at.reset();  // another key went down, or Shift came up
++    }
++    if (repeat_shift && event.is_down && event.is_shift) {
++      repeats = TypingDraws(seed ^ 0x524550454154ull ^  // "REPEAT"
++                            ((n + 1) * 0x9E3779B97F4A7C15ull));
++      repeat_at = stamp + kRepeatDelayMs + kRepeatDelaySpanMs * repeats.Unit();
++      repeating = k;
++    }
++    out.push_back({stamp, k, /*repeat=*/false});
++    last = stamp;
++    last_grid = grid;
++  }
++  return out;
++}
++
++// The time between two reports of this browser's identity's keyboard, in ms.
++double IdentityReportMs() {
++  static const double report_ms =
++      MakeTypist(browser::PersonaSeed(), 1.0).report_ms;
++  return report_ms;
++}
++
++// The keyboard's first report at or after `now`. A keyboard reports on one
++// clock for as long as it is plugged in: the reports of every session lie
++// `report_ms` apart, counted from a moment fixed for the browser's run.
++// (Whole microseconds: the clock's drift is under one of them a report.)
++base::TimeTicks NextReport(base::TimeTicks now, double report_ms) {
++  static const base::TimeTicks first = base::TimeTicks::Now();
++  const double reports = std::ceil((now - first).InMillisecondsF() / report_ms);
++  return first + base::Microseconds(
++                     base::ClampRound<int64_t>(reports * report_ms * 1000.0));
++}
++
++// What the sessions' precise wakes have lately come late: the last eight
++// that say something about the timer. One record for the browser: the timer
++// is the system's.
++struct WakeRecord {
++  std::array<base::TimeDelta, 8> late;
++  size_t next = 0;
++  // When a session last finished waiting out an event.
++  base::TimeTicks waited_until;
++};
++
++WakeRecord& Wakes() {
++  static WakeRecord record = [] {
++    WakeRecord fresh;
++    fresh.late.fill(base::Milliseconds(1));
++    return fresh;
++  }();
++  return record;
++}
++
++// A precise wake asked for at `asked` came at `now`.
++void NoteWake(base::TimeTicks asked, base::TimeTicks now) {
++  WakeRecord& wakes = Wakes();
++  const base::TimeDelta late = now - asked;
++  // Not the timer's doing: the thread was waiting out an event when this
++  // wake was due (two tabs typing would feed each other's wait), or was held
++  // up for longer than any timer's tick (a long task, a machine asleep).
++  if (asked < wakes.waited_until || late > kWaitOutMost) {
++    return;
++  }
++  wakes.late[wakes.next] = late;
++  wakes.next = (wakes.next + 1) % wakes.late.size();
++}
++
++// How long before an event the session is woken for it: the latest of those
++// wakes, and a margin.
++base::TimeDelta WaitOutTime() {
++  return std::clamp(
++      std::ranges::max(Wakes().late) * 1.3 + base::Microseconds(300),
++      kWaitOutLeast, kWaitOutMost);
++}
++
++// Waits on the clock itself until `due`.
++void WaitOut(base::TimeTicks due) {
++  for (int looks = 0; looks < kWaitOutLooks && base::TimeTicks::Now() < due;
++       ++looks) {
++  }
++  Wakes().waited_until = base::TimeTicks::Now();
++}
++
 +}  // namespace
 +
 +// static
@@ -22926,9 +23600,21 @@ index 0000000000..6513a78650
 +  auto scale = [inverse](int ms) {
 +    return std::max(1, base::saturated_cast<int>(std::round(ms * inverse)));
 +  };
-+  scaled_keystroke_min_ms_ = scale(params_.keystroke_delay_min_ms);
-+  scaled_keystroke_max_ms_ =
-+      std::max(scaled_keystroke_min_ms_, scale(params_.keystroke_delay_max_ms));
++  // browser: typed text keeps the typist's own rhythm. The delay range and
++  // the speed set the pace, by the range's middle against the default's (the
++  // typist is then one of that speed: MakeTypist); the hold range stretches
++  // the holds by its middle against the default's, within limits. The sums
++  // are of doubles: the ranges are any integers a caller sends.
++  const double delay_min = std::max(0, params_.keystroke_delay_min_ms);
++  const double delay_max =
++      std::max<double>(delay_min, params_.keystroke_delay_max_ms);
++  pace_ = std::max(1.0, (delay_min + delay_max) / 2.0) / kDefaultDelayMiddleMs *
++          inverse;
++  const double hold_min = std::max(0, params_.key_hold_min_ms);
++  const double hold_max = std::max<double>(hold_min, params_.key_hold_max_ms);
++  hold_scale_ = std::clamp(
++      std::max(1.0, (hold_min + hold_max) / 2.0) / kDefaultHoldMiddleMs,
++      kHoldDialLeast, kHoldDialMost);
 +  scaled_hold_min_ms_ = std::max(kMinHoldMs, scale(params_.key_hold_min_ms));
 +  scaled_hold_max_ms_ = std::max({scaled_hold_min_ms_, kMinHoldRangeTopMs,
 +                                  scale(params_.key_hold_max_ms)});
@@ -22951,9 +23637,9 @@ index 0000000000..6513a78650
 +  started_ = true;
 +  if (params_.chord) {
 +    BuildChord();
++    ReportChord();
 +  } else {
 +    codepoints_ = DecodeUtf8(params_.text);
-+    schedule_.reserve(codepoints_.size() * 5);
 +    BuildSchedule();
 +  }
 +
@@ -22961,28 +23647,30 @@ index 0000000000..6513a78650
 +    Finish(true);
 +    return;
 +  }
-+  dispatch_start_ = base::TimeTicks::Now();
++  // browser: time starts on the keyboard's next report, so that every
++  // session's events lie on the one clock the keyboard reports by.
++  dispatch_start_ = NextReport(base::TimeTicks::Now(), IdentityReportMs());
 +  ContinueHeldRepeat();
 +  DispatchPending();
 +}
 +
 +void KeyboardTypingSession::BuildSchedule() {
 +  intended_index_ = 0;
-+  cursor_time_ = base::TimeDelta();
-+  last_typed_char_ = 0;
++  strokes_.clear();
++  strokes_.reserve(codepoints_.size() + codepoints_.size() / 8);
++  pending_thought_ms_ = 0;
++  pending_break_ms_ = 0;
 +
++  // First which keys are pressed, typos and their corrections included;
++  // then when (PlaceStrokes).
 +  while (intended_index_ < codepoints_.size()) {
 +    const char32_t c = codepoints_[intended_index_];
 +
-+    // A thinking pause may fire before any key, including the first.
++    // A thinking pause lengthens the gap before a key. Before the first key
++    // there is none to lengthen: the caller chose when to start.
 +    if (Bernoulli(params_.thinking_pause_probability)) {
-+      AdvanceMs(RandInt(scaled_thinking_min_ms_, scaled_thinking_max_ms_));
-+    }
-+
-+    // No inter-key delay before the first key or right after a backspace
-+    // burst, where the post-correction pause covers the gap.
-+    if (last_typed_char_ != 0) {
-+      AdvanceInterKeyDelay(c);
++      pending_thought_ms_ +=
++          RandInt(scaled_thinking_min_ms_, scaled_thinking_max_ms_);
 +    }
 +
 +    // An injected typo consumes intended_index_ itself.
@@ -22994,6 +23682,7 @@ index 0000000000..6513a78650
 +    EmitChar(c);
 +    intended_index_++;
 +  }
++  PlaceStrokes();
 +}
 +
 +void KeyboardTypingSession::BuildChord() {
@@ -23012,6 +23701,14 @@ index 0000000000..6513a78650
 +  const double speed = params_.speed_multiplier;
 +  const auto scaled = [speed](int ms) {
 +    return std::max(1, base::saturated_cast<int>(std::round(ms / speed)));
++  };
++  // browser: a key that stays the last one pressed for the keyboard's repeat
++  // delay repeats. The full chord sends no repeats, so however slowly it is
++  // pressed, none of its keys is down alone that long.
++  const auto alone = [this](int ms) {
++    return ms < kAloneLeastMs
++               ? ms
++               : std::min(ms, RandInt(kAloneLeastMs, kAloneMostMs));
 +  };
 +  cursor_time_ = base::TimeDelta();
 +  KeyMapping mapping;
@@ -23032,7 +23729,7 @@ index 0000000000..6513a78650
 +        continue;
 +      }
 +      if (held) {
-+        AdvanceMs(RandInt(scaled(35), scaled(95)));
++        AdvanceMs(alone(RandInt(scaled(35), scaled(95))));
 +      }
 +      // The modifier's own keydown already reports it held, as a real one does.
 +      held |= m.bit;
@@ -23046,14 +23743,14 @@ index 0000000000..6513a78650
 +
 +  if (has_key) {
 +    if (held) {
-+      AdvanceMs(RandInt(scaled(45), scaled(120)));
++      AdvanceMs(alone(RandInt(scaled(45), scaled(120))));
 +    }
 +    schedule_.push_back(
 +        {cursor_time_, /*is_key_up=*/false, mapping.key, mapping.code,
 +         mapping.windows_vkey, held,
 +         (held & kModCommand) ? std::u16string() : mapping.text});
-+    AdvanceMs(RandInt(scaled_hold_min_ms_, scaled_hold_max_ms_) +
-+              RandInt(scaled(15), scaled(45)));
++    AdvanceMs(alone(RandInt(scaled_hold_min_ms_, scaled_hold_max_ms_) +
++                    RandInt(scaled(15), scaled(45))));
 +    schedule_.push_back({cursor_time_, /*is_key_up=*/true, mapping.key,
 +                         mapping.code, mapping.windows_vkey, held,
 +                         std::u16string()});
@@ -23064,7 +23761,7 @@ index 0000000000..6513a78650
 +    if (!(held & it->bit)) {
 +      continue;
 +    }
-+    AdvanceMs(RandInt(scaled(20), scaled(70)));
++    AdvanceMs(alone(RandInt(scaled(20), scaled(70))));
 +    held &= ~it->bit;
 +    schedule_.push_back({cursor_time_, /*is_key_up=*/true, it->key, it->code,
 +                         it->vkey, held, std::u16string(), /*location=*/1});
@@ -23072,40 +23769,59 @@ index 0000000000..6513a78650
 +}
 +
 +void KeyboardTypingSession::EmitChar(char32_t c) {
++  Stroke stroke;
 +  KeyMapping mapping;
 +  if (BuildKeyMapping(c, &mapping)) {
-+    AppendKeyEvents(mapping.key, mapping.code, mapping.windows_vkey,
-+                    mapping.needs_shift ? kModShift : 0, mapping.text);
-+    last_typed_char_ = c;
-+    return;
-+  }
-+  // A char outside the static map is dispatched as a keyDown carrying only
-+  // the 'text' field, which the DOM routes through the input method path.
-+  std::u16string text16;
-+  if (c < 0x10000) {
-+    text16.push_back(static_cast<char16_t>(c));
++    stroke.key = std::move(mapping.key);
++    stroke.code = std::move(mapping.code);
++    stroke.windows_vkey = mapping.windows_vkey;
++    stroke.text = std::move(mapping.text);
++    stroke.base = mapping.base;
++    // A shifted character is typed with Shift: its own keydown first and its
++    // keyup after, as a hand does it. The flag alone, with no Shift key ever
++    // pressed, is something no keyboard produces.
++    stroke.shifted = mapping.needs_shift;
 +  } else {
-+    const char32_t v = c - 0x10000;
-+    text16.push_back(static_cast<char16_t>(0xD800 + (v >> 10)));
-+    text16.push_back(static_cast<char16_t>(0xDC00 + (v & 0x3FF)));
++    // A char outside the static map is dispatched as a keyDown carrying only
++    // the 'text' field, which the DOM routes through the input method path.
++    if (c < 0x10000) {
++      stroke.text.push_back(static_cast<char16_t>(c));
++    } else {
++      const char32_t v = c - 0x10000;
++      stroke.text.push_back(static_cast<char16_t>(0xD800 + (v >> 10)));
++      stroke.text.push_back(static_cast<char16_t>(0xDC00 + (v & 0x3FF)));
++    }
++    // The key value is the character itself, as UTF-8.
++    stroke.key = base::UTF16ToUTF8(stroke.text);
 +  }
-+  // The key value is the character itself, as UTF-8.
-+  AppendKeyEvents(/*key=*/base::UTF16ToUTF8(text16),
-+                  /*code=*/"", /*windows_vkey=*/0, /*modifiers=*/0, text16);
-+  last_typed_char_ = c;
++  AppendStroke(std::move(stroke));
 +}
 +
 +void KeyboardTypingSession::EmitBackspace() {
-+  AppendKeyEvents("Backspace", "Backspace", 8, 0, std::u16string());
-+  // A backspace must not anchor a bigram with the next intended char.
-+  last_typed_char_ = 0;
++  Stroke stroke;
++  stroke.key = "Backspace";
++  stroke.code = "Backspace";
++  stroke.windows_vkey = 8;
++  stroke.base = '\b';
++  AppendStroke(std::move(stroke));
++}
++
++void KeyboardTypingSession::AppendStroke(Stroke stroke) {
++  stroke.thought_ms = pending_thought_ms_;
++  stroke.break_ms = pending_break_ms_;
++  pending_thought_ms_ = 0;
++  pending_break_ms_ = 0;
++  strokes_.push_back(std::move(stroke));
++}
++
++void KeyboardTypingSession::AddBreak(int ms) {
++  pending_break_ms_ += std::max(ms, 1);
 +}
 +
 +size_t KeyboardTypingSession::TypeChunk(size_t start, int max_chars) {
 +  size_t position = start;
 +  for (int typed = 0; typed < max_chars && position < codepoints_.size();
 +       ++typed, ++position) {
-+    AdvanceInterKeyDelay(codepoints_[position]);
 +    EmitChar(codepoints_[position]);
 +  }
 +  return position;
@@ -23113,73 +23829,271 @@ index 0000000000..6513a78650
 +
 +void KeyboardTypingSession::EmitBackspaceBurst(int count) {
 +  for (int k = 0; k < count; k++) {
-+    if (k > 0) {
-+      AdvanceMs(RandInt(kBackspaceMinMs, kBackspaceMaxMs));
-+    }
 +    EmitBackspace();
 +  }
 +}
 +
 +void KeyboardTypingSession::RetypeRange(size_t from, size_t to) {
 +  for (size_t k = from; k < to; k++) {
-+    if (k > from) {
-+      AdvanceInterKeyDelay(codepoints_[k]);
-+    }
 +    EmitChar(codepoints_[k]);
 +  }
 +}
 +
-+void KeyboardTypingSession::AppendKeyEvents(const std::string& key,
-+                                            const std::string& code,
-+                                            int windows_vkey,
-+                                            int modifiers,
-+                                            const std::u16string& text) {
-+  // A shifted character is typed with Shift: its own keydown first and its
-+  // keyup after, as a hand does it. The flag alone, with no Shift key ever
-+  // pressed, is something no keyboard produces.
-+  const bool shifted = (modifiers & kModShift) && key != "Shift";
-+  const double speed = params_.speed_multiplier;
-+  const auto scaled = [speed](int ms) {
-+    return std::max(1, base::saturated_cast<int>(std::round(ms / speed)));
++void KeyboardTypingSession::PlaceStrokes() {
++  if (strokes_.empty()) {
++    return;
++  }
++  const Typist typist = MakeTypist(browser::PersonaSeed(), pace_);
++  TypingDraws draws(params_.seed);
++  // The events with their times in ms, which stay movable until the end: a
++  // key's release moves when the next key overlaps it, and a Shift's when
++  // another key is typed under it.
++  struct Timed {
++    double ms = 0;
++    bool is_shift = false;
++    ScheduledEvent event;
 +  };
-+  if (shifted) {
-+    schedule_.push_back({cursor_time_, /*is_key_up=*/false, "Shift",
-+                         "ShiftLeft", 16, kModShift, std::u16string(),
-+                         /*location=*/1});
-+    AdvanceMs(RandInt(scaled(30), scaled(90)));
++  std::vector<Timed> events;
++  events.reserve(strokes_.size() * 2 + 16);
++  const auto shift_event = [](bool is_key_up) {
++    ScheduledEvent event;
++    event.is_key_up = is_key_up;
++    event.key = "Shift";
++    event.code = "ShiftLeft";
++    event.windows_vkey = 16;
++    event.location = 1;
++    return event;
++  };
++  // What tells one key from another: its code, or the character itself for
++  // one outside the map.
++  const auto id_of = [](const Stroke& stroke) -> const std::string& {
++    return stroke.code.empty() ? stroke.key : stroke.code;
++  };
++  // When each key last came up: it cannot go down again before.
++  std::map<std::string, double> last_release;
++  const Stroke* prev = nullptr;
++  double prev_press = 0;
++  int prev_up = -1;         // in `events`: the release of the key before
++  int shift_up = -1;        // the release of the Shift now or last held
++  bool shift_open = false;  // the stroke before was typed with it
++  double wait_until = 0;    // a Shift coming up, which a plain key awaits
++  // The draw of the gap to this stroke, made with the stroke before so that
++  // its hold can lean on it.
++  double z_gap = 0;
++
++  for (size_t i = 0; i < strokes_.size(); ++i) {
++    const Stroke& stroke = strokes_[i];
++    // Every stroke takes the same draws in the same order, whatever it needs.
++    const double z_next = draws.Normal();
++    const double z_hold = draws.Normal();
++    const double u_order = draws.Unit();
++    const double u_order_ms = draws.Unit();
++    const double u_overlap = draws.Unit();
++    const double u_again = draws.Unit();
++    const double z_lead = draws.Normal();
++    const double z_shift_up = draws.Normal();
++    const double u_after_shift = draws.Unit();
++    const double u_floor = draws.Unit();
++
++    const bool first = prev == nullptr;
++    const bool is_break = stroke.break_ms > 0 && !first;
++    // Shift is still down from the stroke before.
++    const bool held = stroke.shifted && shift_open && !is_break;
++    // A Shift of this stroke's own goes down this long before its key: the
++    // measured lead.
++    std::optional<double> lead;
++    if (stroke.shifted && !held) {
++      lead = std::max(typist.ShiftLead(z_lead), 20.0 + 10.0 * u_floor);
++    }
++    double press = 0;
++    if (first) {
++      // Time starts here.
++    } else if (is_break) {
++      // A break stands in for the gap, counted from the last key to come up;
++      // a Shift of this stroke's goes down after that key.
++      double latest_release = 0;
++      for (const Timed& timed : events) {
++        if (timed.event.is_key_up) {
++          latest_release = std::max(latest_release, timed.ms);
++        }
++      }
++      // (The pauses are whole milliseconds: a drawn part of one keeps the
++      // times off the whole ones.)
++      press = std::max(latest_release, wait_until) + stroke.break_ms +
++              stroke.thought_ms + u_overlap;
++      if (lead) {
++        press = std::max(press, latest_release + 10.0 + 30.0 * u_floor + *lead);
++      }
++    } else {
++      if (lead) {
++        // The hand goes to Shift once the key before is up (or a little
++        // before), then to the key: timed from that key's release, not from
++        // its press.
++        double down = std::max(events[prev_up].ms + stroke.thought_ms +
++                                   typist.stretch * typist.ShiftWait(z_gap),
++                               prev_press + 8.0 + 30.0 * u_floor);
++        if (shift_up >= 0) {
++          down = std::max(down, events[shift_up].ms + 10.0 + 30.0 * u_floor);
++        }
++        press = down + *lead;
++      } else if (prev->shifted && !stroke.shifted) {
++        // After a key typed with Shift the hand leaves Shift first: timed
++        // from Shift's release, as measured. A key never goes down under a
++        // Shift it is not typed with: what would fall before the moment
++        // after Shift's release is folded back behind it.
++        double after =
++            stroke.thought_ms + typist.stretch * typist.ShiftNext(z_gap);
++        const double soonest = wait_until - events[shift_up].ms;
++        if (after < soonest) {
++          after = soonest + 0.6 * (soonest - after);
++        }
++        press = events[shift_up].ms + after;
++      } else {
++        // Without context every pair is timed as one kind.
++        const std::optional<KeyPair> pair =
++            params_.context_aware ? PairOf(prev->base, stroke.base)
++                                  : std::optional<KeyPair>(kSameHand);
++        const double letters = params_.context_aware
++                                   ? LetterPairFactor(prev->base, stroke.base)
++                                   : 1.0;
++        press = prev_press + stroke.thought_ms +
++                typist.stretch * typist.Gap(pair, z_gap) * letters;
++      }
++      // A key does not go down again within a moment of coming up,
++      // whichever key was pressed in between.
++      const auto again = last_release.find(id_of(stroke));
++      if (again != last_release.end()) {
++        press = std::max(press, again->second + 18.0 + 27.0 * u_again);
++      }
++      if (!lead && !held) {
++        press = std::max(press, wait_until);
++      }
++    }
++
++    std::optional<KeyPair> next_pair;
++    if (i + 1 < strokes_.size() && !(strokes_[i + 1].break_ms > 0) &&
++        params_.context_aware) {
++      next_pair = PairOf(stroke.base, strokes_[i + 1].base);
++    }
++    z_gap = z_next;
++    const double lean = next_pair ? kHoldLean[*next_pair] * -z_gap : 0.0;
++    const double release =
++        press + typist.Hold(stroke.base, next_pair, z_hold, lean, hold_scale_);
++
++    if (prev_up >= 0 && !is_break && events[prev_up].ms > press) {
++      // The key before is still down. A very short overlap is lifted a
++      // little, and the key nearly always comes up before this one does.
++      double& up = events[prev_up].ms;
++      double over = up - press;
++      over += kOverlapLiftMs * std::sqrt(u_overlap) *
++              std::exp(-over / kOverlapLiftMs);
++      up = press + over;
++      if (up > release && u_order < kKeepReleaseOrder) {
++        // (Never later than it was, nor a hold cut very short.)
++        up = std::min(
++            up,
++            std::max(release + kKeepReleaseOrderMs *
++                                   std::log(1.0 - 0.999 * u_order_ms),
++                     prev_press + kMinTypedHoldMs + 12.0 * (1.0 + u_overlap)));
++      }
++      last_release[id_of(*prev)] = up;
++    }
++
++    if (stroke.shifted) {
++      // Up around its key's release, more often just before it, and not
++      // within a moment of the key's press: what would fall earlier is
++      // folded back behind that moment.
++      double up_at = release + typist.ShiftUp(z_shift_up);
++      const double soonest = press + 15.0;
++      if (up_at < soonest) {
++        up_at = soonest + 0.35 * (soonest - up_at);
++      }
++      if (held) {
++        events[shift_up].ms = up_at;
++      } else {
++        events.push_back(
++            {press - *lead, /*is_shift=*/true, shift_event(false)});
++        shift_up = static_cast<int>(events.size());
++        events.push_back({up_at, /*is_shift=*/true, shift_event(true)});
++      }
++      wait_until = up_at + 5.0 + 4.0 * u_after_shift;
++    }
++    shift_open = stroke.shifted;
++
++    ScheduledEvent down_event;
++    down_event.key = stroke.key;
++    down_event.code = stroke.code;
++    down_event.windows_vkey = stroke.windows_vkey;
++    down_event.modifiers = stroke.shifted ? kModShift : 0;
++    down_event.base = stroke.base;
++    // The keyUp carries no text; the keyDown inserted it.
++    ScheduledEvent up_event = down_event;
++    up_event.is_key_up = true;
++    down_event.text = stroke.text;
++    events.push_back({press, /*is_shift=*/false, std::move(down_event)});
++    prev_up = static_cast<int>(events.size());
++    events.push_back({release, /*is_shift=*/false, std::move(up_event)});
++    prev = &stroke;
++    prev_press = press;
++    last_release[id_of(stroke)] = release;
 +  }
-+  schedule_.push_back({cursor_time_, /*is_key_up=*/false, key, code,
-+                       windows_vkey, modifiers, text});
-+  cursor_time_ +=
-+      base::Milliseconds(RandInt(scaled_hold_min_ms_, scaled_hold_max_ms_));
-+  // The keyUp carries no text; the keyDown inserted it.
-+  schedule_.push_back({cursor_time_, /*is_key_up=*/true, key, code,
-+                       windows_vkey, modifiers, std::u16string()});
-+  if (shifted) {
-+    AdvanceMs(RandInt(scaled(10), scaled(45)));
-+    schedule_.push_back({cursor_time_, /*is_key_up=*/true, "Shift", "ShiftLeft",
-+                         16, 0, std::u16string(),
-+                         /*location=*/1});
++
++  // What the keyboard and the system make of the hand's events: each waits
++  // for the keyboard's next report, and a Shift held alone repeats.
++  std::ranges::stable_sort(events, {}, &Timed::ms);
++  std::vector<HandEvent> hand;
++  hand.reserve(events.size());
++  for (const Timed& timed : events) {
++    hand.push_back({timed.ms, !timed.event.is_key_up, timed.is_shift});
 +  }
++  bool shift_down = false;
++  schedule_.reserve(events.size());
++  // The first event's report is where time starts.
++  for (const ReportedEvent& reported :
++       ReportEvents(hand, hand.front().ms, typist.report_ms, params_.seed,
++                    /*repeat_shift=*/true)) {
++    const Timed& timed = events[reported.source];
++    ScheduledEvent event = timed.event;
++    event.time_offset =
++        base::Microseconds(base::ClampRound<int64_t>(reported.ms * 1000.0));
++    if (reported.repeat) {
++      // A held Shift's keydown again.
++      event.repeat = true;
++    } else if (timed.is_shift) {
++      shift_down = !event.is_key_up;
++    } else if (event.is_key_up) {
++      // A key reports what it gives under the Shift of that moment: "A"
++      // released after its Shift reads "a", and "a" released under the next
++      // key's Shift reads "A".
++      std::string key = KeyUnderShift(event.base, shift_down);
++      if (!key.empty()) {
++        event.key = std::move(key);
++      }
++    } else {
++      // A key goes down under Shift exactly when its stroke asked for it.
++      DCHECK_EQ(shift_down, (event.modifiers & kModShift) != 0);
++    }
++    event.modifiers = shift_down ? kModShift : 0;
++    schedule_.push_back(std::move(event));
++  }
++  strokes_.clear();
 +}
 +
-+void KeyboardTypingSession::AdvanceInterKeyDelay(char32_t next_char) {
-+  int min_ms = scaled_keystroke_min_ms_;
-+  int max_ms = scaled_keystroke_max_ms_;
-+  if (params_.context_aware && last_typed_char_ != 0) {
-+    double multiplier = 1.0;
-+    if (IsCommonBigram(last_typed_char_, next_char)) {
-+      multiplier = 0.7;
-+    } else if (last_typed_char_ == next_char) {
-+      multiplier = 0.8;
-+    } else if (last_typed_char_ == U' ' ||
-+               IsAsciiPunctuation(last_typed_char_)) {
-+      multiplier = 1.2;
-+    }
-+    min_ms = std::max(1, static_cast<int>(min_ms * multiplier));
-+    max_ms = std::max(min_ms, static_cast<int>(max_ms * multiplier));
++void KeyboardTypingSession::ReportChord() {
++  // browser: a chord's keys reach the browser through the keyboard's reports
++  // as typed ones do, counted from the session's start.
++  std::vector<HandEvent> hand;
++  hand.reserve(schedule_.size());
++  for (const ScheduledEvent& event : schedule_) {
++    hand.push_back({event.time_offset.InMillisecondsF(), !event.is_key_up,
++                    /*is_shift=*/false});
 +  }
-+  AdvanceMs(RandInt(min_ms, max_ms));
++  for (const ReportedEvent& reported :
++       ReportEvents(hand, /*origin=*/0.0, IdentityReportMs(), rng_(),
++                    /*repeat_shift=*/false)) {
++    schedule_[reported.source].time_offset =
++        base::Microseconds(base::ClampRound<int64_t>(reported.ms * 1000.0));
++  }
 +}
 +
 +void KeyboardTypingSession::AdvanceMs(int ms) {
@@ -23249,8 +24163,8 @@ index 0000000000..6513a78650
 +}
 +
 +void KeyboardTypingSession::InjectAdjacentTypo(char32_t wrong_char) {
-+  // BuildSchedule already added the inter-key delay for this slot, computed
-+  // for the intended char; the wrong key is adjacent, so it is close enough.
++  // The wrong key is typed as any key is: its gap is the one from the key
++  // before to it.
 +  EmitChar(wrong_char);
 +
 +  // Keep typing 1..4 intended chars before noticing, as a typist would.
@@ -23258,41 +24172,39 @@ index 0000000000..6513a78650
 +  const size_t end = TypeChunk(position, RandInt(1, 4));
 +  const int typed_after = static_cast<int>(end - position);
 +
-+  AdvanceMs(RandInt(kRealizePauseMinMs, kRealizePauseMaxMs));
++  AddBreak(RandInt(kRealizePauseMinMs, kRealizePauseMaxMs));
 +  // Delete the chars typed after the typo, then the typo itself.
 +  EmitBackspaceBurst(typed_after + 1);
 +
-+  // Recover and re-type [intended_index_, end). The recovery pause covers
-+  // the first gap, and the corrected pass never gets a second typo.
-+  AdvanceMs(RandInt(kPostCorrectionMinMs, kPostCorrectionMaxMs));
++  // Recover and re-type [intended_index_, end). The recovery pause stands in
++  // for the first gap, and the corrected pass never gets a second typo.
++  AddBreak(RandInt(kPostCorrectionMinMs, kPostCorrectionMaxMs));
 +  RetypeRange(intended_index_, end);
 +  intended_index_ = end;
 +}
 +
 +void KeyboardTypingSession::InjectDoubledTypo(char32_t intended_char) {
-+  // The char is typed correctly, then again by accident.
++  // The char is typed correctly, then again by accident: the same key
++  // twice, which has its own timing.
 +  EmitChar(intended_char);
-+  AdvanceInterKeyDelay(intended_char);  // a (c, c) bigram, so fast
 +  EmitChar(intended_char);
 +
 +  const size_t position = intended_index_ + 1;
 +  const size_t end = TypeChunk(position, RandInt(1, 4));
 +  const int typed_after = static_cast<int>(end - position);
 +
-+  AdvanceMs(RandInt(kRealizePauseMinMs, kRealizePauseMaxMs));
++  AddBreak(RandInt(kRealizePauseMinMs, kRealizePauseMaxMs));
 +  // Delete the duplicate and everything typed after it.
 +  EmitBackspaceBurst(typed_after + 1);
 +
 +  // The correct char is still in the field; re-type only what followed.
-+  AdvanceMs(RandInt(kPostCorrectionMinMs, kPostCorrectionMaxMs));
++  AddBreak(RandInt(kPostCorrectionMinMs, kPostCorrectionMaxMs));
 +  RetypeRange(position, end);
 +  intended_index_ = end;
 +}
 +
 +void KeyboardTypingSession::InjectOmissionTypo(char32_t intended_char) {
-+  // BuildSchedule already added the inter-key delay for intended_char's
-+  // slot; the first char after the omission takes that slot, so it gets no
-+  // delay of its own.
++  // The char after the omitted one is typed in its place.
 +  size_t position = intended_index_ + 1;
 +  if (position >= codepoints_.size()) {
 +    EmitChar(intended_char);
@@ -23304,19 +24216,18 @@ index 0000000000..6513a78650
 +  int typed_after = 1;
 +  const int detect_target = RandInt(1, 4);
 +  while (typed_after < detect_target && position < codepoints_.size()) {
-+    AdvanceInterKeyDelay(codepoints_[position]);
 +    EmitChar(codepoints_[position]);
 +    position++;
 +    typed_after++;
 +  }
 +
-+  AdvanceMs(RandInt(kRealizePauseMinMs, kRealizePauseMaxMs));
++  AddBreak(RandInt(kRealizePauseMinMs, kRealizePauseMaxMs));
 +  // Only the chars typed after the omission are deleted; the omitted char
 +  // was never typed.
 +  EmitBackspaceBurst(typed_after);
 +
 +  // Re-type the omitted char and everything just deleted.
-+  AdvanceMs(RandInt(kPostCorrectionMinMs, kPostCorrectionMaxMs));
++  AddBreak(RandInt(kPostCorrectionMinMs, kPostCorrectionMaxMs));
 +  RetypeRange(intended_index_, position);
 +  intended_index_ = position;
 +}
@@ -23331,7 +24242,13 @@ index 0000000000..6513a78650
 +    return;
 +  }
 +
-+  const base::TimeDelta elapsed = base::TimeTicks::Now() - dispatch_start_;
++  // browser: how late this wake came, when it was a precise one.
++  const base::TimeTicks task_began = base::TimeTicks::Now();
++  if (!precise_wake_at_.is_null()) {
++    NoteWake(precise_wake_at_, task_began);
++    precise_wake_at_ = base::TimeTicks();
++  }
++  const base::TimeDelta wait_out = WaitOutTime();
 +
 +  // Focus the widget, as dispatchKeyEvent does on every call. Cheap when
 +  // already focused.
@@ -23339,8 +24256,20 @@ index 0000000000..6513a78650
 +
 +  while (next_index_ < schedule_.size()) {
 +    const ScheduledEvent& ev = schedule_[next_index_];
-+    if (ev.time_offset > elapsed + kBatchDispatchSlack) {
-+      break;
++    // browser: an event goes out at its time, not before and, when the wake
++    // was in time, not after: the last stretch is waited out here (see
++    // kWaitOutLeast). The events of one keyboard report, a tenth of a
++    // millisecond apart, go out in one wake that way. One task waits
++    // kWaitOutMost in all: what is left takes a wake of its own, and the
++    // thread's other work goes in between. A repeat is not waited for.
++    const base::TimeTicks due = dispatch_start_ + ev.time_offset;
++    const base::TimeTicks now = base::TimeTicks::Now();
++    if (due > now) {
++      if (ev.repeat || due - now > wait_out ||
++          due - task_began > kWaitOutMost) {
++        break;
++      }
++      WaitOut(due);
 +    }
 +
 +    // kKeyDown is what the dispatchKeyEvent path uses for "keyDown": the
@@ -23367,8 +24296,15 @@ index 0000000000..6513a78650
 +      blink_modifiers |= blink::WebInputEvent::kIsAutoRepeat;
 +    }
 +
-+    input::NativeWebKeyboardEvent event(type, blink_modifiers,
-+                                        dispatch_start_ + ev.time_offset);
++    // browser: stamped as it goes, as Chrome stamps a real key event when its
++    // UI thread handles it, so the page finds it no older than its trip (a
++    // fifth of a millisecond). Each stamp is at least 50 us after the one
++    // before (synthetic_mouse_path_gesture.cc has the same rules for a
++    // press).
++    const base::TimeTicks stamp =
++        std::max(base::TimeTicks::Now(), last_stamp_ + base::Microseconds(50));
++    last_stamp_ = stamp;
++    input::NativeWebKeyboardEvent event(type, blink_modifiers, stamp);
 +    event.windows_key_code = ev.windows_vkey;
 +    event.native_key_code = ev.windows_vkey;
 +    event.skip_if_unhandled = true;
@@ -23398,17 +24334,39 @@ index 0000000000..6513a78650
 +      return;
 +    }
 +    next_index_++;
++    // browser: or take the widget away.
++    if (!widget_host_) {
++      Finish(KeysDown());
++      return;
++    }
 +  }
 +
 +  if (next_index_ >= schedule_.size() && !ScheduleAutoRepeat()) {
 +    Finish(true);
 +    return;
 +  }
-+  const base::TimeDelta wait =
-+      std::max(schedule_[next_index_].time_offset - elapsed, base::TimeDelta());
-+  timer_.Start(FROM_HERE, wait,
++  // browser: the wake for the next event is a precise one, a little before
++  // the event (the rest is waited out above). An ordinary delayed task runs
++  // up to a tick of Windows' timer late (15.6 ms), and every key would go out
++  // that long after its time. Precise wakes are for short waits only (base's
++  // kMaxPreciseDelay, 36 ms): a longer wait first takes an ordinary wake
++  // before that, which finds nothing due and comes here again.
++  const ScheduledEvent& next = schedule_[next_index_];
++  const base::TimeTicks wake = dispatch_start_ + next.time_offset -
++                               (next.repeat ? base::TimeDelta() : wait_out);
++  const base::TimeTicks now = base::TimeTicks::Now();
++  const bool soon = wake - now <= kPreciseWakeWithin;
++  // Only a wake that waits on the timer says something about it: not one
++  // asked for at once (the task's waiting was used up).
++  if (soon && wake - now >= base::Milliseconds(1)) {
++    precise_wake_at_ = wake;
++  }
++  timer_.Start(FROM_HERE,
++               soon ? std::max(wake, now) : wake - kPreciseWakeWithin,
 +               base::BindOnce(&KeyboardTypingSession::DispatchPending,
-+                              weak_factory_.GetWeakPtr()));
++                              weak_factory_.GetWeakPtr()),
++               soon ? base::subtle::DelayPolicy::kPrecise
++                    : base::subtle::DelayPolicy::kFlexibleNoSooner);
 +}
 +
 +std::optional<KeyboardTypingSession::HeldRepeat>
@@ -23446,7 +24404,11 @@ index 0000000000..6513a78650
 +    return;
 +  }
 +  std::vector<ScheduledEvent> repeats;
-+  base::TimeDelta at = std::max(held.next - dispatch_start_, base::TimeDelta());
++  // browser: when it is due, and not before now. (The session's own time
++  // starts on the keyboard's next report, up to 8 ms from now; the held key's
++  // repeats are the system's, which waits for no report.)
++  base::TimeDelta at =
++      std::max(held.next, base::TimeTicks::Now()) - dispatch_start_;
 +  while (at < *until) {
 +    ScheduledEvent ev;
 +    ev.time_offset = at;
@@ -23461,7 +24423,7 @@ index 0000000000..6513a78650
 +    if (Bernoulli(0.05)) {
 +      gap_ms += RandInt(5, 15);
 +    }
-+    at += base::Milliseconds(gap_ms);
++    at += base::Milliseconds(gap_ms) + PartOfAMillisecond();
 +  }
 +  if (repeats.empty()) {
 +    return;
@@ -23498,8 +24460,9 @@ index 0000000000..6513a78650
 +      gap_ms += RandInt(5, 15);
 +    }
 +  }
-+  next.time_offset =
-+      std::max(next.time_offset + base::Milliseconds(gap_ms), now);
++  next.time_offset = std::max(
++      next.time_offset + base::Milliseconds(gap_ms) + PartOfAMillisecond(),
++      now);
 +  schedule_.push_back(std::move(next));
 +  return true;
 +}
@@ -23557,6 +24520,10 @@ index 0000000000..6513a78650
 +  return dist(rng_);
 +}
 +
++base::TimeDelta KeyboardTypingSession::PartOfAMillisecond() {
++  return base::Microseconds(RandInt(0, 999));
++}
++
 +bool KeyboardTypingSession::Bernoulli(double p) {
 +  if (p <= 0.0) {
 +    return false;
@@ -23570,10 +24537,10 @@ index 0000000000..6513a78650
 +}  // namespace content
 diff --git a/content/browser/devtools/protocol/keyboard_typing_session.h b/content/browser/devtools/protocol/keyboard_typing_session.h
 new file mode 100644
-index 0000000000..9371936d17
+index 0000000000..e4e5c07aca
 --- /dev/null
 +++ b/content/browser/devtools/protocol/keyboard_typing_session.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,292 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23599,12 +24566,22 @@ index 0000000000..9371936d17
 +// Drives the typing animation behind Input.dispatchKeystrokes. The session
 +// precomputes the full event schedule from the input text, including any
 +// injected typos and their corrections, then walks it on the UI thread with a
-+// base::OneShotTimer, dispatching keyDown / keyUp events straight to
++// base::DeadlineTimer, dispatching keyDown / keyUp events straight to
 +// RenderWidgetHostImpl::ForwardKeyboardEventWithCommands.
 +//
 +// Dispatching from the browser process is the point: with one
 +// Input.dispatchKeyEvent per key, every keystroke pays a serialization and
 +// ack round trip, which caps the achievable typing rate.
++//
++// browser: typed text has one person's rhythm. Each key is timed from the key
++// before it, by a gap that depends on the two keys, and is held for a time
++// of its own, so a quick hand has the next key down before the last is up,
++// as people do. The typist is the identity's: the same persona seed types
++// with the same speed and holds in every session (the .cc file says what was
++// measured, and by whom). And there is one keyboard: every key event, a
++// chord's too, waits for the keyboard's next report (every 8 ms) and is
++// sent a small, uneven moment after it, to a few microseconds, stamped as it
++// goes.
 +//
 +// One session serves one CDP call. InputHandler owns it; destroying it
 +// mid-stream stops the timer and runs the completion callback with
@@ -23626,18 +24603,27 @@ index 0000000000..9371936d17
 +  struct Params {
 +    // UTF-8 text to type. '\n' maps to Enter.
 +    std::string text;
-+    // Divides every time interval (delays, holds, pauses). 1.0 is the
-+    // baseline; larger values type faster. The session holds it to 0.05 to
-+    // 20, and takes anything but a positive number as 1.0.
++    // Sets the pace, with the delay range below, and divides the thinking
++    // pauses. 1.0 is the identity's own typing; larger values type faster,
++    // as a faster typist does (the keys overlap more, the holds hardly
++    // change), up to about 110 words a minute, where it stops: nobody types
++    // a rhythm ten times as fast. The session holds it to 0.05 to 20, and
++    // takes anything but a positive number as 1.0.
 +    double speed_multiplier = 1.0;
-+    // Inter-keystroke delay range in ms, before speed scaling.
++    // The pace, as a range in ms: the range's middle over the default's
++    // (160 ms) is how much slower the typist types. The defaults leave the
++    // typist's own pace.
 +    int keystroke_delay_min_ms = 60;
 +    int keystroke_delay_max_ms = 260;
-+    // Key hold range in ms between keyDown and keyUp: people hold a key
-+    // about 70-120 ms.
++    // The same for how long a key is held: the typist's holds are stretched
++    // by the range's middle over the default's (97.5 ms), by 0.6 to 1.6 at
++    // most. A typed key's hold is never as long as the keyboard's repeat
++    // delay.
 +    int key_hold_min_ms = 65;
 +    int key_hold_max_ms = 130;
-+    // Whether bigram / repeat / punctuation timing adjustments apply.
++    // Whether a gap depends on the two keys it lies between: which hands and
++    // fingers press them, and how often the two letters meet. Without it
++    // every pair of keys is timed alike.
 +    bool context_aware = true;
 +    // Per-character probability of a "thinking pause" before the key.
 +    double thinking_pause_probability = 0.0;
@@ -23712,6 +24698,26 @@ index 0000000000..9371936d17
 +    std::u16string text;  // only set for the keyDown of printable chars
 +    int location = 0;     // KeyboardEvent.location: 1 left, 2 right
 +    bool repeat = false;  // an auto-repeat keydown of a held key
++    // For typed text: the key's own character, the one it gives without
++    // Shift; 0 for a key outside the map.
++    char base = 0;
++  };
++
++  // One key of typed text, before it has a time. The schedule is built in
++  // two steps: which keys are pressed, typos and their corrections included
++  // (strokes_), then when each goes down and comes up (PlaceStrokes).
++  struct Stroke {
++    std::string key;
++    std::string code;
++    int windows_vkey = 0;
++    std::u16string text;
++    char base = 0;         // as ScheduledEvent's
++    bool shifted = false;  // typed with Shift held
++    // A pause before the key: a thought is added to its gap, a break stands
++    // in for the gap and counts from the last key to come up (noticing a
++    // typo, finding the place again).
++    double thought_ms = 0;
++    double break_ms = 0;
 +  };
 +
 +  // Schedule generation, run from Start().
@@ -23719,22 +24725,24 @@ index 0000000000..9371936d17
 +  void BuildChord();
 +  void EmitChar(char32_t c);
 +  void EmitBackspace();
-+  void AppendKeyEvents(const std::string& key,
-+                       const std::string& code,
-+                       int windows_vkey,
-+                       int modifiers,
-+                       const std::u16string& text);
-+  // Adds the inter-key delay between the previous key and the next keyDown.
-+  void AdvanceInterKeyDelay(char32_t next_char);
++  // Appends the stroke, with the pauses that wait for the next key.
++  void AppendStroke(Stroke stroke);
++  // The next stroke comes after a break of `ms`.
++  void AddBreak(int ms);
++  // Times strokes_ as the identity's typist types them, into schedule_.
++  void PlaceStrokes();
++  // For a chord: moves its timeline on.
 +  void AdvanceMs(int ms);
-+  // Types up to `max_chars` codepoints from `start`, each after an inter-key
-+  // delay, stopping at the end of the input. Returns the position after the
-+  // last typed codepoint.
++  // For a chord: puts its events on the keyboard's reports, as PlaceStrokes
++  // does for typed text.
++  void ReportChord();
++  // Types up to `max_chars` codepoints from `start`, stopping at the end of
++  // the input. Returns the position after the last typed codepoint.
 +  size_t TypeChunk(size_t start, int max_chars);
-+  // Emits `count` backspaces with fast inter-key gaps.
++  // Emits `count` backspaces.
 +  void EmitBackspaceBurst(int count);
-+  // Re-types the codepoints in [from, to) without an inter-key delay before
-+  // the first one; the caller's recovery pause covers that gap.
++  // Re-types the codepoints in [from, to); the caller's recovery pause
++  // stands in for the gap before the first one.
 +  void RetypeRange(size_t from, size_t to);
 +
 +  // Typo injection. Each moves intended_index_ past the consumed characters.
@@ -23772,6 +24780,9 @@ index 0000000000..9371936d17
 +  int RandInt(int min_inclusive, int max_inclusive);
 +  double RandDouble();  // [0.0, 1.0)
 +  bool Bernoulli(double p);
++  // A drawn part of a millisecond, for a held key's repeats, whose times
++  // are drawn in whole ones.
++  base::TimeDelta PartOfAMillisecond();
 +
 +  base::WeakPtr<RenderWidgetHostImpl> widget_host_;
 +  Params params_;
@@ -23788,21 +24799,33 @@ index 0000000000..9371936d17
 +  size_t intended_index_ = 0;
 +  // Typos the schedule injects, each corrected; reported on completion.
 +  int typos_ = 0;
-+  // The previously typed char, typos included, for the context-aware bigram
-+  // timing. Zero before the first key and after a backspace burst.
-+  char32_t last_typed_char_ = 0;
-+  // Cursor in the schedule timeline: the next appended event fires here.
++  // The keys of typed text, in the order pressed, until PlaceStrokes has
++  // timed them; and the pauses that wait for the next one.
++  std::vector<Stroke> strokes_;
++  double pending_thought_ms_ = 0;
++  double pending_break_ms_ = 0;
++  // What the caller's delay range and speed ask of the typist's pace (2.0 is
++  // half the typist's own speed), and its hold range of the holds: 1.0
++  // leaves them as they are.
++  double pace_ = 1.0;
++  double hold_scale_ = 1.0;
++  // A chord's cursor in the schedule timeline: its next event fires here.
 +  base::TimeDelta cursor_time_;
-+  // Speed-scaled versions of the params_ time ranges.
-+  int scaled_keystroke_min_ms_ = 1;
-+  int scaled_keystroke_max_ms_ = 1;
++  // Speed-scaled versions of the params_ time ranges: a chord's holds and
++  // the thinking pauses.
 +  int scaled_hold_min_ms_ = 0;
 +  int scaled_hold_max_ms_ = 0;
 +  int scaled_thinking_min_ms_ = 0;
 +  int scaled_thinking_max_ms_ = 0;
 +
 +  base::TimeTicks dispatch_start_;
-+  base::OneShotTimer timer_;
++  // The stamp of the event sent last: the next one's is after it.
++  base::TimeTicks last_stamp_;
++  // Wakes the session a little before its next event (DispatchPending):
++  // precisely, when the event is near.
++  base::DeadlineTimer timer_;
++  // When the precise wake now armed was asked for; null for an ordinary one.
++  base::TimeTicks precise_wake_at_;
 +  bool started_ = false;
 +  base::WeakPtrFactory<KeyboardTypingSession> weak_factory_{this};
 +};
@@ -23810,6 +24833,236 @@ index 0000000000..9371936d17
 +}  // namespace content
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_KEYBOARD_TYPING_SESSION_H_
+diff --git a/content/browser/devtools/protocol/keyboard_typing_tables.inc b/content/browser/devtools/protocol/keyboard_typing_tables.inc
+new file mode 100644
+index 0000000000..db021b163d
+--- /dev/null
++++ b/content/browser/devtools/protocol/keyboard_typing_tables.inc
+@@ -0,0 +1,224 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++// The tables keyboard_typing_session.cc times typed text by. It includes
++// this file inside its namespace, after the sizes the arrays use.
++//
++// By typing speed in words a minute (kTypistSpeeds): the median gap from one
++// press to the next and the median hold, in ms; each pair's gap as a share
++// of that median, at the probabilities of kGapProbabilities; the hold of the
++// key before each pair, as a share of the median hold; and each pair of
++// letters' gap in hundredths of its kind of pair's, by first and second key,
++// a to z and then the space bar ("th" is quicker than "tb"). For Shift, in
++// ms: at kShiftWaitProbabilities, from the key before coming up to Shift
++// going down (under zero with that key still down), from its key coming up
++// to Shift coming up (under zero with Shift up first) and from Shift coming
++// up to the next key going down; at kGapProbabilities, from Shift going down
++// to its key going down. Past its 95th percentile each of the four thins out
++// exponentially: kShiftTailMs is the tail's scale, in ms (kTailWait and so
++// on).
++
++#if !defined(BROWSER_TYPING_TABLES_MEASURED)
++// A plain typist: no measurement. A word is five keys, so a typist of
++// w words a minute presses one every 12000 / w ms on average; the time
++// between keys spreads as a lognormal with its 5th and 95th
++// percentiles as far apart as 60 and 260 ms; a key is held 97.5 ms at
++// the middle; the same key again is 20% quicker, the first key after
++// a space 20% slower and thirty common pairs of letters 30% quicker;
++// Shift's times are round shares of the gap.
++constexpr double kTypistSpeeds[] = {35, 45, 55, 65, 75, 90};
++constexpr double kGapProbabilities[] = {
++    0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99};
++constexpr double kMedianGapMs[] = {310, 241, 198, 167, 145, 121};
++constexpr double kMedianHoldMs[] = {97.5, 97.5, 97.5, 97.5, 97.5, 97.5};
++constexpr double kGapOverMedian[kKeyPairCount][kTypistSpeedCount]
++                               [kGapQuantileCount] = {
++    // the other hand
++    {
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++    },
++    // the same hand, another finger
++    {
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++    },
++    // the same finger, another key
++    {
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++    },
++    // the same key again
++    {
++        {0.28, 0.38, 0.45, 0.59, 0.80, 1.08, 1.42, 1.67, 2.26},
++        {0.28, 0.38, 0.45, 0.59, 0.80, 1.08, 1.42, 1.67, 2.26},
++        {0.28, 0.38, 0.45, 0.59, 0.80, 1.08, 1.42, 1.67, 2.26},
++        {0.28, 0.38, 0.45, 0.59, 0.80, 1.08, 1.42, 1.67, 2.26},
++        {0.28, 0.38, 0.45, 0.59, 0.80, 1.08, 1.42, 1.67, 2.26},
++        {0.28, 0.38, 0.45, 0.59, 0.80, 1.08, 1.42, 1.67, 2.26},
++    },
++    // a key, then the space bar
++    {
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++        {0.35, 0.48, 0.56, 0.74, 1.00, 1.35, 1.77, 2.08, 2.82},
++    },
++    // the space bar, then a key
++    {
++        {0.43, 0.58, 0.68, 0.89, 1.20, 1.62, 2.12, 2.50, 3.38},
++        {0.43, 0.58, 0.68, 0.89, 1.20, 1.62, 2.12, 2.50, 3.38},
++        {0.43, 0.58, 0.68, 0.89, 1.20, 1.62, 2.12, 2.50, 3.38},
++        {0.43, 0.58, 0.68, 0.89, 1.20, 1.62, 2.12, 2.50, 3.38},
++        {0.43, 0.58, 0.68, 0.89, 1.20, 1.62, 2.12, 2.50, 3.38},
++        {0.43, 0.58, 0.68, 0.89, 1.20, 1.62, 2.12, 2.50, 3.38},
++    },
++};
++constexpr double kHoldBeforePair[kKeyPairCount][kTypistSpeedCount] = {
++    {1.00, 1.00, 1.00, 1.00, 1.00, 1.00},
++    {1.00, 1.00, 1.00, 1.00, 1.00, 1.00},
++    {1.00, 1.00, 1.00, 1.00, 1.00, 1.00},
++    {1.00, 1.00, 1.00, 1.00, 1.00, 1.00},
++    {1.00, 1.00, 1.00, 1.00, 1.00, 1.00},
++    {1.00, 1.00, 1.00, 1.00, 1.00, 1.00},
++};
++constexpr uint8_t kLetterPairPercent[27][27] = {
++    // a
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 70, 100, 70, 100,
++     100, 100, 70, 70, 70, 100, 100, 100, 100, 100, 100, 100},
++    // b
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // c
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // d
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // e
++    {100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 100, 100, 70, 100,
++     100, 100, 70, 70, 100, 100, 100, 100, 100, 100, 100, 100},
++    // f
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // g
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // h
++    {70, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // i
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 70, 70,
++     100, 100, 100, 70, 70, 100, 100, 100, 100, 100, 100, 100},
++    // j
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // k
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // l
++    {100, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // m
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // n
++    {100, 100, 100, 70, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100},
++    // o
++    {100, 100, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 70, 100,
++     100, 100, 70, 100, 100, 70, 100, 100, 100, 100, 100, 100},
++    // p
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // q
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // r
++    {100, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // s
++    {100, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 70, 100, 100, 100, 100, 100, 100, 100},
++    // t
++    {100, 100, 100, 100, 70, 100, 100, 70, 70, 100, 100, 100, 100, 100, 70, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // u
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // v
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // w
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // x
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // y
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // z
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++    // the space bar
++    {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
++     100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100},
++};
++constexpr double kShiftWaitProbabilities[] = {
++    0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95};
++constexpr double kShiftWaitMs[kTypistSpeedCount][kShiftWaitQuantileCount] = {
++    {-8.4, 24.4, 109.7, 279, 589.6, 1085.9, 1541.8},
++    {-6.5, 19, 85.3, 216.9, 458.4, 844.2, 1198.7},
++    {-5.3, 15.6, 70.1, 178.2, 376.6, 693.6, 984.8},
++    {-4.5, 13.1, 59.1, 150.3, 317.6, 585, 830.6},
++    {-3.9, 11.4, 51.3, 130.5, 275.8, 507.9, 721.2},
++    {-3.3, 9.5, 42.8, 108.9, 230.1, 423.8, 601.8},
++};
++constexpr double kShiftLeadMs[kTypistSpeedCount][kGapQuantileCount] = {
++    {92, 129.4, 155.2, 210.2, 294.5, 412.6, 559, 670.3, 942.4},
++    {71.5, 100.6, 120.6, 163.4, 228.9, 320.8, 434.5, 521.1, 732.6},
++    {58.8, 82.6, 99.1, 134.3, 188.1, 263.5, 357, 428.1, 601.9},
++    {49.6, 69.7, 83.6, 113.2, 158.7, 222.3, 301.1, 361.1, 507.7},
++    {43, 60.5, 72.6, 98.3, 137.8, 193, 261.4, 313.5, 440.8},
++    {35.9, 50.5, 60.6, 82, 114.9, 161.1, 218.2, 261.6, 367.8},
++};
++constexpr double kShiftUpMs[kTypistSpeedCount][kShiftWaitQuantileCount] = {
++    {-84, -67.7, -40.4, -10, 20.4, 47.7, 64},
++    {-84, -67.7, -40.4, -10, 20.4, 47.7, 64},
++    {-84, -67.7, -40.4, -10, 20.4, 47.7, 64},
++    {-84, -67.7, -40.4, -10, 20.4, 47.7, 64},
++    {-84, -67.7, -40.4, -10, 20.4, 47.7, 64},
++    {-84, -67.7, -40.4, -10, 20.4, 47.7, 64},
++};
++constexpr double kShiftNextMs[kTypistSpeedCount][kShiftWaitQuantileCount] = {
++    {75.1, 93.4, 134.4, 201.5, 302, 434.7, 540.6},
++    {58.4, 72.6, 104.5, 156.7, 234.8, 338, 420.3},
++    {48, 59.7, 85.9, 128.7, 192.9, 277.7, 345.3},
++    {40.5, 50.3, 72.4, 108.5, 162.7, 234.2, 291.2},
++    {35.1, 43.7, 62.9, 94.2, 141.3, 203.3, 252.9},
++    {29.3, 36.5, 52.5, 78.7, 117.9, 169.7, 211},
++};
++constexpr double kShiftTailMs[4][kTypistSpeedCount] = {
++    {465, 361.5, 297, 250.5, 217.5, 181.5},  // wait
++    {372, 289.2, 237.6, 200.4, 174, 145.2},  // lead
++    {60, 60, 60, 60, 60, 60},  // up
++    {279, 216.9, 178.2, 150.3, 130.5, 108.9},  // next
++};
++#endif  // !defined(BROWSER_TYPING_TABLES_MEASURED)
++#undef BROWSER_TYPING_TABLES_MEASURED
 diff --git a/content/browser/devtools/protocol/move_session.cc b/content/browser/devtools/protocol/move_session.cc
 new file mode 100644
 index 0000000000..0b37eedafa
@@ -29685,9 +30938,20 @@ index 0000000000..26ca27f8cf
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_TEMPORAL_SESSION_H_
 diff --git a/content/browser/devtools/protocol_config.json b/content/browser/devtools/protocol_config.json
-index d5ffdcfd66..692a0f26ab 100644
+index d5ffdcfd66..546b1b7b9a 100644
 --- a/content/browser/devtools/protocol_config.json
 +++ b/content/browser/devtools/protocol_config.json
+@@ -19,8 +19,8 @@
+             },
+             {
+                 "domain": "Browser",
+-                "include": ["getVersion", "getHistograms", "getHistogram", "getBrowserCommandLine", "grantPermissions", "setDownloadBehavior", "cancelDownload", "resetPermissions", "crash", "crashGpuProcess", "setPermission", "getGlobalPrivacyControl", "setGlobalPrivacyControl", "addMockCamera"],
+-                "async": ["grantPermissions", "resetPermissions", "setPermission"]
++                "include": ["getVersion", "getHistograms", "getHistogram", "getBrowserCommandLine", "grantPermissions", "setDownloadBehavior", "cancelDownload", "resetPermissions", "crash", "crashGpuProcess", "setPermission", "getGlobalPrivacyControl", "setGlobalPrivacyControl", "addMockCamera", "startVideoRecording", "setVideoRecordingTarget", "pauseVideoRecording", "resumeVideoRecording", "markVideoRecording", "stopVideoRecording", "videoRecordingStatus"],
++                "async": ["grantPermissions", "resetPermissions", "setPermission", "startVideoRecording", "stopVideoRecording"]
+             },
+             {
+                 "domain": "DOM",
 @@ -80,7 +80,7 @@
              },
              {
@@ -29702,7 +30966,7 @@ index d5ffdcfd66..692a0f26ab 100644
              {
                  "domain": "Page",
 -                "include": ["enable", "disable", "reload", "navigate", "stopLoading", "getNavigationHistory", "navigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot",
-+                "include": ["enable", "disable", "reload", "navigate", "stopLoading", "getNavigationHistory", "navigateToHistoryEntry", "agentNavigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentSettleArm", "agentSettle",
++                "include": ["enable", "disable", "reload", "navigate", "stopLoading", "getNavigationHistory", "navigateToHistoryEntry", "agentNavigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentMarkSecretField", "agentSettleArm", "agentSettle",
 +                    "agentFinishCapture", "startFrameStream", "updateFrameStream", "stopFrameStream",
                      "startScreencast", "stopScreencast", "startScreenRecording", "stopScreenRecording", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
                      "bringToFront", "setDownloadBehavior", "getAppManifest", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "setBypassCSP", "getAppId", "getSubApps", "getSiblingSubApps", "addCompilationCache", "setPrerenderingAllowed", "getAnnotatedPageContent",
@@ -29711,16 +30975,16 @@ index d5ffdcfd66..692a0f26ab 100644
                       "javascriptDialogClosed", "downloadWillBegin", "downloadProgress", "screencastVisibilityChanged", "screencastFrame",
                       "backForwardCacheNotUsed", "frameStartedLoading", "frameStoppedLoading", "frameStartedNavigating"],
 -                "async": ["captureScreenshot", "navigate", "getAppManifest", "reload", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getSubApps", "getSiblingSubApps", "getAnnotatedPageContent", "stopScreenRecording"]
-+                "async": ["captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentSettle", "agentNavigateToHistoryEntry", "navigate", "getAppManifest", "reload", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getSubApps", "getSiblingSubApps", "getAnnotatedPageContent", "stopScreenRecording"]
++                "async": ["captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentMarkSecretField", "agentSettle", "agentNavigateToHistoryEntry", "navigate", "getAppManifest", "reload", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getSubApps", "getSiblingSubApps", "getAnnotatedPageContent", "stopScreenRecording"]
              },
              {
                  "domain": "Preload",
 diff --git a/content/browser/renderer_host/input/lock_key_event_flags.h b/content/browser/renderer_host/input/lock_key_event_flags.h
 new file mode 100644
-index 0000000000..e612c422c4
+index 0000000000..490eae317d
 --- /dev/null
 +++ b/content/browser/renderer_host/input/lock_key_event_flags.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,39 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -29733,6 +30997,8 @@ index 0000000000..e612c422c4
 +
 +#if BUILDFLAG(IS_WIN)
 +#include "ui/events/event_utils.h"
++#elif BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
 +#endif
 +
 +namespace content {
@@ -29746,6 +31012,10 @@ index 0000000000..e612c422c4
 +#if BUILDFLAG(IS_WIN)
 +  return ui::GetModifiersFromKeyState() &
 +         (ui::EF_NUM_LOCK_ON | ui::EF_CAPS_LOCK_ON | ui::EF_SCROLL_LOCK_ON);
++#elif BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows reports a Windows desktop's
++  // usual state, NumLock on, the others off.
++  return blink::PresentsWindowsPlatform() ? ui::EF_NUM_LOCK_ON : 0;
 +#else
 +  return 0;
 +#endif
@@ -30048,7 +31318,7 @@ index dcdf54dc72..bf1a3715fb 100644
    void DidQueue(base::WeakPtr<SyntheticGestureController> controller);
  
 diff --git a/third_party/blink/public/devtools_protocol/domains/Input.pdl b/third_party/blink/public/devtools_protocol/domains/Input.pdl
-index 815bf7c414..182340edb2 100644
+index 815bf7c414..89cf9b876e 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Input.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Input.pdl
 @@ -5,6 +5,7 @@
@@ -30866,7 +32136,7 @@ index 815bf7c414..182340edb2 100644
    # Dispatches a key event to the page.
    command dispatchKeyEvent
      parameters
-@@ -138,6 +939,185 @@ domain Input
+@@ -138,6 +939,195 @@ domain Input
        # See https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/editing/commands/editor_command_names.h for valid command names.
        experimental optional array of string commands
  
@@ -30939,22 +32209,32 @@ index 815bf7c414..182340edb2 100644
 +      # Text to type. May contain '\n' (mapped to Enter). Non-ASCII chars
 +      # are dispatched as text-only key events with no virtual key code.
 +      string text
-+      # Multiplies all time intervals (> 0). 1.0 is baseline typing speed;
-+      # values > 1 type faster. Default 1.0.
++      # Sets the typist's pace, with keystrokeDelayMin/Max (> 0). 1.0 is the
++      # typist's own speed; values > 1 type faster, as a faster typist does:
++      # the keys overlap more and are held hardly shorter. It stops at about
++      # 110 words a minute. The thinking pauses are divided by it. Default
++      # 1.0.
 +      optional number speedMultiplier
-+      # Inter-keystroke delay range (ms), before speed scaling. Defaults
-+      # are 60 / 260.
++      # The pace, as a range in ms. A browser types as one person does: a
++      # typist whose speed (40 to 75 words a minute) and way of holding keys
++      # are drawn from the persona seed. This range's middle over the
++      # default's (60 / 260, middle 160) is how much slower that typist
++      # types: the defaults leave the typist's own pace.
 +      optional integer keystrokeDelayMin
 +      optional integer keystrokeDelayMax
-+      # Key hold duration range (ms) between keyDown and keyUp. People
-+      # hold a key about 70-120 ms; the default range is 65-130. After the
-+      # speed multiplier a hold is never under 45 ms, nor the range's top
-+      # under 70 ms.
++      # The same for how long a key is held: the typist's holds (about 100
++      # ms at their middle) are stretched by this range's middle over the
++      # default's (65 / 130), by 0.6 to 1.6 at most. A quick typist has the
++      # next key down before the last one is up. Shift is a key of its own:
++      # it goes down ahead of its letter, and repeats when held alone for
++      # the keyboard's repeat delay (500 ms), as any held key does. Every
++      # key event waits for the keyboard's next report (every 8 ms).
 +      optional integer keyHoldMin
 +      optional integer keyHoldMax
-+      # When true, applies bigram / repeat / punctuation timing
-+      # adjustments (common English bigrams 30% faster, repeats 20% faster,
-+      # post-space/punctuation 20% slower). Default true.
++      # Whether the time between two keys depends on the keys: which hands
++      # and fingers press them, and how often the two letters meet ("th"
++      # is quicker than "tb"). Without it every pair is timed alike.
++      # Default true.
 +      optional boolean contextAware
 +      # Per-character chance of a "thinking pause" before the keystroke.
 +      # Default 0 (no pauses).
@@ -30964,8 +32244,8 @@ index 815bf7c414..182340edb2 100644
 +      # Per-character chance of injecting a typo + correction sequence.
 +      # Default 0 (no typos). Realistic values are around 0.01 - 0.03.
 +      optional number typoProbability
-+      # RNG seed for deterministic typo placement. Same seed + same params
-+      # + same text produces the same event schedule. Default: a fresh
++      # RNG seed for the rhythm and the typos. The same seed, parameters,
++      # text and persona seed give the same event schedule. Default: a fresh
 +      # time-derived seed each call. A negative value seeds as its magnitude.
 +      optional number seed
 +      # browser: whether the answer waits for a cross-document navigation the
@@ -31015,7 +32295,7 @@ index 815bf7c414..182340edb2 100644
 +        full
 +        down
 +        up
-+      # Multiplies all timings, as for dispatchKeystrokes (default 1.0).
++      # Divides the chord's timings (default 1.0; larger is faster).
 +      optional number speedMultiplier
 +      # browser: with a key, whether the answer waits for a cross-document
 +      # navigation it started to end (at most about 3 s; default true).
@@ -31031,7 +32311,7 @@ index 815bf7c414..182340edb2 100644
 +  experimental command dispatchPaste
 +    parameters
 +      string text
-+      # Multiplies the key timing, as for dispatchKeystrokes (default 1.0).
++      # Divides the key timing (default 1.0; larger is faster).
 +      optional number speedMultiplier
 +      # browser: whether the answer waits for a cross-document navigation the
 +      # paste started to end (at most about 3 s; default true).
@@ -31052,7 +32332,7 @@ index 815bf7c414..182340edb2 100644
    # This method emulates inserting text that doesn't come from a key press,
    # for example an emoji keyboard or an IME.
    experimental command insertText
-@@ -206,6 +1186,130 @@ domain Input
+@@ -206,6 +1196,130 @@ domain Input
          mouse
          pen
  
@@ -31183,7 +32463,7 @@ index 815bf7c414..182340edb2 100644
    # Dispatches a touch event to the page.
    command dispatchTouchEvent
      parameters
-@@ -267,6 +1371,11 @@ domain Input
+@@ -267,6 +1381,11 @@ domain Input
    experimental command setInterceptDrags
      parameters
        boolean enabled
@@ -31195,7 +32475,7 @@ index 815bf7c414..182340edb2 100644
  
    # Synthesizes a pinch gesture over a time period by issuing appropriate touch events.
    experimental command synthesizePinchGesture
-@@ -334,3 +1443,30 @@ domain Input
+@@ -334,3 +1453,30 @@ domain Input
    experimental event dragIntercepted
      parameters
        DragData data
@@ -31264,10 +32544,19 @@ index c57d9eb96c..ba5a10f319 100644
    scoped_refptr<cc::Layer> root_layer_;
    base::TimeTicks raf_aligned_input_start_time_;
 diff --git a/ui/events/blink/web_input_event.cc b/ui/events/blink/web_input_event.cc
-index b79e35621a..fe5385d72e 100644
+index b79e35621a..500232bb3c 100644
 --- a/ui/events/blink/web_input_event.cc
 +++ b/ui/events/blink/web_input_event.cc
-@@ -477,6 +477,22 @@ blink::WebMouseWheelEvent MakeWebMouseWheelEventFromUiEvent(
+@@ -20,6 +20,8 @@
+ 
+ #if BUILDFLAG(IS_WIN)
+ #include "ui/events/blink/web_input_event_builders_win.h"
++#elif BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
+ #endif
+ 
+ namespace ui {
+@@ -477,6 +479,33 @@ blink::WebMouseWheelEvent MakeWebMouseWheelEventFromUiEvent(
        webkit_event.delta_x / MouseWheelEvent::kWheelDelta;
    webkit_event.wheel_ticks_y =
        webkit_event.delta_y / MouseWheelEvent::kWheelDelta;
@@ -31279,6 +32568,17 @@ index b79e35621a..fe5385d72e 100644
 +  // three lines -- reports them, as the native path does, rather than its
 +  // offset over 120.
 +  if (!event.tick_120ths().IsZero()) {
++    webkit_event.wheel_ticks_x =
++        event.tick_120ths().x() /
++        static_cast<float>(MouseWheelEvent::kWheelDelta);
++    webkit_event.wheel_ticks_y =
++        event.tick_120ths().y() /
++        static_cast<float>(MouseWheelEvent::kWheelDelta);
++  }
++#endif
++#if BUILDFLAG(IS_LINUX)
++  // browser: the same notches in a Linux build presenting Windows.
++  if (!event.tick_120ths().IsZero() && blink::PresentsWindowsPlatform()) {
 +    webkit_event.wheel_ticks_x =
 +        event.tick_120ths().x() /
 +        static_cast<float>(MouseWheelEvent::kWheelDelta);

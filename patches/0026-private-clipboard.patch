@@ -1,7 +1,7 @@
-From 976701ef5cff8ed7836c527178ddaf2cd3f4454c Mon Sep 17 00:00:00 2001
+From 75b813f8271ed832e901038e5cfefb24f5074449 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:32 -0500
-Subject: [PATCH 25/55] private-clipboard
+Date: Wed, 11 Nov 2026 03:25:15 -0500
+Subject: [PATCH 26/61] private-clipboard
 
 --private-clipboard: a headed browser gets the headless in-memory
 clipboard, so nothing a page or Input.dispatchPaste puts there reaches the

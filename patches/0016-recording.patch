@@ -1,7 +1,7 @@
-From 8269f703f826f8a9a5d7c09564603c84f2126545 Mon Sep 17 00:00:00 2001
+From b16db020b6b54aab507712e4cee85be385dd9909 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:51 -0500
-Subject: [PATCH 16/55] recording
+Date: Wed, 11 Nov 2026 03:23:59 -0500
+Subject: [PATCH 16/61] recording
 
 Browser.startRecording, stopRecording, recordingMask, recordingStatus and
 the recordingEnded event: a network-service TrafficRecorder that sees every
@@ -12,52 +12,59 @@ CompiledScriptCallback (see the v8 patch) and blink's ScriptRecorder.
 The Browser-domain registration rides in agent-fetch (browser_handler.*,
 Browser.pdl); the renderer switch forwarding rides in switch-resolver,
 while the script-recording hooks in render_process_host_impl.cc are this
-commit's own.
+commit's own. Response headers reach the recording as their own list (a
+response head loses its cookie lines on the way to the browser process),
+so Set-Cookie is kept, on redirect hops too, and the HAR's request and
+response cookies lists are filled from Cookie and Set-Cookie after
+masking. Its renderer.mojom, render_thread_impl.*, blink.h and
+blink_initializer.cc also carry video-recording's SetAgentRedaction
+beside their SetScriptRecording twins: the browser arms every renderer
+for a redacted video recording through them.
 ---
  ...ontent_browser_client_receiver_bindings.cc |  11 +
- chrome/browser/devtools/protocol/recording.cc | 642 +++++++++++++++
- chrome/browser/devtools/protocol/recording.h  | 186 +++++
- .../devtools/protocol/recording_har_writer.cc | 751 ++++++++++++++++++
- .../devtools/protocol/recording_har_writer.h  | 207 +++++
+ chrome/browser/devtools/protocol/recording.cc | 648 ++++++++++++++
+ chrome/browser/devtools/protocol/recording.h  | 189 ++++
+ .../devtools/protocol/recording_har_writer.cc | 830 ++++++++++++++++++
+ .../devtools/protocol/recording_har_writer.h  | 209 +++++
  .../devtools/protocol/recording_masker.cc     | 164 ++++
  .../devtools/protocol/recording_masker.h      |  64 ++
  .../devtools/protocol/recording_registry.cc   | 251 ++++++
  .../devtools/protocol/recording_registry.h    | 152 ++++
  .../protocol/recording_script_store.cc        | 165 ++++
  .../protocol/recording_script_store.h         |  65 ++
- .../devtools/protocol/recording_summary.cc    | 267 +++++++
- .../devtools/protocol/recording_summary.h     |  92 +++
+ .../devtools/protocol/recording_summary.cc    | 267 ++++++
+ .../devtools/protocol/recording_summary.h     |  92 ++
  .../renderer_host/render_process_host_impl.cc |  27 +
  .../url_loader_factory_params_helper.cc       |  34 +-
- content/common/renderer.mojom                 |   6 +
+ content/common/renderer.mojom                 |  13 +
  content/public/browser/render_process_host.h  |   5 +
- content/renderer/render_thread_impl.cc        |   5 +
- content/renderer/render_thread_impl.h         |   1 +
+ content/renderer/render_thread_impl.cc        |  10 +
+ content/renderer/render_thread_impl.h         |   2 +
  services/network/BUILD.gn                     |   4 +
  services/network/network_service.cc           |  23 +
  services/network/network_service.h            |  14 +
  services/network/public/mojom/BUILD.gn        |   1 +
  .../public/mojom/network_context.mojom        |   7 +
  .../public/mojom/network_service.mojom        |  17 +
- .../public/mojom/traffic_recorder.mojom       | 173 ++++
+ .../public/mojom/traffic_recorder.mojom       | 178 ++++
  services/network/traffic_recorder.cc          | 252 ++++++
- services/network/traffic_recorder.h           | 135 ++++
+ services/network/traffic_recorder.h           | 135 +++
  .../network/traffic_recorder_upload_stream.cc | 110 +++
  .../network/traffic_recorder_upload_stream.h  |  79 ++
- services/network/url_loader.cc                | 119 ++-
+ services/network/url_loader.cc                | 139 ++-
  services/network/url_loader.h                 |  24 +-
  services/network/url_loader_factory.cc        |  11 +-
  services/network/websocket.cc                 | 128 ++-
  services/network/websocket.h                  |  26 +-
  services/network/websocket_factory.cc         |  28 +-
  .../script_recorder_host.mojom                |  56 ++
- third_party/blink/public/web/blink.h          |   6 +
+ third_party/blink/public/web/blink.h          |  14 +
  .../blink/renderer/bindings/bindings.gni      |   2 +
- .../bindings/core/v8/script_recorder.cc       | 310 ++++++++
+ .../bindings/core/v8/script_recorder.cc       | 310 +++++++
  .../bindings/core/v8/script_recorder.h        |  40 +
  .../bindings/core/v8/v8_initializer.cc        |   4 +
- .../renderer/controller/blink_initializer.cc  |   7 +
- 43 files changed, 4656 insertions(+), 15 deletions(-)
+ .../renderer/controller/blink_initializer.cc  |  13 +
+ 43 files changed, 4798 insertions(+), 15 deletions(-)
  create mode 100644 chrome/browser/devtools/protocol/recording.cc
  create mode 100644 chrome/browser/devtools/protocol/recording.h
  create mode 100644 chrome/browser/devtools/protocol/recording_har_writer.cc
@@ -117,10 +124,10 @@ index a805557b73..f1be10e927 100644
      content_settings::ContentSettingsManagerImpl::Create(
 diff --git a/chrome/browser/devtools/protocol/recording.cc b/chrome/browser/devtools/protocol/recording.cc
 new file mode 100644
-index 0000000000..7fbdd1dc8c
+index 0000000000..b8500c2153
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/recording.cc
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,648 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -476,7 +483,8 @@ index 0000000000..7fbdd1dc8c
 +
 +void Recording::OnRedirect(uint64_t loader_id,
 +                           const net::RedirectInfo& redirect_info,
-+                           network::mojom::URLResponseHeadPtr head) {
++                           network::mojom::URLResponseHeadPtr head,
++                           std::vector<network::mojom::HttpHeaderPtr> headers) {
 +  Load* load = Find(loader_id);
 +  if (finished_ || !load) {
 +    return;
@@ -486,13 +494,19 @@ index 0000000000..7fbdd1dc8c
 +  if (head && head->headers) {
 +    hop.status = head->headers->response_code();
 +  }
++  // The hop's header lines as received, Set-Cookie included.
++  for (const network::mojom::HttpHeaderPtr& header : headers) {
++    hop.headers.push_back({header->name, header->value});
++  }
 +  load->entry.redirects.push_back(std::move(hop));
 +  // The load goes on under the same id, to the new URL.
 +  load->entry.url = redirect_info.new_url.spec();
 +}
 +
-+void Recording::OnResponseHeaders(uint64_t loader_id,
-+                                  network::mojom::URLResponseHeadPtr head) {
++void Recording::OnResponseHeaders(
++    uint64_t loader_id,
++    network::mojom::URLResponseHeadPtr head,
++    std::vector<network::mojom::HttpHeaderPtr> headers) {
 +  Load* load = Find(loader_id);
 +  if (finished_ || !load || !head) {
 +    return;
@@ -501,13 +515,12 @@ index 0000000000..7fbdd1dc8c
 +  if (head->headers) {
 +    entry.status = head->headers->response_code();
 +    entry.status_text = head->headers->GetStatusText();
-+    entry.response_headers.clear();
-+    size_t iter = 0;
-+    std::string name;
-+    std::string value;
-+    while (head->headers->EnumerateHeaderLines(&iter, &name, &value)) {
-+      entry.response_headers.push_back({name, value});
-+    }
++  }
++  // The header lines as received, Set-Cookie included: the head's own copy
++  // lost its cookie lines on the way here.
++  entry.response_headers.clear();
++  for (const network::mojom::HttpHeaderPtr& header : headers) {
++    entry.response_headers.push_back({header->name, header->value});
 +  }
 +  entry.mime_type = head->mime_type;
 +  entry.remote_ip = head->remote_endpoint.ToString();
@@ -765,10 +778,10 @@ index 0000000000..7fbdd1dc8c
 +}
 diff --git a/chrome/browser/devtools/protocol/recording.h b/chrome/browser/devtools/protocol/recording.h
 new file mode 100644
-index 0000000000..c6540668fc
+index 0000000000..df3aff84e9
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/recording.h
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,189 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -875,9 +888,12 @@ index 0000000000..c6540668fc
 +                     const std::vector<uint8_t>& chunk) override;
 +  void OnRedirect(uint64_t loader_id,
 +                  const net::RedirectInfo& redirect_info,
-+                  network::mojom::URLResponseHeadPtr head) override;
-+  void OnResponseHeaders(uint64_t loader_id,
-+                         network::mojom::URLResponseHeadPtr head) override;
++                  network::mojom::URLResponseHeadPtr head,
++                  std::vector<network::mojom::HttpHeaderPtr> headers) override;
++  void OnResponseHeaders(
++      uint64_t loader_id,
++      network::mojom::URLResponseHeadPtr head,
++      std::vector<network::mojom::HttpHeaderPtr> headers) override;
 +  void OnResponseBody(uint64_t loader_id,
 +                      const std::vector<uint8_t>& chunk) override;
 +  void OnComplete(uint64_t loader_id,
@@ -957,10 +973,10 @@ index 0000000000..c6540668fc
 +#endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_RECORDING_H_
 diff --git a/chrome/browser/devtools/protocol/recording_har_writer.cc b/chrome/browser/devtools/protocol/recording_har_writer.cc
 new file mode 100644
-index 0000000000..4d45f5b4f1
+index 0000000000..56d109951b
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/recording_har_writer.cc
-@@ -0,0 +1,751 @@
+@@ -0,0 +1,830 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -983,6 +999,9 @@ index 0000000000..4d45f5b4f1
 +#include "base/strings/stringprintf.h"
 +#include "base/values.h"
 +#include "net/base/mime_util.h"
++#include "net/cookies/cookie_constants.h"
++#include "net/cookies/cookie_util.h"
++#include "net/cookies/parsed_cookie.h"
 +#include "url/gurl.h"
 +
 +namespace {
@@ -1085,6 +1104,74 @@ index 0000000000..4d45f5b4f1
 +    list.Append(std::move(dict));
 +  }
 +  return list;
++}
++
++// The cookies a request sent, as HAR lists them: one {name, value} per pair
++// of its Cookie lines, which are already masked.
++base::ListValue RequestCookies(const std::vector<RecordingHeader>& headers) {
++  base::ListValue cookies;
++  for (const RecordingHeader& header : headers) {
++    if (!base::EqualsCaseInsensitiveASCII(header.name, "cookie")) {
++      continue;
++    }
++    net::cookie_util::ParsedRequestCookies pairs;
++    net::cookie_util::ParseRequestCookieLine(header.value, &pairs);
++    for (const auto& [name, value] : pairs) {
++      base::DictValue cookie;
++      cookie.Set("name", name);
++      cookie.Set("value", value);
++      cookies.Append(std::move(cookie));
++    }
++  }
++  return cookies;
++}
++
++// The cookies a response set, as HAR lists them: one per Set-Cookie line
++// (already masked), with the attributes it carried. Max-Age and SameSite,
++// which HAR has no field for, go in _maxAge and _sameSite. A line that does
++// not parse as a cookie stays in the headers only.
++base::ListValue ResponseCookies(const std::vector<RecordingHeader>& headers) {
++  base::ListValue cookies;
++  for (const RecordingHeader& header : headers) {
++    if (!base::EqualsCaseInsensitiveASCII(header.name, "set-cookie")) {
++      continue;
++    }
++    const net::ParsedCookie parsed(header.value);
++    if (!parsed.IsValid()) {
++      continue;
++    }
++    base::DictValue cookie;
++    cookie.Set("name", parsed.Name());
++    cookie.Set("value", parsed.Value());
++    if (const std::optional<std::string_view> path = parsed.Path()) {
++      cookie.Set("path", *path);
++    }
++    if (const std::optional<std::string_view> domain = parsed.Domain()) {
++      cookie.Set("domain", *domain);
++    }
++    if (const std::optional<std::string_view> expires = parsed.Expires()) {
++      const base::Time time =
++          net::cookie_util::ParseCookieExpirationTime(*expires);
++      if (!time.is_null() && !time.is_max()) {
++        cookie.Set("expires", base::TimeFormatAsIso8601(time));
++      }
++    }
++    if (const std::optional<std::string_view> max_age = parsed.MaxAge()) {
++      cookie.Set("_maxAge", *max_age);
++    }
++    cookie.Set("httpOnly", parsed.IsHttpOnly());
++    cookie.Set("secure", parsed.IsSecure());
++    const net::CookieSameSite same_site = parsed.SameSite().first;
++    if (same_site == net::CookieSameSite::NO_RESTRICTION) {
++      cookie.Set("_sameSite", "None");
++    } else if (same_site == net::CookieSameSite::LAX_MODE) {
++      cookie.Set("_sameSite", "Lax");
++    } else if (same_site == net::CookieSameSite::STRICT_MODE) {
++      cookie.Set("_sameSite", "Strict");
++    }
++    cookies.Append(std::move(cookie));
++  }
++  return cookies;
 +}
 +
 +// Byte counts, entry numbers and statuses are whole numbers. Without this
@@ -1433,6 +1520,12 @@ index 0000000000..4d45f5b4f1
 +    header.value = masker_.Apply(header.value, &changed);
 +    masked |= changed;
 +  }
++  for (RecordingEntry::Redirect& hop : entry.redirects) {
++    for (RecordingHeader& header : hop.headers) {
++      header.value = masker_.Apply(header.value, &changed);
++      masked |= changed;
++    }
++  }
 +  // The origins are URLs and the status text is the server's own words:
 +  // either can carry a value as readily as the URL itself.
 +  for (std::string* field : {&entry.initiator, &entry.top_origin,
@@ -1448,7 +1541,7 @@ index 0000000000..4d45f5b4f1
 +  request.Set("httpVersion", entry.http_version);
 +  request.Set("headers", HeaderList(entry.request_headers));
 +  request.Set("queryString", QueryPairs(entry.url));
-+  request.Set("cookies", base::ListValue());
++  request.Set("cookies", RequestCookies(entry.request_headers));
 +  request.Set("headersSize", -1);
 +  request.Set("bodySize", static_cast<double>(entry.request_body_bytes));
 +  if (entry.has_request_body) {
@@ -1486,7 +1579,7 @@ index 0000000000..4d45f5b4f1
 +  response.Set("statusText", entry.status_text);
 +  response.Set("httpVersion", entry.http_version);
 +  response.Set("headers", HeaderList(entry.response_headers));
-+  response.Set("cookies", base::ListValue());
++  response.Set("cookies", ResponseCookies(entry.response_headers));
 +  response.Set("content", std::move(content));
 +  response.Set("redirectURL", "");
 +  response.Set("headersSize", -1);
@@ -1563,6 +1656,8 @@ index 0000000000..4d45f5b4f1
 +      base::DictValue dict_hop;
 +      dict_hop.Set("url", masker_.Apply(hop.url, nullptr));
 +      dict_hop.Set("status", hop.status);
++      dict_hop.Set("headers", HeaderList(hop.headers));
++      dict_hop.Set("cookies", ResponseCookies(hop.headers));
 +      redirects.Append(std::move(dict_hop));
 +    }
 +    dict.Set("_redirects", std::move(redirects));
@@ -1714,10 +1809,10 @@ index 0000000000..4d45f5b4f1
 +}
 diff --git a/chrome/browser/devtools/protocol/recording_har_writer.h b/chrome/browser/devtools/protocol/recording_har_writer.h
 new file mode 100644
-index 0000000000..17df27b520
+index 0000000000..ccbcf83cf2
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/recording_har_writer.h
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,209 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1757,6 +1852,8 @@ index 0000000000..17df27b520
 +  struct Redirect {
 +    std::string url;
 +    int status = 0;
++    // The hop's response header lines as received, Set-Cookie included.
++    std::vector<RecordingHeader> headers;
 +  };
 +
 +  uint64_t number = 0;
@@ -3333,10 +3430,10 @@ index 7fadfe3f45..25b9b8f735 100644
  
  // static
 diff --git a/content/common/renderer.mojom b/content/common/renderer.mojom
-index e6ade45d19..f34a6f9756 100644
+index e6ade45d19..96eb53e736 100644
 --- a/content/common/renderer.mojom
 +++ b/content/common/renderer.mojom
-@@ -142,6 +142,12 @@ interface Renderer {
+@@ -142,6 +142,19 @@ interface Renderer {
    // TODO(crbug.com/40180791): We need a specification for this restriction.
    SetIsIsolatedContext(bool value);
  
@@ -3345,6 +3442,13 @@ index e6ade45d19..f34a6f9756 100644
 +  // start and the end of a recording, and to a renderer born during one
 +  // right after InitializeRenderer.
 +  SetScriptRecording(bool value);
++
++  // browser: the redaction generation this renderer paints under, 0 = none.
++  // While it is not 0, the renderer repaints every document it holds and
++  // stamps the compositor frames it painted after hearing of it. Sent to
++  // every live renderer when the generation changes, and to a renderer born
++  // while one is set right after InitializeRenderer.
++  SetAgentRedaction(uint32 generation);
 +
    // Sets the mapping from WebUI resource URLs to the resource ID of their
    // corresponding bundled bytecode cache. This is called once after a
@@ -3366,10 +3470,10 @@ index 5d39791a11..44b7b90e47 100644
    // that each host may not be active, and therefore may have nullptr channels.
    static iterator AllHostsIterator();
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a..7238c22078 100644
+index fe688f282a..14d5e7dc27 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
-@@ -1338,6 +1338,11 @@ void RenderThreadImpl::SetIsIsolatedContext(bool value) {
+@@ -1338,6 +1338,16 @@ void RenderThreadImpl::SetIsIsolatedContext(bool value) {
    blink::SetIsIsolatedContext(value);
  }
  
@@ -3378,18 +3482,24 @@ index fe688f282a..7238c22078 100644
 +  blink::SetScriptRecording(value);
 +}
 +
++// browser: the redaction generation documents are painted under.
++void RenderThreadImpl::SetAgentRedaction(uint32_t generation) {
++  blink::SetAgentRedaction(generation);
++}
++
  void RenderThreadImpl::SetWebUIResourceUrlToCodeCacheMap(
      const base::flat_map<GURL, int>& resource_map) {
    blink_platform_impl_->set_webui_resource_to_code_cache_id_map(resource_map);
 diff --git a/content/renderer/render_thread_impl.h b/content/renderer/render_thread_impl.h
-index 09133870f6..75788c1edc 100644
+index 09133870f6..84d14a92b2 100644
 --- a/content/renderer/render_thread_impl.h
 +++ b/content/renderer/render_thread_impl.h
-@@ -426,6 +426,7 @@ class CONTENT_EXPORT RenderThreadImpl
+@@ -426,6 +426,8 @@ class CONTENT_EXPORT RenderThreadImpl
  #endif
    void SetIsWebSecurityDisabled(bool value) override;
    void SetIsIsolatedContext(bool value) override;
 +  void SetScriptRecording(bool value) override;  // browser
++  void SetAgentRedaction(uint32_t generation) override;  // browser
    void SetWebUIResourceUrlToCodeCacheMap(
        const base::flat_map<GURL, int>& resource_map) override;
  
@@ -3576,10 +3686,10 @@ index 93248cac19..224a600478 100644
    // initially requested, but the final consumer of the response body resides in
 diff --git a/services/network/public/mojom/traffic_recorder.mojom b/services/network/public/mojom/traffic_recorder.mojom
 new file mode 100644
-index 0000000000..12fad390bf
+index 0000000000..f83f4903ce
 --- /dev/null
 +++ b/services/network/public/mojom/traffic_recorder.mojom
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,178 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3708,13 +3818,18 @@ index 0000000000..12fad390bf
 +  // A chunk of the request body as the HTTP layer reads it, up to the cap.
 +  OnRequestBody(uint64 loader_id, array<uint8> chunk);
 +  // A redirect: the response that caused it and where the load goes next.
-+  // The loader_id stays for the next hop.
++  // The loader_id stays for the next hop. `headers` as for OnResponseHeaders.
 +  OnRedirect(uint64 loader_id,
 +             URLRequestRedirectInfo redirect_info,
-+             URLResponseHead head);
-+  // The final response's head: status, headers, media type, remote endpoint,
-+  // protocol, cache and TLS facts.
-+  OnResponseHeaders(uint64 loader_id, URLResponseHead head);
++             URLResponseHead head,
++             array<HttpHeader> headers);
++  // The final response's head: status, media type, remote endpoint, protocol,
++  // cache and TLS facts. `headers` is every header line as received,
++  // Set-Cookie included: the head's own copy loses its cookie lines on the way
++  // to the browser process (net::HttpResponseHeaders::SerializeForMojoIpc).
++  OnResponseHeaders(uint64 loader_id,
++                    URLResponseHead head,
++                    array<HttpHeader> headers);
 +  // A chunk of the decoded response body as it is read, up to the cap.
 +  OnResponseBody(uint64 loader_id, array<uint8> chunk);
 +  // The load ended: the last report for its loader_id.
@@ -4354,7 +4469,7 @@ index 0000000000..8462aed1e9
 +
 +#endif  // SERVICES_NETWORK_TRAFFIC_RECORDER_UPLOAD_STREAM_H_
 diff --git a/services/network/url_loader.cc b/services/network/url_loader.cc
-index 729337bbde..67e62a1fd8 100644
+index 729337bbde..c1be2a28cd 100644
 --- a/services/network/url_loader.cc
 +++ b/services/network/url_loader.cc
 @@ -119,6 +119,7 @@
@@ -4374,7 +4489,32 @@ index 729337bbde..67e62a1fd8 100644
  #include "services/network/trust_tokens/trust_token_request_helper.h"
  #include "services/network/trust_tokens/trust_token_url_loader_interceptor.h"
  #include "services/network/url_loader_factory.h"
-@@ -343,7 +346,8 @@ URLLoader::URLLoader(
+@@ -238,6 +241,24 @@ ResponseHeaderToRawHeaderPairs(
+   return header_array;
+ }
+ 
++// browser: every header line of a response as received, for a traffic
++// recording. The response head's own headers lose their cookie lines when
++// they cross to the browser process (HttpResponseHeaders::SerializeForMojoIpc),
++// so the recording gets the lines separately.
++std::vector<mojom::HttpHeaderPtr> RecordingHeaderLines(
++    const net::HttpResponseHeaders* headers) {
++  std::vector<mojom::HttpHeaderPtr> lines;
++  if (!headers) {
++    return lines;
++  }
++  size_t iterator = 0;
++  std::string name, value;
++  while (headers->EnumerateHeaderLines(&iterator, &name, &value)) {
++    lines.push_back(mojom::HttpHeader::New(name, value));
++  }
++  return lines;
++}
++
+ bool IncludesValidLoadField(const net::HttpResponseHeaders* headers) {
+   if (!headers) {
+     return false;
+@@ -343,7 +364,8 @@ URLLoader::URLLoader(
      mojo::PendingRemote<mojom::AcceptCHFrameObserver> accept_ch_frame_observer,
      SharedResourceChecker& shared_resource_checker,
      std::unique_ptr<DevtoolsDurableMessageWriter> maybe_durable_message_writer,
@@ -4384,7 +4524,7 @@ index 729337bbde..67e62a1fd8 100644
      : url_request_context_(context.GetUrlRequestContext()),
        network_context_client_(context.GetNetworkContextClient()),
        delete_callback_(std::move(delete_callback)),
-@@ -426,7 +430,8 @@ URLLoader::URLLoader(
+@@ -426,7 +448,8 @@ URLLoader::URLLoader(
                ? request.trusted_params
                      ->expected_response_headers_for_synthetic_response
                : nullptr),
@@ -4394,7 +4534,7 @@ index 729337bbde..67e62a1fd8 100644
    DCHECK(delete_callback_);
  
    // To minimize performance overhead and UMA report volume, this metric is
-@@ -552,6 +557,35 @@ URLLoader::URLLoader(
+@@ -552,6 +575,35 @@ URLLoader::URLLoader(
          request.net_log_reference_info.value());
    }
  
@@ -4430,7 +4570,7 @@ index 729337bbde..67e62a1fd8 100644
    // Resolve elements from request_body and prepare upload data.
    if (request.request_body.get()) {
      OpenFilesForUpload(request);
-@@ -650,8 +684,20 @@ void URLLoader::SetUpUpload(
+@@ -650,8 +702,20 @@ void URLLoader::SetUpUpload(
    scoped_refptr<base::SequencedTaskRunner> task_runner =
        base::ThreadPool::CreateSequencedTaskRunner(
            {base::MayBlock(), base::TaskPriority::USER_VISIBLE});
@@ -4453,7 +4593,7 @@ index 729337bbde..67e62a1fd8 100644
  
    if (request.enable_upload_progress) {
      upload_progress_tracker_ = std::make_unique<UploadProgressTracker>(
-@@ -758,6 +804,13 @@ void URLLoader::ScheduleStart() {
+@@ -758,6 +822,13 @@ void URLLoader::ScheduleStart() {
  URLLoader::~URLLoader() {
    TRACE_EVENT("loading", "URLLoader::~URLLoader",
                net::NetLogWithSourceToFlow(url_request_->net_log()));
@@ -4467,19 +4607,20 @@ index 729337bbde..67e62a1fd8 100644
    if (keepalive_ && keepalive_statistics_recorder_) {
      keepalive_statistics_recorder_->OnLoadFinished(
          *factory_params_->top_frame_id, keepalive_request_size_);
-@@ -979,6 +1032,11 @@ void URLLoader::OnReceivedRedirect(net::URLRequest* url_request,
+@@ -979,6 +1050,12 @@ void URLLoader::OnReceivedRedirect(net::URLRequest* url_request,
    mojom::URLResponseHeadPtr response = BuildResponseHead();
    DispatchOnRawResponse();
    ReportFlaggedResponseCookies(false);
 +  // browser: redirects are recorded.
 +  if (IsRecording()) {
-+    traffic_recorder_->client()->OnRedirect(recording_id_, redirect_info,
-+                                            RecordingHead(*response));
++    traffic_recorder_->client()->OnRedirect(
++        recording_id_, redirect_info, RecordingHead(*response),
++        RecordingHeaderLines(response->headers.get()));
 +  }
  
    // Enforce the Cross-Origin-Resource-Policy (CORP) header.
    const CrossOriginEmbedderPolicy kEmptyCoep;
-@@ -1166,6 +1224,13 @@ void URLLoader::OnResponseStarted(net::URLRequest* url_request, int net_error) {
+@@ -1166,6 +1243,14 @@ void URLLoader::OnResponseStarted(net::URLRequest* url_request, int net_error) {
  
    response_ = BuildResponseHead();
    DispatchOnRawResponse();
@@ -4487,13 +4628,14 @@ index 729337bbde..67e62a1fd8 100644
 +  if (IsRecording()) {
 +    response_is_text_ =
 +        response_ && TrafficRecorder::IsTextMedia(response_->mime_type);
-+    traffic_recorder_->client()->OnResponseHeaders(recording_id_,
-+                                                   RecordingHead(*response_));
++    traffic_recorder_->client()->OnResponseHeaders(
++        recording_id_, RecordingHead(*response_),
++        RecordingHeaderLines(response_->headers.get()));
 +  }
  
    if (expected_response_headers_for_synthetic_response &&
        !CheckHeaderConsistencyForSyntheticResponse(
-@@ -2061,6 +2126,7 @@ void URLLoader::NotifyCompleted(int error_code) {
+@@ -2061,6 +2146,7 @@ void URLLoader::NotifyCompleted(int error_code) {
        status.ssl_info = url_request_->ssl_info();
      }
  
@@ -4501,7 +4643,7 @@ index 729337bbde..67e62a1fd8 100644
      url_loader_client_.Get()->OnComplete(status);
    }
  
-@@ -2110,6 +2176,15 @@ void URLLoader::CompletePendingWrite(bool success) {
+@@ -2110,6 +2196,15 @@ void URLLoader::CompletePendingWrite(bool success) {
      // to the now-invalid IOBuffer in some worker thread trying to commit it to
      // disk.  In case of an error, this will have to wait till everything is
      // destroyed.
@@ -4517,7 +4659,7 @@ index 729337bbde..67e62a1fd8 100644
      response_body_stream_ =
          pending_write_->Complete(pending_write_buffer_offset_);
    }
-@@ -2123,6 +2198,29 @@ void URLLoader::SetRawResponseHeaders(
+@@ -2123,6 +2218,29 @@ void URLLoader::SetRawResponseHeaders(
    raw_response_headers_ = headers;
  }
  
@@ -4547,7 +4689,7 @@ index 729337bbde..67e62a1fd8 100644
  void URLLoader::NotifyEarlyResponse(
      scoped_refptr<const net::HttpResponseHeaders> headers) {
    DCHECK(!has_received_response_);
-@@ -2164,6 +2262,18 @@ void URLLoader::MaybeNotifyEarlyResponseToDevtools(
+@@ -2164,6 +2282,18 @@ void URLLoader::MaybeNotifyEarlyResponseToDevtools(
  
  void URLLoader::SetRawRequestHeadersAndNotify(
      net::HttpRawRequestHeaders headers) {
@@ -4566,7 +4708,7 @@ index 729337bbde..67e62a1fd8 100644
    // If we have emitted_devtools_raw_request_, don't notify DevTools
    // to prevent duplicate ExtraInfo events.
    if (!emitted_devtools_raw_request_ && devtools_observer_ &&
-@@ -2425,6 +2535,7 @@ void URLLoader::CompleteBlockedResponse(
+@@ -2425,6 +2555,7 @@ void URLLoader::CompleteBlockedResponse(
    status.should_report_orb_blocking = should_report_orb_blocking;
    status.blocked_by_response_reason = reason;
  
@@ -5077,10 +5219,19 @@ index 0000000000..1442bbc931
 +  ScriptCompiled(RecordedScript script);
 +};
 diff --git a/third_party/blink/public/web/blink.h b/third_party/blink/public/web/blink.h
-index eed893864a..6a653c2064 100644
+index eed893864a..48f0177409 100644
 --- a/third_party/blink/public/web/blink.h
 +++ b/third_party/blink/public/web/blink.h
-@@ -146,6 +146,12 @@ BLINK_EXPORT void SetIsWebSecurityDisabled(bool value);
+@@ -31,6 +31,8 @@
+ #ifndef THIRD_PARTY_BLINK_PUBLIC_WEB_BLINK_H_
+ #define THIRD_PARTY_BLINK_PUBLIC_WEB_BLINK_H_
+ 
++#include <stdint.h>
++
+ #include <vector>
+ 
+ #include "third_party/blink/public/platform/web_common.h"
+@@ -146,6 +148,18 @@ BLINK_EXPORT void SetIsWebSecurityDisabled(bool value);
  BLINK_EXPORT void SetIsIsolatedContext(bool value);
  BLINK_EXPORT bool IsIsolatedContext();
  
@@ -5089,6 +5240,12 @@ index eed893864a..6a653c2064 100644
 +// browser sets it at the start and the end of a recording, and at the start
 +// of a renderer born during one.
 +BLINK_EXPORT void SetScriptRecording(bool value);
++
++// browser: the redaction generation this renderer paints under, 0 = none.
++// Process global, main thread. A change repaints every document of every
++// page in the process, and the compositor frames painted after it carry the
++// generation as their redaction stamp.
++BLINK_EXPORT void SetAgentRedaction(uint32_t generation);
 +
  // Set a list of CORS exempt headers. This list is used for fetching resources
  // from frames.
@@ -5491,7 +5648,7 @@ index 9d28b83009..f736b818f6 100644
  
  #if BUILDFLAG(IS_WIN)
 diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
-index cfced2ae75..7277a199ff 100644
+index cfced2ae75..44efe9496b 100644
 --- a/third_party/blink/renderer/controller/blink_initializer.cc
 +++ b/third_party/blink/renderer/controller/blink_initializer.cc
 @@ -44,6 +44,7 @@
@@ -5502,7 +5659,15 @@ index cfced2ae75..7277a199ff 100644
  #include "third_party/blink/renderer/bindings/core/v8/v8_context_snapshot.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_initializer.h"
  #include "third_party/blink/renderer/controller/blink_leak_detector.h"
-@@ -230,6 +231,12 @@ bool IsIsolatedContext() {
+@@ -61,6 +62,7 @@
+ #include "third_party/blink/renderer/core/frame/display_cutout_client_impl.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/loader/loader_factory_for_frame.h"
++#include "third_party/blink/renderer/core/paint/agent_redaction/agent_redaction.h"
+ #include "third_party/blink/renderer/modules/ml/webnn/webnn_introspection_impl.h"
+ #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+ #include "third_party/blink/renderer/platform/disk_data_allocator.h"
+@@ -230,6 +232,17 @@ bool IsIsolatedContext() {
    return Agent::IsIsolatedContext();
  }
  
@@ -5510,6 +5675,11 @@ index cfced2ae75..7277a199ff 100644
 +// (recording).
 +void SetScriptRecording(bool value) {
 +  ScriptRecorder::SetEnabled(value);
++}
++
++// browser: function defined in third_party/blink/public/web/blink.h.
++void SetAgentRedaction(uint32_t generation) {
++  AgentRedaction::Apply(generation);
 +}
 +
  // Function defined in third_party/blink/public/web/blink.h.

@@ -1,7 +1,7 @@
-From 812f89184792a587e80777052d08fb1c8b55e6d2 Mon Sep 17 00:00:00 2001
+From 71cfe2bcd11858b69c1307717ebeb92994b30ea4 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:31 -0500
-Subject: [PATCH 24/55] multi-pip-multiview
+Date: Wed, 11 Nov 2026 03:25:14 -0500
+Subject: [PATCH 25/61] multi-pip-multiview
 
 Video picture-in-picture windows from several tabs at once, each new one
 opening in the next free corner, and a chrome://multiview tab that tiles

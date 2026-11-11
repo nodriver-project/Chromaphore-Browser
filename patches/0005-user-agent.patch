@@ -1,16 +1,22 @@
-From fcd35e03c706d76a33a6bfad09f3c790a9d30d47 Mon Sep 17 00:00:00 2001
+From 3b8eb491147a43719aaa831e949676ac012c4d5c Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:04 -0500
-Subject: [PATCH 05/55] user-agent
+Date: Wed, 11 Nov 2026 03:22:55 -0500
+Subject: [PATCH 05/61] user-agent
 
 User-agent + UA client-hints spoof; HeadlessChrome->Chrome product name.
+
+On Linux the platform reported is Windows': the user agent's platform token, the client-hint platform and its version (19.0.0, Windows 11 24H2 and later) and navigator.platform (Win32), unless --use-chromium-defaults asks for stock Chromium.
 ---
  components/embedder_support/BUILD.gn          |   1 +
- .../embedder_support/user_agent_utils.cc      | 108 ++++++++++++++++--
+ .../embedder_support/user_agent_utils.cc      | 145 ++++++++++++++++--
  headless/lib/browser/headless_browser_impl.cc |   3 +-
- .../common/user_agent/user_agent_metadata.cc  |  41 +++++++
+ .../common/user_agent/user_agent_metadata.cc  |  57 +++++++
+ third_party/blink/public/common/BUILD.gn      |   1 +
+ .../user_agent/presents_windows_platform.h    |  21 +++
  .../common/user_agent/user_agent_metadata.h   |   5 +
- 5 files changed, 147 insertions(+), 11 deletions(-)
+ .../core/execution_context/navigator_base.cc  |   7 +
+ 8 files changed, 229 insertions(+), 11 deletions(-)
+ create mode 100644 third_party/blink/public/common/user_agent/presents_windows_platform.h
 
 diff --git a/components/embedder_support/BUILD.gn b/components/embedder_support/BUILD.gn
 index 847ba42327..96d0bea951 100644
@@ -25,7 +31,7 @@ index 847ba42327..96d0bea951 100644
      "//components/prefs",
      "//components/version_info",
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
-index e699a6a394..fe2e36299a 100644
+index e699a6a394..6939fa3a68 100644
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
 @@ -10,6 +10,7 @@
@@ -44,7 +50,15 @@ index e699a6a394..fe2e36299a 100644
  #include "components/embedder_support/pref_names.h"
  #include "components/embedder_support/switches.h"
  #include "components/policy/core/common/policy_pref_names.h"
-@@ -154,23 +156,97 @@ const std::string& GetWindowsPlatformVersion() {
+@@ -33,6 +35,7 @@
+ #include "components/version_info/version_info.h"
+ #include "net/http/http_util.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -154,23 +157,97 @@ const std::string& GetWindowsPlatformVersion() {
  }
  #endif  // BUILDFLAG(IS_WIN)
  
@@ -146,7 +160,7 @@ index e699a6a394..fe2e36299a 100644
  
    return GenerateBrandVersionList(major_version_number, brand, brand_version,
                                    output_version_type,
-@@ -215,8 +291,12 @@ const blink::UserAgentBrandList GetUserAgentBrandFullVersionListInternal(
+@@ -215,8 +292,12 @@ const blink::UserAgentBrandList GetUserAgentBrandFullVersionListInternal(
  // depending on the Reduce User-Agent reduction phase features.
  std::string GetUserAgentInternal() {
    std::string product = GetProductAndVersion();
@@ -161,7 +175,7 @@ index e699a6a394..fe2e36299a 100644
    }
  
  #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-@@ -225,9 +305,13 @@ std::string GetUserAgentInternal() {
+@@ -225,9 +306,13 @@ std::string GetUserAgentInternal() {
    }
  #endif
  
@@ -178,7 +192,78 @@ index e699a6a394..fe2e36299a 100644
  }
  
  // Generate random order list based on the input size and seed.
-@@ -689,7 +773,11 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
+@@ -279,6 +364,12 @@ blink::UserAgentBrandList ShuffleBrandList(
+ }
+ 
+ std::string GetUserAgentPlatform() {
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows has Windows' prefix, none.
++  if (blink::PresentsWindowsPlatform()) {
++    return "";
++  }
++#endif
+ #if BUILDFLAG(IS_WIN)
+   return "";
+ #elif BUILDFLAG(IS_MAC)
+@@ -299,6 +390,13 @@ std::string GetUserAgentPlatform() {
+ }
+ 
+ std::string GetUnifiedPlatform() {
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows has Windows' unified
++  // platform, as below.
++  if (blink::PresentsWindowsPlatform()) {
++    return "Windows NT 10.0; Win64; x64";
++  }
++#endif
+ #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+   // This constant is only used on Android (desktop) and Linux.
+   constexpr char kUnifiedPlatformChromeOSX64[] = "X11; CrOS x86_64 14541.0.0";
+@@ -451,6 +549,13 @@ std::string GetOSVersion(IncludeAndroidBuildNumber include_android_build_number,
+ std::string BuildOSCpuInfo(
+     IncludeAndroidBuildNumber include_android_build_number,
+     IncludeAndroidModel include_android_model) {
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows has what Windows 10 and 11
++  // on x64 build here.
++  if (blink::PresentsWindowsPlatform()) {
++    return "Windows NT 10.0; Win64; x64";
++  }
++#endif
+   return BuildOSCpuInfoFromOSVersionAndCpuType(
+       GetOSVersion(include_android_build_number, include_android_model),
+       BuildCpuInfo());
+@@ -616,6 +721,15 @@ std::string GetPlatformVersion() {
+   }
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows has the version Windows 11
++  // 24H2 and later report (their Universal API Contract version, as
++  // GetWindowsPlatformVersion() reads it).
++  if (blink::PresentsWindowsPlatform()) {
++    return "19.0.0";
++  }
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+   return GetWindowsPlatformVersion();
+ #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_FUCHSIA)
+@@ -642,6 +756,13 @@ std::string GetPlatformForUAMetadata() {
+   }
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows has Windows' platform.
++  if (blink::PresentsWindowsPlatform()) {
++    return "Windows";
++  }
++#endif
++
+ #if BUILDFLAG(IS_MAC)
+   // TODO(crbug.com/40704421): This can be removed/re-refactored once we use
+   // "macOS" by default
+@@ -689,7 +810,11 @@ blink::UserAgentMetadata GetUserAgentMetadata(bool only_low_entropy_ch) {
    // High entropy client hints.
    metadata.brand_full_version_list =
        GetUserAgentBrandFullVersionListInternal(std::nullopt);
@@ -206,21 +291,29 @@ index 999d93f956..e2a112be0a 100644
  #if defined(HEADLESS_USE_PREFS)
  const base::FilePath::CharType kLocalStateFilename[] =
 diff --git a/third_party/blink/common/user_agent/user_agent_metadata.cc b/third_party/blink/common/user_agent/user_agent_metadata.cc
-index 905d30f092..9c5aeaeb2e 100644
+index 905d30f092..08429090e1 100644
 --- a/third_party/blink/common/user_agent/user_agent_metadata.cc
 +++ b/third_party/blink/common/user_agent/user_agent_metadata.cc
-@@ -8,7 +8,10 @@
+@@ -6,11 +6,18 @@
  
+ #include <algorithm>
+ 
++#include "base/command_line.h"
  #include "base/containers/span.h"
  #include "base/containers/to_vector.h"
 +#include "base/no_destructor.h"
  #include "base/pickle.h"
 +#include "base/strings/strcat.h"
++#include "build/build_config.h"
 +#include "components/browser/browser_runtime.h"
++#include "components/browser/browser_switches.h"
  #include "net/http/structured_headers.h"
  #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
  
-@@ -25,6 +28,19 @@ constexpr std::string_view kValidFormFactors[] = {
+ namespace blink {
+ 
+@@ -25,6 +32,19 @@ constexpr std::string_view kValidFormFactors[] = {
      blink::kXRFormFactor,      blink::kEInkFormFactor,
      blink::kWatchFormFactor};
  
@@ -240,7 +333,7 @@ index 905d30f092..9c5aeaeb2e 100644
  }  // namespace
  
  UserAgentBrandVersion::UserAgentBrandVersion(const std::string& ua_brand,
-@@ -237,4 +253,29 @@ bool operator==(const UserAgentOverride& a, const UserAgentOverride& b) {
+@@ -237,4 +257,41 @@ bool operator==(const UserAgentOverride& a, const UserAgentOverride& b) {
           a.ua_metadata_override == b.ua_metadata_override;
  }
  
@@ -269,7 +362,58 @@ index 905d30f092..9c5aeaeb2e 100644
 +  return *cached;
 +}
 +
++// browser
++bool PresentsWindowsPlatform() {
++#if BUILDFLAG(IS_LINUX)
++  static const bool presents =
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kUseChromiumDefaults);
++  return presents;
++#else
++  return false;
++#endif
++}
++
  }  // namespace blink
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+index 4d7fbfa778..61e024332d 100644
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -297,6 +297,7 @@ source_set("headers") {
+     "use_counter/use_counter_feature.h",
+     "use_counter/use_counter_feature_tracker.h",
+     "use_counter/webdx_feature_maps.h",
++    "user_agent/presents_windows_platform.h",  # browser
+     "user_agent/user_agent_brand_version_type.h",
+     "user_agent/user_agent_metadata.h",
+     "view_source/rendering_preferences.h",
+diff --git a/third_party/blink/public/common/user_agent/presents_windows_platform.h b/third_party/blink/public/common/user_agent/presents_windows_platform.h
+new file mode 100644
+index 0000000000..28348b12da
+--- /dev/null
++++ b/third_party/blink/public/common/user_agent/presents_windows_platform.h
+@@ -0,0 +1,21 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_PUBLIC_COMMON_USER_AGENT_PRESENTS_WINDOWS_PLATFORM_H_
++#define THIRD_PARTY_BLINK_PUBLIC_COMMON_USER_AGENT_PRESENTS_WINDOWS_PLATFORM_H_
++
++#include "third_party/blink/public/common/common_export.h"
++
++namespace blink {
++
++// browser: whether the platform this build reports is Windows. On Linux it
++// is (the public Windows identity) unless --use-chromium-defaults asks for
++// stock Chromium; elsewhere the real platform is reported. The user agent,
++// its client hints, navigator.platform and the platform APIs a Linux build
++// exposes as Windows does follow it.
++BLINK_COMMON_EXPORT bool PresentsWindowsPlatform();
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_PUBLIC_COMMON_USER_AGENT_PRESENTS_WINDOWS_PLATFORM_H_
 diff --git a/third_party/blink/public/common/user_agent/user_agent_metadata.h b/third_party/blink/public/common/user_agent/user_agent_metadata.h
 index 089e424c05..fd959f77ef 100644
 --- a/third_party/blink/public/common/user_agent/user_agent_metadata.h
@@ -286,6 +430,31 @@ index 089e424c05..fd959f77ef 100644
  }  // namespace blink
  
  #endif  // THIRD_PARTY_BLINK_PUBLIC_COMMON_USER_AGENT_USER_AGENT_METADATA_H_
+diff --git a/third_party/blink/renderer/core/execution_context/navigator_base.cc b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+index 83f427c5ec..b6e2cd974e 100644
+--- a/third_party/blink/renderer/core/execution_context/navigator_base.cc
++++ b/third_party/blink/renderer/core/execution_context/navigator_base.cc
+@@ -7,6 +7,7 @@
+ #include "base/feature_list.h"
+ #include "build/build_config.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
+ #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+ #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
+ #include "third_party/blink/renderer/core/probe/core_probes.h"
+@@ -32,6 +33,12 @@ constexpr char kLinuxX86_64[] = "Linux x86_64";
+ #endif
+ 
+ String GetReducedNavigatorPlatform() {
++#if BUILDFLAG(IS_LINUX)
++  // browser: a Linux build presenting Windows has Windows' platform.
++  if (PresentsWindowsPlatform()) {
++    return "Win32";
++  }
++#endif
+ #if BUILDFLAG(IS_ANDROID)
+   if (base::android::device_info::is_desktop() ||
+       base::android::device_info::is_xr()) {
 -- 
 2.45.1.windows.1
 

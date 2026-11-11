@@ -189,6 +189,8 @@ def apply_patches(patches, get_logger):
     log('Applying the browser patch series')
     ours = sorted(PATCHES_DIR.glob('0*.patch'))
     v8 = sorted((PATCHES_DIR / 'v8').glob('0*.patch'))
+    # Skia's patches apply inside third_party/skia; a series may have none.
+    skia = sorted((PATCHES_DIR / 'skia').glob('0*.patch'))
     if not ours or not v8:
         raise RuntimeError('patch series not found under {}'.format(PATCHES_DIR))
     # Check everything before touching the tree, so a failure leaves it clean.
@@ -196,11 +198,15 @@ def apply_patches(patches, get_logger):
         run('git', 'apply', '--check', patch, cwd=SOURCE_TREE)
     for patch in v8:
         run('git', 'apply', '--check', patch, cwd=SOURCE_TREE / 'v8')
+    for patch in skia:
+        run('git', 'apply', '--check', patch, cwd=SOURCE_TREE / 'third_party' / 'skia')
     for patch in ours:
         run('git', 'apply', patch, cwd=SOURCE_TREE)
     for patch in v8:
         run('git', 'apply', patch, cwd=SOURCE_TREE / 'v8')
-    log('{} patches applied'.format(len(curated) + len(CHROMIUM_BUILD_FIXES) + len(ours) + len(v8)))
+    for patch in skia:
+        run('git', 'apply', patch, cwd=SOURCE_TREE / 'third_party' / 'skia')
+    log('{} patches applied'.format(len(curated) + len(CHROMIUM_BUILD_FIXES) + len(ours) + len(v8) + len(skia)))
 
 
 def overlay_widevine(widevine_dir):

@@ -1,8 +1,8 @@
-# Chromeleon binary license
+# Chromaphore binary license
 
-Copyright (c) 2026, The Chromeleon Authors (https://github.com/pppi21/Chromeleon-Browser). All rights reserved, except as granted below.
+Copyright (c) 2026, The Chromaphore Authors (https://github.com/nodriver-project/Chromaphore-Browser). All rights reserved, except as granted below.
 
-This license covers the Chromeleon release binaries: the installer and the portable zip published on the Releases page of https://github.com/pppi21/Chromeleon-Browser. The patches in this repository are under the BSD 3-Clause license in [`LICENSE`](LICENSE) instead, and anyone may build their own browser from them under that license.
+This license covers the Chromaphore release binaries: the installer and the portable zip published on the Releases page of https://github.com/nodriver-project/Chromaphore-Browser. The patches in this repository are under the BSD 3-Clause license in [`LICENSE`](LICENSE) instead, and anyone may build their own browser from them under that license.
 
 1. **Use.** You may download, install and run the binaries for any purpose, personal or commercial, on any number of machines, including throughout an organization.
 2. **Sharing.** You may not redistribute the binaries: do not re-upload, mirror, re-package, bundle, sell or otherwise host them for others. Share a link to the Releases page instead. To ask for permission for a specific mirror or bundle, open an issue in the repository.

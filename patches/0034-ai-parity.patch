@@ -1,7 +1,7 @@
-From 605bb9a95024ca3d2b63b23b5f982bb0a8e3c8d1 Mon Sep 17 00:00:00 2001
+From adc8e073f26685fd8660dc66c26bb512acb058fb Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:46 -0500
-Subject: [PATCH 32/55] ai-parity
+Date: Wed, 11 Nov 2026 03:25:33 -0500
+Subject: [PATCH 34/61] ai-parity
 
 The built-in AI APIs answer as Chrome does, though this build ships no
 on-device model service: LanguageModel and Summarizer are downloadable

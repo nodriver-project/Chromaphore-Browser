@@ -9,7 +9,7 @@ For agents, it carries out whole actions inside the browser with human timing (a
 
 For identity, it reports itself to sites as Google Chrome, answers in headless mode as a headed window on the same machine would, and can present a different machine altogether (GPU, canvas, audio, fonts, screen, hardware, time zone), random for each launch or reproducible from a seed. The spoofing happens inside the browser, not through injected JavaScript, so there is no `Object.defineProperty` wrapper for a page to detect.
 
-**Windows only.** Download the binary from the [Releases page](../../releases); the agent features can also be built from the patches in [`patches/`](patches) (see [Source and binary](#source-and-binary)).
+**Windows, and Linux servers.** Download the binary from the [Releases page](../../releases): Windows x64, and Linux x64 for headless servers without a GPU, which presents itself to sites as Windows (see [Linux](#linux-tarball)); the agent features can also be built from the patches in [`patches/`](patches) (see [Source and binary](#source-and-binary)).
 
 **On a Mac?** There's no macOS build yet. Star or watch this repo (**Watch → Custom → Releases**) to hear when one comes out.
 
@@ -43,30 +43,32 @@ Grab the latest build from the [Releases page](../../releases):
 | `Chromaphore-<release>-chromium<chromium>-windows-x64-setup.exe` | Installer with Windows integration |
 | `Chromaphore-<release>-chromium<chromium>-windows-x64-portable.zip` | Portable, no installation |
 | `register-browser.ps1` | Registers the portable copy with Windows as a browser (optional) |
+| `Chromaphore-<release>-chromium<chromium>-linux-x64.tar.xz` | Linux, for headless servers without a GPU: one folder, `chromaphore/` |
 
-Each release carries two versions: Chromaphore's own and the Chromium it is built on, as in `Chromaphore-1.0.0-chromium156.0.8078.47-windows-x64-portable.zip`. Chromaphore's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names and are kept as they were. The SHA-256 of each file is in its release notes.
+Each release carries two versions: Chromaphore's own and the Chromium it is built on, as in `Chromaphore-<RELEASE>-chromium156.0.8078.47-windows-x64-portable.zip`. Chromaphore's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names, and 1.0.0 the name Chromeleon; they are kept as they were. The SHA-256 of each file is in its release notes.
 
 The release notes also link a VirusTotal scan of the browser's own files (`chrome.exe`, `chrome.dll`, `chrome_elf.dll`), and [Install](#install) says what to do if Windows SmartScreen warns.
 
 ## What's in it
 
-- **Actions done whole, with human timing.** Pointer moves planned like a hand's, clicks, wheel scrolls, drags (native and pointer-based), typing with realistic key timing, key chords, paste, and form controls (`<select>`, date and time fields, colour pickers, file choosers), each one command that answers when the action has ended and says what it led to (navigations, new tabs, blocked popups).
+- **Actions done whole, with human timing.** Pointer moves planned like a hand's, clicks, wheel scrolls, drags (native and pointer-based), typing in one typist's rhythm (a browser types as one person does), key chords, paste, and form controls (`<select>`, date and time fields, colour pickers, file choosers), each one command that answers when the action has ended and says what it led to (navigations, new tabs, blocked popups).
 - **Page perception in one call.** `Page.captureAgentSnapshot` lists the interactive elements across every frame, cross-origin ones included, with their boxes, names and roles, the open layers (dialogs, menus, listboxes), what changed since the last look, live-region announcements, and optionally a marked screenshot with secrets blacked out.
 - **Handles that last.** Each listed element gets an id that stays valid for its life in the document and works across frames; the browser re-locates it, checks whether a press would reach it, and says when it is gone.
 - **Waiting that knows the page.** `Page.agentSettle` waits until the page has finished reacting to an action (requests, animations, DOM changes, navigations), or for a selector, text or URL.
 - **Reading without a tab.** `Browser.agentFetch` reads a URL in a page that is never shown, renders and settles HTML and returns it as Markdown with its outline, links and metadata, or makes a real `fetch()` from the site's origin for an API call.
 - **Recording.** `Browser.startRecording` writes every request, response, body and websocket frame the browser carries, from every process, into a HAR and an index, optionally with every script the pages compiled, with secrets you name masked.
+- **Video recording.** `Browser.startVideoRecording` records one tab to an MP4 at a constant frame rate, with its sound and the cursor that input moves, and writes an events sidecar beside it; the page sees nothing. With `redact`, card number and security code fields and every field marked with `Page.agentMarkSecretField` are black boxes in the file.
 - **A fingerprint identity.** Off by default; one switch or one setting gives the browser a coherent machine of its own (see [Fingerprint identity](#fingerprint-identity)).
 
 ## Automation: custom CDP methods
 
-The browser adds 33 commands and 3 events to the Chrome DevTools Protocol, in the Browser, Input and Page domains. They are listed in the protocol JSON at `http://127.0.0.1:<port>/json/protocol` and callable from any CDP client (Puppeteer or Playwright through `CDPSession.send(...)`, Selenium's CDP bridge, a CDP wrapper library, a raw WebSocket). Every one of them is documented, with parameters, returns and examples, in **[`CDP.md`](CDP.md)**. In short:
+The browser adds 41 commands and 4 events to the Chrome DevTools Protocol, in the Browser, Input and Page domains. They are listed in the protocol JSON at `http://127.0.0.1:<port>/json/protocol` and callable from any CDP client (Puppeteer or Playwright through `CDPSession.send(...)`, Selenium's CDP bridge, a CDP wrapper library, a raw WebSocket). Every one of them is documented, with parameters, returns and examples, in **[`CDP.md`](CDP.md)**. In short:
 
 | Domain | What it adds |
 |---|---|
-| `Browser` | `agentFetch` / `agentFetchCancel` (read a URL in a page that is never shown, HTML extracted as Markdown), `startRecording` / `stopRecording` / `recordingMask` / `recordingStatus` (a HAR with bodies, sockets and compiled scripts, with secrets masked), event `recordingEnded`, and `getFingerprint` (the identity the browser presents, read without touching any page) |
+| `Browser` | `agentFetch` / `agentFetchCancel` (read a URL in a page that is never shown, HTML extracted as Markdown), `startRecording` / `stopRecording` / `recordingMask` / `recordingStatus` (a HAR with bodies, sockets and compiled scripts, with secrets masked), event `recordingEnded`, `startVideoRecording` / `setVideoRecordingTarget` / `pauseVideoRecording` / `resumeVideoRecording` / `markVideoRecording` / `stopVideoRecording` / `videoRecordingStatus` (one tab recorded to an MP4 with its sound, secret fields black), event `videoRecordingEnded`, and `getFingerprint` (the identity the browser presents, read without touching any page) |
 | `Input` | `moveTo`, `revealElement`, `scrollBy`, `performDrag`, `dispatchMousePath`, `dispatchKeystrokes`, `dispatchKeyChord`, `dispatchPaste`, `selectOptions`, `fillDateTime`, `pickColor`, `chooseFiles`, `probeMovementPersona`, and a `carry` mode for the stock `setInterceptDrags`; events `actionOutcome`, `permissionPromptDismissed` |
-| `Page` | `captureAgentSnapshot` / `agentFinishCapture` (one-call perception with layers, deltas, live regions and secret redaction), `resolveAgentNode`, `agentHitCheck`, `agentNodesAlive`, `agentAnnouncements`, `agentSettleArm` / `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream` / `updateFrameStream` / `stopFrameStream` (frames into shared memory) |
+| `Page` | `captureAgentSnapshot` / `agentFinishCapture` (one-call perception with layers, deltas, live regions and secret redaction), `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField` (a field the video recording blacks out), `agentNodesAlive`, `agentAnnouncements`, `agentSettleArm` / `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream` / `updateFrameStream` / `stopFrameStream` (frames into shared memory) |
 
 Every item is marked experimental: names and fields may change between releases, and the protocol JSON of the build you run is the authority. Renamed fields keep their old names as deprecated aliases for at least one release.
 
@@ -203,7 +205,7 @@ These don't fit the seed model. Set them to match the proxy or VPN exit you use:
 
 | Switch | Effect |
 |---|---|
-| `--movement-persona-seed=<int64>` | The seed of the human-movement persona that plans pointer paths for the custom Input methods. Absent: derived from `--fingerprint-seed` when that is given, otherwise random for each browser run. |
+| `--movement-persona-seed=<int64>` | The seed of the human-movement persona that plans pointer paths for the custom Input methods, and of the typist whose rhythm `Input.dispatchKeystrokes` types in. Absent: derived from `--fingerprint-seed` when that is given, otherwise random for each browser run. |
 | `--private-clipboard` | The browser keeps its own in-memory clipboard: copy, cut and paste work inside this browser and never read or overwrite the clipboard of the person at the machine. Required by `Input.dispatchPaste`. |
 | `--dismiss-permission-prompts` | Permission prompts (camera, microphone, location, notifications, File System Access, ...) are dismissed unseen after a random 1-5 s, as a person closing them would, with nothing stored for the site; the client is told through `Input.permissionPromptDismissed`. |
 | `--cancel-print-preview` | A page's `window.print()` runs the normal scripted-print flow, but the preview is closed unseen after a random 1-4 s, as if cancelled; `Page.printToPDF` is unaffected. |
@@ -211,6 +213,7 @@ These don't fit the seed model. Set them to match the proxy or VPN exit you use:
 | `--auto-decline-webauthn` | WebAuthn and passkey prompts are declined with `NotAllowedError` after a random 1-5 s, one ceremony at a time as Chrome holds them; for runs where no authenticator is attached and a hanging prompt would stall the session. |
 | `--show-cdp-cursor` | Draws the CDP-driven cursor while a DevTools client is attached. Useful for watching automation. |
 | `--software-playready-sites=<host,...\|*>` | Extra hosts (subdomains included) allowed to use the software PlayReady CDM besides `primevideo.com` and `amazon.com`; `*` allows every origin. Every other origin sees stock Chrome's EME answers. |
+| `--widevine-playback-sites=<host,...\|*>` | Linux. Sites (a host or a parent domain) that get Linux's Widevine unchanged, so their Widevine content plays, besides the major streaming services the browser already lists; `*` for every site. Every other site sees Widevine as Chrome on Windows runs it, whose license requests a license server refuses. |
 
 </details>
 
@@ -232,11 +235,21 @@ Windows SmartScreen may warn on first run ("Windows protected your PC", unknown 
 1. Extract the zip anywhere and run `chrome.exe`, no installation required.
 2. *(Optional)* To make the portable copy selectable as your default browser, download `register-browser.ps1` from the same release, put it in the extracted folder and run it there in an **elevated** PowerShell (or add `-PerUser` to register for just your account, no admin needed), then set it in **Settings → Default apps**. Undo any time with `register-browser.ps1 -Unregister`.
 
+### Linux (tarball)
+
+For headless servers and containers without a GPU.
+
+1. Download `Chromaphore-<release>-chromium<chromium>-linux-x64.tar.xz`, unpack it anywhere (`tar -xJf <file name>`) and run `./chromaphore --headless=new` in the `chromaphore/` folder it holds. Its `INSTALL.md` lists the libraries a bare server needs, the one-time AppArmor step the sandbox needs on Ubuntu 23.10 and later (`./register-browser.sh --apparmor`), and what changes in a container.
+2. It presents a Windows machine to sites: Google Chrome on Windows as described above, the Windows fonts it carries and a default Windows desktop screen. A direct connection still looks like Linux at the TCP level until `sudo ./tcp-syn/build-and-install.sh` has run (see `INSTALL.md`); behind a proxy this does not show.
+3. Run it with WebGL off, as a machine without a usable GPU has it: `--disable-gpu --disable-software-rasterizer`. WebGL drawn in software is told apart by its rendering.
+
+It is not made for a Linux desktop or a host with a GPU.
+
 ## Source and binary
 
 The binary on the Releases page is the whole browser, free to use: everything this README describes is in it. Its source is published in [`patches/`](patches) except for the fingerprint identity layer: the identity switches above, `chrome://browser-settings` and `Browser.getFingerprint`. That part stays closed so detection vendors cannot simply read how the spoofing works. It is no perfect defence, but it raises their cost.
 
-If you would rather not run a binary you cannot fully inspect, build the browser yourself from `patches/`: you get every automation feature, the Google Chrome parity and the headless behaviour described above, without the fingerprint identity.
+If you would rather not run a binary you cannot fully inspect, build the browser yourself from `patches/`: you get every automation feature, the Google Chrome parity and the headless behaviour described above, without the fingerprint identity. Typing then keeps one typist's rhythm, from plain timing tables instead of the measured ones the binary carries.
 
 ## Building from source
 

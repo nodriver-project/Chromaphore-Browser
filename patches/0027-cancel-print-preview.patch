@@ -1,7 +1,7 @@
-From 442d0b9dd31046a7dd5e13ee988edac2cafb7ecc Mon Sep 17 00:00:00 2001
+From d5d172b183c1139615dc88b068d77ee5c0ee7c5a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:36 -0500
-Subject: [PATCH 26/55] cancel-print-preview
+Date: Wed, 11 Nov 2026 03:25:19 -0500
+Subject: [PATCH 27/61] cancel-print-preview
 
 --cancel-print-preview: a scripted print preview is closed unseen after a
 short random delay, headed or headless, and the WebContents observer

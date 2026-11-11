@@ -4,19 +4,19 @@ This document is the reference for the commands, events and types this browser a
 
 The additions live in three domains:
 
-- **Browser**: reading a URL without a tab (`agentFetch`), browser-wide network recording (`startRecording` and friends), and, in the release binary, the browser's settled fingerprint (`getFingerprint`).
+- **Browser**: reading a URL without a tab (`agentFetch`), browser-wide network recording (`startRecording` and friends), recording a tab to a video file (`startVideoRecording` and friends), and, in the release binary, the browser's settled fingerprint (`getFingerprint`).
 - **Input**: pointer, keyboard and form-control actions carried out whole, inside the browser, with human timing (`moveTo`, `scrollBy`, `performDrag`, `dispatchKeystrokes`, `selectOptions`, `chooseFiles`, ...).
-- **Page**: one-call page perception (`captureAgentSnapshot`), element handles that work across frames (`resolveAgentNode`, `agentHitCheck`, `agentNodesAlive`), live-region and layer reports (`agentAnnouncements`, `agentReport`), waiting for a page to settle (`agentSettle`), history steps that answer when landed (`agentNavigateToHistoryEntry`), and a shared-memory frame stream (`startFrameStream`).
+- **Page**: one-call page perception (`captureAgentSnapshot`), element handles that work across frames (`resolveAgentNode`, `agentHitCheck`, `agentNodesAlive`), live-region and layer reports (`agentAnnouncements`, `agentReport`), waiting for a page to settle (`agentSettle`), history steps that answer when landed (`agentNavigateToHistoryEntry`), secret fields a redacted video recording blacks out (`agentMarkSecretField`), and a shared-memory frame stream (`startFrameStream`).
 
 ## How to call them
 
 - **Discovery.** The browser lists every custom command, event and type in its protocol JSON at `http://127.0.0.1:<port>/json/protocol`, next to the stock ones. Any CDP client that can send a raw method name can call them: `CDPSession.send(...)` in Puppeteer or Playwright, a raw WebSocket, a CDP wrapper library, or the DevTools front end's protocol monitor.
 - **Release binary and source build.** Everything here is in the binary on the Releases page. A browser built from the published patches has every item except `Browser.getFingerprint`, which reports the fingerprint identity layer whose source is not published; it is marked **release binary only** below.
 - **Experimental.** Every item here is marked `experimental` in the protocol. Names and fields may change between releases; the protocol JSON of the build you run is the authority.
-- **Which target.** The `Browser` domain commands (`Browser.agentFetch`, `Browser.agentFetchCancel`, `Browser.getFingerprint`, `Browser.startRecording`, `Browser.stopRecording`, `Browser.recordingMask`, `Browser.recordingStatus`) exist **only on the browser target**: the WebSocket at the `webSocketDebuggerUrl` that `/json/version` reports. Sent on a page session they answer with a "method not found" error. The `Input` and `Page` commands run on a **page session**: a session attached to a page target (from `/json/list`, or `Target.attachToTarget` with `flatten: true`). Elements in out-of-process iframes are handled for you: the commands take the element's backend node id together with the id of the frame whose renderer holds it, and route the call themselves (see "Naming an element" below).
+- **Which target.** The `Browser` domain commands (`Browser.agentFetch`, `Browser.agentFetchCancel`, `Browser.getFingerprint`, `Browser.startRecording`, `Browser.stopRecording`, `Browser.recordingMask`, `Browser.recordingStatus`, `Browser.startVideoRecording`, `Browser.setVideoRecordingTarget`, `Browser.pauseVideoRecording`, `Browser.resumeVideoRecording`, `Browser.markVideoRecording`, `Browser.stopVideoRecording`, `Browser.videoRecordingStatus`) exist **only on the browser target**: the WebSocket at the `webSocketDebuggerUrl` that `/json/version` reports. Sent on a page session they answer with a "method not found" error. The `Input` and `Page` commands run on a **page session**: a session attached to a page target (from `/json/list`, or `Target.attachToTarget` with `flatten: true`). Elements in out-of-process iframes are handled for you: the commands take the element's backend node id together with the id of the frame whose renderer holds it, and route the call themselves (see "Naming an element" below).
 - **Long-running commands answer once, when done.** Most Input and Page commands here carry out a whole action (a move, a click, a scroll, a wait) and reply when it has ended, not when it was dispatched. Each carries a `timeoutMs` with a default and a cap, listed per command. A reply's `outcome` string says how the action ended; the possible values are listed per command.
-- **Events.** `Input.actionOutcome` is sent to the session whose command armed it. `Input.permissionPromptDismissed` is sent on the page's session whenever the browser dismisses one of its permission prompts. `Browser.recordingEnded` is sent on the browser session.
-- **Platform.** `Page.startFrameStream`, `Page.updateFrameStream` and `Page.stopFrameStream` are Windows only.
+- **Events.** `Input.actionOutcome` is sent to the session whose command armed it. `Input.permissionPromptDismissed` is sent on the page's session whenever the browser dismisses one of its permission prompts. `Browser.recordingEnded` is sent on the browser session. `Browser.videoRecordingEnded` is sent to the session that started the recording.
+- **Platform.** `Page.startFrameStream`, `Page.updateFrameStream` and `Page.stopFrameStream` run on Windows and Linux; the shared memory and the frame event are each platform's own kind (see `Page.startFrameStream`).
 - **Switches.** Some methods depend on command-line switches the browser was started with. Each dependency is noted on the method, and the table at the end of this document collects them.
 
 ### Conventions shared by the Input and Page commands
@@ -37,16 +37,16 @@ Each command has a heading, a short description of what it does and when to use 
 
 ## Contents
 
-- [Browser domain](#browser-domain): `agentFetch`, `agentFetchCancel`, `getFingerprint` (release binary only), `startRecording`, `stopRecording`, `recordingMask`, `recordingStatus`; event `recordingEnded`; types `AgentFetchRedirect`, `AgentFetchOutlineItem`, `AgentFetchLink`.
+- [Browser domain](#browser-domain): `agentFetch`, `agentFetchCancel`, `getFingerprint` (release binary only), `startRecording`, `stopRecording`, `recordingMask`, `recordingStatus`, `startVideoRecording`, `setVideoRecordingTarget`, `pauseVideoRecording`, `resumeVideoRecording`, `markVideoRecording`, `stopVideoRecording`, `videoRecordingStatus`; events `recordingEnded`, `videoRecordingEnded`; types `AgentFetchRedirect`, `AgentFetchOutlineItem`, `AgentFetchLink`, `VideoRecordingResult`.
 - [Input domain](#input-domain): `dispatchMousePath`, `moveTo`, `revealElement`, `scrollBy`, `performDrag`, `setInterceptDrags` (new `carry` parameter), `dispatchKeystrokes`, `dispatchKeyChord`, `dispatchPaste`, `selectOptions`, `fillDateTime`, `pickColor`, `chooseFiles`, `probeMovementPersona`; events `actionOutcome`, `permissionPromptDismissed`; types `MousePathPoint`, `MousePathEnd`, `MouseWheelNotch`, `MoveEnd`, `PlanRect`, `WheelScroller`, `DragScroll`, `SelectOption`, `NoTypos`, `FieldReading`.
-- [Page domain](#page-domain): `captureAgentSnapshot`, `agentFinishCapture`, `resolveAgentNode`, `agentHitCheck`, `agentNodesAlive`, `agentAnnouncements`, `agentSettleArm`, `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream`, `updateFrameStream`, `stopFrameStream`; types for snapshots, deltas, layers, live regions, redaction, node life, reports, action outcomes and settling.
+- [Page domain](#page-domain): `captureAgentSnapshot`, `agentFinishCapture`, `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField`, `agentNodesAlive`, `agentAnnouncements`, `agentSettleArm`, `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream`, `updateFrameStream`, `stopFrameStream`; types for snapshots, deltas, layers, live regions, redaction, node life, reports, action outcomes and settling.
 - [Switches the custom methods depend on](#switches-the-custom-methods-depend-on).
 
 ---
 
 ## Browser domain
 
-All commands in this section are **browser target only**. `Browser.agentFetch` and `Browser.stopRecording` are asynchronous: their reply comes when the work has finished.
+All commands in this section are **browser target only**. `Browser.agentFetch`, `Browser.stopRecording`, `Browser.startVideoRecording` and `Browser.stopVideoRecording` are asynchronous: their reply comes when the work has finished.
 
 ### `Browser.agentFetch`: read a URL without a tab
 
@@ -332,6 +332,252 @@ Parameters:
 }
 ```
 
+### `Browser.startVideoRecording`: record a tab to an MP4
+
+Records one tab to an H.264 MP4 at a constant frame rate. The tab is captured at a fixed size without touching its window, so the page sees nothing; the frames are paced and muxed in a sandboxed process, which encodes them itself or with the GPU process's encoder, and the file is written as fragments of about a second, so a file cut short still plays up to its last complete one. An events sidecar is written beside the file. One recording at a time in the browser; it ends itself at the time limit, when the tab it shows closes (unless a move left another tab that is still open: see `setVideoRecordingTarget`), and when the session that started it detaches. A hardware encoder that fails mid-recording ends it with reason `error`, as any encoder failure does. A recording that ends without a stop is reported with `Browser.videoRecordingEnded`. A start that has not answered after 20 seconds fails. The client must be allowed to write local files.
+
+Parameters:
+- `targetId`: `Target.TargetID`, required. The tab to record: a page target.
+- `path`: string, required. Absolute path of the `.mp4` to write; its directory is created. The events sidecar is written beside it, as `<path without .mp4>.events.ndjson`. Neither may exist yet: a recording never replaces a file.
+- `fps`: integer, required. Frames per second of the file, 1-60. The file holds exactly this rate: a still page repeats its last frame.
+- `width`, `height`: integer, optional. The file's size in pixels, clamped to the page's size (no upscaling) and rounded down to even numbers; a page of another shape is letterboxed in black. Without them, the page's own size when the recording starts. With one of them, the other follows the page's shape. The answer's `width` and `height` give the size used.
+- `bitrateKbps`: integer, optional. Target bitrate, 100-100000; default from the size and rate (about 0.1 bit per pixel per frame, 2-20 Mbps).
+- `maxMinutes`: integer, optional. The recording ends itself after this many minutes of recorded time (time paused does not count); default 10, at most 120.
+- `encoder`: enum, optional. Which H.264 encoder: `auto` (the default) uses the GPU's hardware encoder when one starts and passes its self-test, else OpenH264; `hardware` fails the start instead of falling back; `software` always uses OpenH264.
+- `cursor`: boolean, optional. Draws the browser's synthetic mouse cursor (the pointer that mouse input to the page moves: CDP input and, in a window, the person's own mouse) and its click mark into the frames; default true. It appears once input has placed it; the system's own cursor image is never recorded. With it, each mouse press writes a `click` line to the sidecar, with the file's time as `t` and the point in the file's pixels as `x` and `y` (outside the frame for a point off the page). The sidecar's start line says `"cursor": true` or `false`.
+- `audio`: boolean, optional. Records the tab's sound into the file, 48 kHz stereo; default true. AAC when Windows' encoder is available, else Opus. The sound is the tab the file shows: after a move, the new tab's from the moment the move took effect. Sound captured while paused is left out. A browser started with `--mute-audio` still records the tab's sound. Speech synthesis and protected (DRM) playback are not captured: they do not pass through the browser's audio service. The sidecar's start line says `"audio"`: `aac`, `opus` or `none`; if the sound fails, an `audioLost` line says when, and the file goes on without it.
+- `audioCodec`: enum, optional. Which audio codec: `auto` (the default) uses AAC through the GPU process's encoder when one starts and passes its self-test, else Opus, else records no sound; `aac` or `opus` fails the start instead of falling back.
+- `redact`: boolean, optional. Whether the recording is redacted; default false. When it is, card number and security code fields, and every element marked with `Page.agentMarkSecretField`, are each one black box with nothing in it drawn, in the page while it runs: in the file, in screenshots and in the viewer alike. Text elsewhere is not hidden, a secret a page prints as text included. A part of the page that has not confirmed it is drawn that way is black in the file. The sidecar's start line says `"redacted": true` or `false`; a redacted recording's start and target lines carry no `"url"`, since a page's address can hold a secret.
+
+Returns:
+- `recordingId`: string. The id to pass to the other video recording commands.
+- `width`, `height`: integer. The file's size in pixels.
+- `encoder`: string. `hardware`: the GPU's H.264 encoder (High profile); `software`: OpenH264 (Baseline). One encoder runs for the whole file.
+- `audio`: string. `aac`, `opus` or `none`: the codec of the file's sound (`none` when it was turned off or no audio encoder started).
+- `redacted`: boolean. Whether the recording is redacted (`redact` was true).
+- `eventsPath`: string. The events sidecar.
+- `endsAt`: number. When the time limit ends it if it is never paused, in ms since the epoch: a pause stops the limit's clock (`videoRecordingStatus` gives the exact time left).
+
+```json
+{
+  "method": "Browser.startVideoRecording",
+  "params": {
+    "targetId": "A1F0C3...",
+    "path": "C:\\captures\\checkout.mp4",
+    "fps": 30,
+    "width": 1280,
+    "redact": true
+  }
+}
+```
+
+```json
+{
+  "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30",
+  "width": 1280,
+  "height": 720,
+  "encoder": "hardware",
+  "audio": "aac",
+  "redacted": true,
+  "eventsPath": "C:\\captures\\checkout.events.ndjson",
+  "endsAt": 1761650600000
+}
+```
+
+### `Browser.setVideoRecordingTarget`: move the recording to another tab
+
+Moves the recording to another tab. The file keeps its size (letterboxed); the old tab is recorded until the new one delivers a frame, or for a second. Success means the move began: the sidecar gets a `target` line when it takes effect, or a `targetFailed` line when the new tab fails or closes meanwhile and the old one goes on. An unknown target is refused and the old tab keeps recording; the tab already recorded cancels a move under way. When the tab moved to closes later and the tab this move left is still open, the recording goes back to it the same way, and the target line says `"returned": true`; if that tab fails or closes meanwhile, or none is open, the recording ends with `targetClosed`.
+
+Parameters:
+- `recordingId`: string, required. From `startVideoRecording`.
+- `targetId`: `Target.TargetID`, required. The tab to move to: a page target.
+
+Returns: nothing.
+
+```json
+{
+  "method": "Browser.setVideoRecordingTarget",
+  "params": { "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30", "targetId": "C47B90..." }
+}
+```
+
+### `Browser.pauseVideoRecording`: pause the recording
+
+Pauses the recording; the file's time holds until it resumes, so the file has no gap.
+
+Parameters:
+- `recordingId`: string, required.
+- `label`: string, optional. Written to the sidecar's pause line.
+
+Returns:
+- `mediaTimeMs`: number. The file's own time: what a player shows at this point.
+
+```json
+{
+  "method": "Browser.pauseVideoRecording",
+  "params": { "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30", "label": "waiting for a code" }
+}
+```
+
+```json
+{ "mediaTimeMs": 48233 }
+```
+
+### `Browser.resumeVideoRecording`: resume a paused recording
+
+Resumes a paused recording.
+
+Parameters:
+- `recordingId`: string, required.
+- `label`: string, optional. Written to the sidecar's resume line.
+
+Returns:
+- `mediaTimeMs`: number. The file's own time: what a player shows at this point.
+
+```json
+{
+  "method": "Browser.resumeVideoRecording",
+  "params": { "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30" }
+}
+```
+
+### `Browser.markVideoRecording`: write a line to the events sidecar
+
+Writes one line to the events sidecar.
+
+Parameters:
+- `recordingId`: string, required.
+- `event`: string, required. A JSON object (as text, at most 16 KB): written to the sidecar as one line, with the file's time added as `t` and `type` set to `mark` unless it has one. A `type` must be a string, and not one of the recorder's own: `start`, `end`, `pause`, `resume`, `target`, `targetFailed`, `click`, `audioLost`.
+
+Returns:
+- `mediaTimeMs`: number. The file's time the line was given as `t`.
+
+```json
+{
+  "method": "Browser.markVideoRecording",
+  "params": {
+    "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30",
+    "event": "{\"step\":\"payment form\"}"
+  }
+}
+```
+
+```json
+{ "mediaTimeMs": 61870 }
+```
+
+### `Browser.stopVideoRecording`: end the video recording
+
+Ends the recording and answers once the file is closed. A recording already ending on its own is waited for the same way; a second stop while one waits is refused.
+
+Parameters:
+- `recordingId`: string, required. From `startVideoRecording`.
+
+Returns:
+- `result`: `VideoRecordingResult`. What the recording left behind, and how it ended.
+
+```json
+{
+  "method": "Browser.stopVideoRecording",
+  "params": { "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30" }
+}
+```
+
+```json
+{
+  "result": {
+    "path": "C:\\captures\\checkout.mp4",
+    "eventsPath": "C:\\captures\\checkout.events.ndjson",
+    "durationMs": 125400,
+    "frames": 3762,
+    "repeated": 2910,
+    "dropped": 0,
+    "bytes": 21733120,
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "encoder": "hardware",
+    "audio": "aac",
+    "audioDurationMs": 125400,
+    "redacted": true,
+    "reason": "stopped"
+  }
+}
+```
+
+### `Browser.videoRecordingStatus`: the video recording under way
+
+The browser's video recording, whoever started it. Without one, `recording` is `false` and nothing else is given. It changes nothing.
+
+Parameters: none.
+
+Returns:
+- `recording`: boolean.
+- `recordingId`: string, optional.
+- `state`: enum, optional. `starting`, `recording`, `paused` or `stopping`.
+- `targetId`: `Target.TargetID`, optional. The tab the file shows now; once a return to the previous tab has begun (see `setVideoRecordingTarget`), that tab; while stopping, the tab it showed last.
+- `path`: string, optional.
+- `mediaTimeMs`: number, optional. The file's own time so far.
+- `frames`: integer, optional. Frames of the page taken so far. The file holds exactly its frame rate (a still page's last frame is repeated); its own count is in the stop's result.
+- `bytes`: number, optional. Bytes of the file the encoder has sent so far.
+- `redacted`: boolean, optional.
+- `remainingMs`: number, optional. Recorded time left before the time limit ends it; time paused does not count.
+
+```json
+{
+  "method": "Browser.videoRecordingStatus"
+}
+```
+
+```json
+{
+  "recording": true,
+  "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30",
+  "state": "paused",
+  "targetId": "A1F0C3...",
+  "path": "C:\\captures\\checkout.mp4",
+  "mediaTimeMs": 48233,
+  "frames": 1447,
+  "bytes": 8126464,
+  "redacted": true,
+  "remainingMs": 551767
+}
+```
+
+### Event `Browser.videoRecordingEnded`
+
+Sent when a video recording ended without a stop: the time limit, the tab closing, or an error. Sent to the session that started it.
+
+Parameters:
+- `recordingId`: string.
+- `result`: `VideoRecordingResult`. As `stopVideoRecording` returns it; `reason` says what ended it.
+
+```json
+{
+  "method": "Browser.videoRecordingEnded",
+  "params": {
+    "recordingId": "3f6c2a9e-8b1d-4c57-9a0e-2d4b7c1e9f30",
+    "result": {
+      "path": "C:\\captures\\checkout.mp4",
+      "eventsPath": "C:\\captures\\checkout.events.ndjson",
+      "durationMs": 600000,
+      "frames": 17998,
+      "repeated": 15310,
+      "dropped": 2,
+      "bytes": 96468992,
+      "width": 1280,
+      "height": 720,
+      "fps": 30,
+      "encoder": "hardware",
+      "audio": "aac",
+      "audioDurationMs": 600000,
+      "redacted": true,
+      "reason": "timeLimit"
+    }
+  }
+}
+```
+
 ### Browser domain types
 
 #### `Browser.AgentFetchRedirect`
@@ -357,6 +603,26 @@ A link `Browser.agentFetch` found.
 - `text`: string. The link text.
 - `region`: string. Where on the page: `main`, `nav`, `header`, `footer`, `aside` or `none`.
 - `inMarkdown`: boolean. Whether `markdown` already carries this link.
+
+#### `Browser.VideoRecordingResult`
+
+What a video recording left behind, and how it ended. Returned by `stopVideoRecording` and carried by `videoRecordingEnded`.
+
+- `path`: string. The MP4.
+- `eventsPath`: string. The events sidecar.
+- `durationMs`: number. The file's length.
+- `frames`: integer. Samples in the file.
+- `repeated`: integer. Of them, repeats of a page that had not changed.
+- `dropped`: integer. Ticks with no sample because the encoder was more than two frames behind, or dropped the frame: the sample before lasts longer instead, so the file still plays at real speed.
+- `bytes`: number. The file's size.
+- `width`, `height`: integer. The file's size in pixels.
+- `fps`: integer. Its frame rate.
+- `encoder`: string. `hardware`: the GPU's H.264 encoder (High profile); `software`: OpenH264 (Baseline).
+- `audio`: string. `aac`, `opus` or `none`: the codec of the file's sound; `none` when the file got no sound, whatever `startVideoRecording` answered.
+- `audioDurationMs`: number. The sound's length, at most `durationMs`: shorter when the sound failed on the way (the sidecar's `audioLost` line).
+- `redacted`: boolean. Whether the recording was redacted (`startVideoRecording`'s `redact`).
+- `reason`: string. `stopped`, `timeLimit`, `targetClosed`, `sessionClosed` or `error` (a capture or encoder failure, a failed write, or an encoder sending more than its bitrate allows).
+- `error`: string, optional. What failed, with reason `error`.
 
 ---
 
@@ -789,14 +1055,14 @@ Types a string with realistic timing and optional typos and corrections. One cal
 
 Parameters:
 - `text`: string, required. Text to type. May contain `\n` (mapped to Enter). Non-ASCII characters are dispatched as text-only key events with no virtual key code.
-- `speedMultiplier`: number, optional. Multiplies all time intervals (> 0). 1.0 is baseline typing speed; values > 1 type faster. Default 1.0.
-- `keystrokeDelayMin`, `keystrokeDelayMax`: integer, optional. Inter-keystroke delay range (ms), before speed scaling. Defaults are 60 / 260.
-- `keyHoldMin`, `keyHoldMax`: integer, optional. Key hold duration range (ms) between keyDown and keyUp. People hold a key about 70-120 ms; the default range is 65-130. After the speed multiplier a hold is never under 45 ms, nor the range's top under 70 ms.
-- `contextAware`: boolean, optional. When true, applies bigram / repeat / punctuation timing adjustments (common English bigrams 30% faster, repeats 20% faster, post-space/punctuation 20% slower). Default true.
+- `speedMultiplier`: number, optional. Sets the typist's pace, with `keystrokeDelayMin`/`keystrokeDelayMax` (> 0). 1.0 is the typist's own speed; values > 1 type faster, as a faster typist does: the keys overlap more and are held hardly shorter. It stops at about 110 words a minute. The thinking pauses are divided by it. Default 1.0.
+- `keystrokeDelayMin`, `keystrokeDelayMax`: integer, optional. The pace, as a range in ms. A browser types as one person does: a typist whose speed (40 to 75 words a minute) and way of holding keys are drawn from the persona seed (the hand's, see "The hand" above). This range's middle over the default's (60 / 260, middle 160) is how much slower that typist types: the defaults leave the typist's own pace.
+- `keyHoldMin`, `keyHoldMax`: integer, optional. The same for how long a key is held: the typist's holds (about 100 ms at their middle) are stretched by this range's middle over the default's (65 / 130), by 0.6 to 1.6 at most. A quick typist has the next key down before the last one is up. Shift is a key of its own: it goes down ahead of its letter, and repeats when held alone for the keyboard's repeat delay (500 ms), as any held key does. Every key event waits for the keyboard's next report (every 8 ms).
+- `contextAware`: boolean, optional. Whether the time between two keys depends on the keys: which hands and fingers press them, and how often the two letters meet ("th" is quicker than "tb"). Without it every pair is timed alike. Default true.
 - `thinkingPauseProbability`: number, optional. Per-character chance of a "thinking pause" before the keystroke. Default 0 (no pauses).
 - `thinkingPauseMin`, `thinkingPauseMax`: integer, optional. The pause's range, in ms.
 - `typoProbability`: number, optional. Per-character chance of injecting a typo + correction sequence. Default 0 (no typos). Realistic values are around 0.01-0.03.
-- `seed`: number, optional. RNG seed for deterministic typo placement. Same seed + same params + same text produces the same event schedule. Default: a fresh time-derived seed each call. A negative value seeds as its magnitude.
+- `seed`: number, optional. RNG seed for the rhythm and the typos. The same seed, parameters, text and persona seed give the same event schedule. Default: a fresh time-derived seed each call. A negative value seeds as its magnitude.
 - `followNavigation`: boolean, optional. Whether the answer waits for a cross-document navigation the keys started to end (at most about 3 s; default true).
 - `readBack`: boolean, optional. Whether the answer says what the focused field held before the first key and once the keys were handled and it had held still for 150 ms (at most 300 ms more); default false.
 - `noTypos`: `NoTypos`, optional. No typo is made in a field this rule holds for, whatever `typoProbability` says. The field the keys start in is read first.
@@ -848,7 +1114,7 @@ Parameters:
 - `modifiers`: integer, required. Alt=1, Ctrl=2, Meta/Command=4, Shift=8.
 - `key`: string, optional. The key pressed with the modifiers: one character, such as `"v"` or `"a"`, or a key name: `Enter`, `Tab`, `Backspace`, `Escape`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `ArrowLeft`, `ArrowUp`, `ArrowRight`, `ArrowDown`, `F1`-`F12`, `Space`, `CapsLock`, `NumLock`, `ScrollLock` (the lock itself is the machine's, and does not change). With Shift a character reports its shifted form, and one that only Shift reaches is pressed with Shift. Omit it to press only the modifiers.
 - `phase`: enum, optional. `full` (default): everything goes down and comes up. `down`: only the modifiers go down, and stay down, the last one repeating its keydown as a held key does (after about half a second, then about thirty a second) until the next key input; the call returns once they are down. `up`: held modifiers come up. A ctrl+click is `down`, a mouse click, then `up`.
-- `speedMultiplier`: number, optional. Multiplies all timings, as for `dispatchKeystrokes` (default 1.0).
+- `speedMultiplier`: number, optional. Divides the chord's timings (default 1.0; larger is faster).
 - `followNavigation`: boolean, optional. With a key: whether the answer waits for a cross-document navigation it started to end (at most about 3 s; default true).
 
 Returns:
@@ -875,7 +1141,7 @@ Pastes text the way a person does: puts it on this browser's own clipboard and p
 
 Parameters:
 - `text`: string, required. The text to paste.
-- `speedMultiplier`: number, optional. Multiplies the key timing, as for `dispatchKeystrokes` (default 1.0).
+- `speedMultiplier`: number, optional. Divides the key timing (default 1.0; larger is faster).
 - `followNavigation`: boolean, optional. Whether the answer waits for a cross-document navigation the paste started to end (at most about 3 s; default true).
 - `readBack`: boolean, optional. Whether the answer says what the focused field held before the Ctrl+V and after it: read again until it holds the text and holds still, or for at most 1.5 s, since an editor with a document model of its own applies a paste when it is ready; default false.
 
@@ -1328,7 +1594,7 @@ What the focused field holds, read by its own renderer: facts only, never its va
 
 ## Page domain
 
-The Page commands run on a page session. `captureAgentSnapshot`, `agentNodesAlive`, `agentAnnouncements`, `agentReport`, `resolveAgentNode`, `agentHitCheck`, `agentSettle` and `agentNavigateToHistoryEntry` are asynchronous: they answer once every frame has been read, or the wait has ended. A few terms recur:
+The Page commands run on a page session. `captureAgentSnapshot`, `agentNodesAlive`, `agentAnnouncements`, `agentReport`, `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField`, `agentSettle` and `agentNavigateToHistoryEntry` are asynchronous: they answer once every frame has been read, or the wait has ended. A few terms recur:
 
 - **Document and listing.** A page's *document* is what the main frame has committed; `documentId` names its id space (the same after a back/forward cache restore). Every `captureAgentSnapshot` is a *listing* of that document, named by `listingId`; the document's last three listings can serve as the baseline of a delta.
 - **Local root.** The frames of one renderer process. A page with out-of-process iframes has several; replies say how many local roots did not answer in time (`unansweredFrames`), and a few fields are given in a local root's own coordinates.
@@ -1564,6 +1830,37 @@ Returns:
 { "verdict": "covered", "hit": "dialog \"Choose a plan\"", "hitKind": "dialog" }
 ```
 
+### `Page.agentMarkSecretField`: black out a field in a redacted video recording
+
+Tells the browser that an element holds a secret: from this answer on, and for as long as the element lives, a redacted video recording (`Browser.startVideoRecording` with `redact`) shows it as one black box of its own size, with nothing in it drawn (no text, no caret), in the file, in screenshots and in the viewer alike; a text field is black whole, its placeholder included, empty or not. Call it before putting the secret in. Nothing about the element changes for the page. It cannot be taken back: a field that later holds something else stays black. A frame element is never marked (mark the field inside the frame), and an element that draws itself (a canvas, an image, a video, a plugin) is not hidden by a mark. When a secret typed into a hidden field is passed on by the page's script to another editable element it focuses, that one is marked too. Fails "the page did not answer" when no answer has come within 10 s.
+
+Parameters:
+- `agentNodeId`: integer, optional. The element, by an `agentNodeId` of this document. Or else `backendNodeId` with `frameId`; or else `focused`.
+- `backendNodeId`: integer, optional. The element by its backend node id in the renderer of `frameId`'s local root, as `agentHitCheck` takes it.
+- `frameId`: string, optional. The local root frame for `backendNodeId`.
+- `focused`: boolean, optional. With no id: the element that has focus where the next key goes (the focused frame, else the main frame; the innermost focused element, inside shadow trees, a part of a control's own date or time fields being the control), as `Input.dispatchKeystrokes` finds it before its first key.
+
+Returns:
+- `outcome`: string. `marked`; `gone`: the id names no element now; `frame`: the element is a frame element, and nothing is marked; `nothing`: with `focused`, no element has focus (the document's body or root, or nothing).
+
+```json
+{
+  "method": "Page.agentMarkSecretField",
+  "params": { "agentNodeId": 41 }
+}
+```
+
+```json
+{ "outcome": "marked" }
+```
+
+Marking the focused field, then typing the secret into it:
+
+```json
+{ "method": "Page.agentMarkSecretField", "params": { "focused": true } }
+{ "method": "Input.dispatchKeystrokes", "params": { "text": "..." } }
+```
+
 ### `Page.agentNodesAlive`: are these elements still there?
 
 Whether elements are still in this document, by `agentNodeId` or label; one answer per id, then per label, in order. No script runs in the page. Use it to validate a set of handles cheaply before acting, or to learn where an element went (off-screen, behind a layer, covered).
@@ -1776,9 +2073,9 @@ Returns:
 { "outcome": "committed", "url": "https://example.com/list" }
 ```
 
-### `Page.startFrameStream`: frames into shared memory (Windows only)
+### `Page.startFrameStream`: frames into shared memory
 
-Streams the page's frames, uncompressed, into shared memory for a viewer in another process on this machine. Unlike `startScreencast`, nothing is encoded or sent over the protocol per frame, and the capture itself is throttled to `maxFps` rather than only the delivery. Frames are captured only when the page changes. One stream per session; it ends with `stopFrameStream` or when the session detaches. **Windows only.**
+Streams the page's frames, uncompressed, into shared memory for a viewer in another process on this machine. Unlike `startScreencast`, nothing is encoded or sent over the protocol per frame, and the capture itself is throttled to `maxFps` rather than only the delivery. Frames are captured only when the page changes. One stream per session; it ends with `stopFrameStream` or when the session detaches. **Windows and Linux.**
 
 The shared-memory section holds a 4096-byte header and three frame slots of 32-bit BGRA pixels, rows packed. Header, little-endian:
 
@@ -1799,14 +2096,16 @@ The shared-memory section holds a 4096-byte header and three frame slots of 32-b
 
 The event is signalled after each frame is published. A reader waits on the event, reads `latest`, checks that the slot's sequence is even and unchanged across its copy, and reads the slot's pixels.
 
+On Windows the section is a named file mapping and the event a named auto-reset event. On Linux the section is a file in the shared-memory directory, mapped shared, and the event a FIFO beside it that receives one byte after each frame: a viewer that falls behind drains what is there and reads the newest frame. Both are owner-only and removed when the stream ends.
+
 Parameters:
 - `maxWidth`: integer, required. Largest frame width wanted, in physical pixels. Frames are scaled down to fit, never up, and never beyond the page's size when the stream began.
 - `maxHeight`: integer, required. Largest frame height wanted, in physical pixels.
 - `maxFps`: integer, required. Most frames per second, 1 to 60.
 
 Returns:
-- `sharedMemoryName`: string. Name of the file mapping holding the frames.
-- `frameEventName`: string. Name of the auto-reset event signalled after each frame.
+- `sharedMemoryName`: string. Name of the file mapping holding the frames; on Linux the path of the file to map.
+- `frameEventName`: string. Name of the auto-reset event signalled after each frame; on Linux the path of the FIFO.
 - `sharedMemorySize`: integer. Size of the file mapping in bytes.
 - `slotWidth`: integer. Largest frame width the slots can hold, in physical pixels.
 - `slotHeight`: integer. Largest frame height the slots can hold, in physical pixels.
@@ -2222,10 +2521,10 @@ The methods above are available whenever the browser runs; the switches below ch
 | --- | --- |
 | `--private-clipboard` | **Required by `Input.dispatchPaste`**, which is refused without it. Presence-only: the browser keeps its own in-memory clipboard instead of the operating system's, so copy, cut and paste (keyboard shortcuts, `execCommand` and the async Clipboard API alike) work within this browser process and never read or overwrite the clipboard of the person at the machine, nor that of any other browser running beside it. The same platform-independent clipboard headless mode always uses. |
 | `--dismiss-permission-prompts` | **Required for `Input.permissionPromptDismissed`** to ever fire. Presence-only: permission requests are queued and shown as usual, except that the prompt is never drawn; after a random 1-5 s, the time a person takes to read a prompt and close it, it is dismissed, and the event is sent. No decision is stored for the site; as after a person's dismissals, three of them put it under the 7-day embargo. A request from a background tab waits for the tab to be shown, as the prompt itself would. Also covers File System Access prompts. (The stock `--deny-permission-prompts` denies in the same call and persists the block, as headless mode does; it does not produce the event.) |
-| `--movement-persona-seed` | The seed of the pointer's human-movement persona (one browser, one hand); an int64. It is the persona `Input.moveTo`, `revealElement`, `scrollBy`, `performDrag`, `selectOptions`, `fillDateTime`, `pickColor` and `chooseFiles` move with, and the default `seed` of `Input.probeMovementPersona`. Absent: in the release binary, derived from `--fingerprint-seed` when that is given; otherwise a random seed for each browser run. |
+| `--movement-persona-seed` | The seed of the pointer's human-movement persona (one browser, one hand); an int64. It is the persona `Input.moveTo`, `revealElement`, `scrollBy`, `performDrag`, `selectOptions`, `fillDateTime`, `pickColor` and `chooseFiles` move with, the typist `Input.dispatchKeystrokes` types as, and the default `seed` of `Input.probeMovementPersona`. Absent: in the release binary, derived from `--fingerprint-seed` when that is given; otherwise a random seed for each browser run. |
 | `--fingerprint-seed` | **Release binary only.** The master seed of the fingerprint identity, driving every per-switch `auto` / absent-value derivation, the movement persona's seed included when `--movement-persona-seed` is absent. Accepts `auto` or a 32-bit signed integer, and can be saved at `chrome://browser-settings`. `Browser.getFingerprint` reports it under `seed`, and every other fingerprint switch (`--fingerprint-*`, `--canvas-*-noise`, `--webgl-shader-noise`, `--webrtc-ip4/6`, `--browser-font-bundle`, ...) under `switches`. |
 | `--cancel-print-preview` | Shapes the `print` outcome several replies carry (`Page.ActionEvent` kind `print`, `AgentActionReport.printAtMs`, `SettleChange.unanswered`): a page's `window.print()` runs the scripted-print flow with no preview opening, and after a random 1-4 s the preview is closed as its Cancel would close it, so `print()` returns and the frame can answer again. Without it the page waits in `print()` until the preview is dealt with. Presence-only; `Page.printToPDF` is unaffected. |
 | `--show-cdp-cursor` | Presence-only. Draws a cursor overlay while a DevTools client is attached, which makes the paths `Input.moveTo`, `dispatchMousePath`, `performDrag` and the other pointer commands take visible on screen. Not required by any method. |
-| Local file access of the client | Not a switch, but a gate: `Input.chooseFiles` is refused when the DevTools client lacks local file access, as `DOM.setFileInputFiles` is. |
-| Windows | `Page.startFrameStream`, `Page.updateFrameStream` and `Page.stopFrameStream` exist on Windows only. |
-| Browser target | `Browser.agentFetch`, `agentFetchCancel`, `getFingerprint`, `startRecording`, `stopRecording`, `recordingMask` and `recordingStatus` answer "method not found" on any session that is not the browser target's. |
+| Local file access of the client | Not a switch, but a gate: `Input.chooseFiles` is refused when the DevTools client lacks local file access, as `DOM.setFileInputFiles` is. `Browser.startVideoRecording` is refused when the client may not write local files. |
+| Windows and Linux | `Page.startFrameStream`, `Page.updateFrameStream` and `Page.stopFrameStream` exist on Windows and Linux. |
+| Browser target | `Browser.agentFetch`, `agentFetchCancel`, `getFingerprint`, `startRecording`, `stopRecording`, `recordingMask`, `recordingStatus`, `startVideoRecording`, `setVideoRecordingTarget`, `pauseVideoRecording`, `resumeVideoRecording`, `markVideoRecording`, `stopVideoRecording` and `videoRecordingStatus` answer "method not found" on any session that is not the browser target's. |

@@ -1,7 +1,7 @@
-From 4fc4234c8faea7c367b523f0c84e342d5cdae6a7 Mon Sep 17 00:00:00 2001
+From 43279e96c76ee13f72234f950c5bab9d727125db Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:37 -0500
-Subject: [PATCH 27/55] cancel-payment-request
+Date: Wed, 11 Nov 2026 03:25:20 -0500
+Subject: [PATCH 28/61] cancel-payment-request
 
 --cancel-payment-request: a payment sheet a page opens is closed unseen
 after a random 1-2 s, as its Cancel button closes it, so a tab-modal sheet

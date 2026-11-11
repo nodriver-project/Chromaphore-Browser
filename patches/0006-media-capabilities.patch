@@ -1,7 +1,7 @@
-From d798dc2e728f913f725f0fd3535ebbe4d3be9ff9 Mon Sep 17 00:00:00 2001
+From 2061b376b9a333bdf4307b9ef64033fd9d6cd631 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:12:05 -0500
-Subject: [PATCH 06/55] media-capabilities
+Date: Wed, 11 Nov 2026 03:22:56 -0500
+Subject: [PATCH 06/61] media-capabilities
 
 MediaCapabilities decodingInfo spoof.
 ---

@@ -1,7 +1,7 @@
-From 854e0ed1d14e6b241b9d53f5320ee82b5148e1cb Mon Sep 17 00:00:00 2001
+From a42b85db672a29f278a512a16fdceb47825f9848 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Mon, 2 Nov 2026 17:13:41 -0500
-Subject: [PATCH 30/55] headless-parity
+Date: Wed, 11 Nov 2026 03:25:25 -0500
+Subject: [PATCH 31/61] headless-parity
 
 A headless browser reports what a headed one does. Its screen
 (--screen-info) is taken from the primary monitor -- pixels, work area,
@@ -11,20 +11,26 @@ screen is given outright, and its window is maximized on it
 maximized window to the work area without Windows' outdent, so the window
 handler gives it no client insets. A page comparing screen, window and
 viewport sees a maximized window on a real desktop rather than headless's
-800x600 screen under a bigger window, or a window filling the work area
-with a restored window's borders. Applied after the seed-derived screen,
-which therefore stands when present (Windows only). Initial focus goes to
-the page rather than the location bar, which nobody types in headless, so
+800x600 screen under a bigger window, or a window filling the work area with
+a restored window's borders. Applied after the seed-derived screen, which
+therefore stands when present. That is on Windows; on Linux, a build
+presenting Windows has no Windows monitor to copy, so its headless screen is
+one fixed Windows desktop: 1920x1080 at a scale of 1 with a 48 px taskbar
+along the bottom, the window maximized on it. Initial focus goes to the page
+rather than the location bar, which nobody types in headless, so
 document.hasFocus() is true as in a window someone is using; a protocol
-navigation never moves focus by itself.
+navigation never moves focus by itself. On Linux a restored window's frame
+is Windows' as well: 8 px at the sides and the bottom, which a page reads as
+outerWidth minus innerWidth, and none when maximized or fullscreen.
 ---
- chrome/app/chrome_main_delegate.cc            | 110 ++++++++++++++++++
- .../browser_web_contents_delegate.cc          |  15 +++
+ chrome/app/chrome_main_delegate.cc            | 134 ++++++++++++++++++
+ .../browser_web_contents_delegate.cc          |  15 ++
+ .../frame/opaque_browser_frame_view_layout.cc |  16 +++
  ui/views/win/hwnd_message_handler_headless.cc |   9 ++
- 3 files changed, 134 insertions(+)
+ 4 files changed, 174 insertions(+)
 
 diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
-index 52011779f8..0870014cf9 100644
+index 52011779f8..716f7bb4dc 100644
 --- a/chrome/app/chrome_main_delegate.cc
 +++ b/chrome/app/chrome_main_delegate.cc
 @@ -6,6 +6,7 @@
@@ -45,7 +51,15 @@ index 52011779f8..0870014cf9 100644
  #include "base/strings/sys_string_conversions.h"
  #include "base/strings/utf_string_conversions.h"
  #include "base/task/thread_pool/thread_pool_instance.h"
-@@ -102,6 +105,8 @@
+@@ -90,6 +93,7 @@
+ #include "printing/buildflags/buildflags.h"
+ #include "services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/resource/resource_bundle.h"
+ #include "ui/base/resource/scoped_startup_resource_bundle.h"
+@@ -102,6 +106,8 @@
  #endif
  
  #if BUILDFLAG(IS_WIN)
@@ -54,7 +68,7 @@ index 52011779f8..0870014cf9 100644
  #include <malloc.h>
  
  #include <algorithm>
-@@ -200,6 +205,7 @@
+@@ -200,6 +206,7 @@
  #include "chrome/gpu/chrome_content_gpu_client.h"  // nogncheck
  #include "chrome/utility/chrome_content_utility_client.h"  // nogncheck
  #include "components/devtools/devtools_pipe/devtools_pipe.h"  // nogncheck
@@ -62,7 +76,7 @@ index 52011779f8..0870014cf9 100644
  
  #if BUILDFLAG(IS_WIN)
  #include "chrome/browser/chrome_browser_main_win.h"  // nogncheck
-@@ -207,6 +213,8 @@
+@@ -207,6 +214,8 @@
  #include "chrome/browser/win/browser_util.h"  // nogncheck
  #include "chrome/browser/win/isolated_browser/isolated_browser_support.h"  // nogncheck
  #include "chrome/chrome_elf/chrome_elf_main.h"
@@ -71,7 +85,7 @@ index 52011779f8..0870014cf9 100644
  #endif  // BUILDFLAG(IS_WIN)
  
  #if BUILDFLAG(IS_MAC)
-@@ -1176,11 +1184,113 @@ void ChromeMainDelegate::SetupTracing() {
+@@ -1176,11 +1185,136 @@ void ChromeMainDelegate::SetupTracing() {
            std::move(tracing_factory), unwinder_type);
  }
  
@@ -161,6 +175,29 @@ index 52011779f8..0870014cf9 100644
 +  }
 +}
 +#endif  // BUILDFLAG(IS_WIN)
++
++#if BUILDFLAG(IS_LINUX)
++// browser: a Linux build presenting Windows has no Windows monitor to copy,
++// and a server has none at all, so its headless screen is one fixed Windows
++// desktop: 1920x1080 at a scale of 1 with Windows 11's 48 px taskbar along
++// the bottom, the colour depth of 24 Windows reports, an external monitor.
++// The window is maximized on it unless a size or position is given, as on
++// Windows.
++void ApplyHeadlessScreenParity(base::CommandLine& command_line) {
++  if (command_line.HasSwitch(switches::kScreenInfo) ||
++      !blink::PresentsWindowsPlatform()) {
++    return;
++  }
++  command_line.AppendSwitchASCII(
++      switches::kScreenInfo,
++      "{1920x1080 workAreaLeft=0 workAreaTop=0 workAreaRight=0 "
++      "workAreaBottom=48 colorDepth=24 devicePixelRatio=1 isInternal=false}");
++  if (!command_line.HasSwitch(switches::kWindowSize) &&
++      !command_line.HasSwitch(switches::kWindowPosition)) {
++    command_line.AppendSwitch(switches::kStartMaximized);
++  }
++}
++#endif  // BUILDFLAG(IS_LINUX)
 +#endif  // !defined(BUILDING_CHROME_RENDERER)
 +
 +}  // namespace
@@ -176,7 +213,7 @@ index 52011779f8..0870014cf9 100644
 +#if !defined(BUILDING_CHROME_RENDERER)
 +    // browser: headless's own screen and window.
 +    if (headless::IsHeadlessMode()) {
-+#if BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 +      ApplyHeadlessScreenParity(*startup_command_line);
 +#endif
 +    }
@@ -211,6 +248,40 @@ index fbd11f0352..57f13908d9 100644
    window_->SetFocusToLocationBar(false);
  }
  
+diff --git a/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc b/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc
+index 0f79aa00ed..2200353897 100644
+--- a/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc
++++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc
+@@ -21,6 +21,10 @@
+ #include "ui/views/window/frame_buttons.h"
+ #include "ui/views/window/frame_caption_button.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
++#endif
++
+ namespace {
+ 
+ constexpr int kCaptionButtonHeight = 18;
+@@ -114,6 +118,18 @@ gfx::Rect OpaqueBrowserFrameViewLayout::GetWindowBoundsForClientBounds(
+ 
+ gfx::Insets OpaqueBrowserFrameViewLayout::FrameBorderInsets(
+     bool restored) const {
++#if BUILDFLAG(IS_LINUX)
++  // browser: Windows keeps 8 px of frame border at the sides and the bottom
++  // of a restored window (SM_CXSIZEFRAME plus SM_CXPADDEDBORDER) and none
++  // when maximized or fullscreen; a page reads it as outerWidth minus
++  // innerWidth. A Linux build presenting Windows lays its frame out the
++  // same way, whatever the platform's decorations.
++  if (blink::PresentsWindowsPlatform()) {
++    return !restored && (delegate_->IsMaximized() || delegate_->IsFullscreen())
++               ? gfx::Insets()
++               : gfx::Insets::TLBR(0, 8, 8, 8);
++  }
++#endif
+   return !restored && delegate_->IsFrameCondensed()
+              ? gfx::Insets()
+              : RestoredFrameBorderInsets();
 diff --git a/ui/views/win/hwnd_message_handler_headless.cc b/ui/views/win/hwnd_message_handler_headless.cc
 index c434bce087..0d53b6165c 100644
 --- a/ui/views/win/hwnd_message_handler_headless.cc
