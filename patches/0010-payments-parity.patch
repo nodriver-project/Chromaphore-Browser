@@ -1,6 +1,6 @@
-From 24c1110bac8397eba8fe3c908bc58409bf0e346b Mon Sep 17 00:00:00 2001
+From 5b8fb24d1ba7a1aee557c197249b3349cd988484 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:38:03 -0500
+Date: Fri, 13 Nov 2026 02:12:13 -0500
 Subject: [PATCH 10/61] payments-parity
 
 canMakePayment/hasEnrolledInstrument basic-card short-circuit.

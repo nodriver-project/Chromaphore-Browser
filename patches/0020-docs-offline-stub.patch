@@ -1,6 +1,6 @@
-From 98db4bfb4691a60ac8878ae2f84b6cd1599516f8 Mon Sep 17 00:00:00 2001
+From 3a370f2d070756c5b70bc7e54b726c8ae1db629e Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:39:34 -0500
+Date: Fri, 13 Nov 2026 02:13:37 -0500
 Subject: [PATCH 20/61] docs-offline-stub
 
 Google Docs Offline component-extension stub (URL-namespace parity).

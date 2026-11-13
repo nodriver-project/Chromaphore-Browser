@@ -1,6 +1,6 @@
-From d1af5aec51e0c5d8788ec092fc10937c42c1fa1f Mon Sep 17 00:00:00 2001
+From 52811db3751fb18f37f30e9b4cdf9be86781606a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:40:03 -0500
+Date: Fri, 13 Nov 2026 02:14:06 -0500
 Subject: [PATCH 25/61] multi-pip-multiview
 
 Video picture-in-picture windows from several tabs at once, each new one

@@ -1,6 +1,6 @@
-From 8c6da62317edaaf141e5bc0569e16e0dd2a51e44 Mon Sep 17 00:00:00 2001
+From 3856e473ee48f5e55041d70044d9b257769dc3cb Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:37:54 -0500
+Date: Fri, 13 Nov 2026 02:12:05 -0500
 Subject: [PATCH 04/61] gesture-plumbing
 
 Synthetic-gesture overload that resolves its completion callback once

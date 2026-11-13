@@ -1,6 +1,6 @@
-From 744a7fee14e7b4b8060261667e510e9ba47a660a Mon Sep 17 00:00:00 2001
+From 25bace7ece723f417f59fcf8000f8eb080d63edb Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:39:50 -0500
+Date: Fri, 13 Nov 2026 02:13:54 -0500
 Subject: [PATCH 23/61] software-playready
 
 Software-secure PlayReady (SL2000) through the OS Media Foundation CDM for

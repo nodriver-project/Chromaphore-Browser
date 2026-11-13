@@ -1,6 +1,6 @@
-From bf8ca17feb004e7403b22ef07afdc65e31eaef8b Mon Sep 17 00:00:00 2001
+From d339ffc78ef5e348df15bb8ee68cd4d92c6214ba Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:40:09 -0500
+Date: Fri, 13 Nov 2026 02:14:12 -0500
 Subject: [PATCH 28/61] cancel-payment-request
 
 --cancel-payment-request: a payment sheet a page opens is closed unseen

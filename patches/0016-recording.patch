@@ -1,6 +1,6 @@
-From ebd9e6e8169742b7a0cd29c59da6c8194019ee46 Mon Sep 17 00:00:00 2001
+From 074d9b9dbd860fa75bc3b372b426f06829f1b408 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:38:51 -0500
+Date: Fri, 13 Nov 2026 02:12:57 -0500
 Subject: [PATCH 16/61] recording
 
 Browser.startRecording, stopRecording, recordingMask, recordingStatus and

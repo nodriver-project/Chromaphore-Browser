@@ -1,6 +1,6 @@
-From ca5faac25cb027678fa1e58b78b9311b42a12262 Mon Sep 17 00:00:00 2001
+From 46b3015daef4aa19fb9f51f0f4f7a2b170a9f377 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:40:17 -0500
+Date: Fri, 13 Nov 2026 02:14:20 -0500
 Subject: [PATCH 32/61] timer-uptime
 
 Pages no longer see how long the machine has been up. Chrome clamps

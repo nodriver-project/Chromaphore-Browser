@@ -1,6 +1,6 @@
-From 6450c83102a2aab86b7ae0990e1de1eaf25f4ace Mon Sep 17 00:00:00 2001
+From a1fd1326fc9685dfbeaefc7c352c458ef3d1c5a3 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:39:51 -0500
+Date: Fri, 13 Nov 2026 02:13:54 -0500
 Subject: [PATCH 24/61] devtools-stealth
 
 Suppress the "controlled by automated test software" infobar, whose

@@ -1,6 +1,6 @@
-From 38e964b7f26fd1ea50a98a63657beb32119de771 Mon Sep 17 00:00:00 2001
+From 2f1f2df9eccc2692091c395da1bd84ac4dc30777 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:39:31 -0500
+Date: Fri, 13 Nov 2026 02:13:35 -0500
 Subject: [PATCH 19/61] webauthn-decline
 
 WebAuthn auto-decline.

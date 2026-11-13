@@ -1,6 +1,6 @@
-From a76615fcb74814c29b6f9efc5e2aefe39cf98419 Mon Sep 17 00:00:00 2001
+From 4b053ad1d5272523747bd55c0220bb82f8611a41 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:39:30 -0500
+Date: Fri, 13 Nov 2026 02:13:34 -0500
 Subject: [PATCH 18/61] agent-fetch
 
 Browser.agentFetch and agentFetchCancel: reads a URL the way a tab would,

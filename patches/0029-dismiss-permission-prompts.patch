@@ -1,6 +1,6 @@
-From 36660fa7a4bf56b0248153c283d5cad0b32bfb50 Mon Sep 17 00:00:00 2001
+From 717dc4654b27bc014125b071ede601b221ef3d05 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:40:11 -0500
+Date: Fri, 13 Nov 2026 02:14:14 -0500
 Subject: [PATCH 29/61] dismiss-permission-prompts
 
 --dismiss-permission-prompts: permission prompts, File System Access

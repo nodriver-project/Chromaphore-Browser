@@ -1,6 +1,6 @@
-From 55fb2049f141dbe31e2a3f8ac57fab309ad42f04 Mon Sep 17 00:00:00 2001
+From 5255ab5fc8b752faafaf8534ec18050c441783c9 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:40:51 -0500
+Date: Fri, 13 Nov 2026 02:14:52 -0500
 Subject: [PATCH 36/61] linux-parity
 
 A Linux build presenting Windows (see the user-agent commit) exposes and

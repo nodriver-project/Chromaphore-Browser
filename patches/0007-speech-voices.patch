@@ -1,6 +1,6 @@
-From 0be11a39d586e379d81e41a4e99666be0a2a2a36 Mon Sep 17 00:00:00 2001
+From 1fd2c638732abf31a38acb75cdc5124780a0c829 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:38:01 -0500
+Date: Fri, 13 Nov 2026 02:12:11 -0500
 Subject: [PATCH 07/61] speech-voices
 
 speechSynthesis voice-list override.

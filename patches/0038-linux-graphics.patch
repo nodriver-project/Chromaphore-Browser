@@ -1,6 +1,6 @@
-From c4a721781752b74b6d575a3c5a9a1f5de1f0e65f Mon Sep 17 00:00:00 2001
+From cfb7974f7ae8aff5d1e04e70675b9001b2474699 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:41:03 -0500
+Date: Fri, 13 Nov 2026 02:15:04 -0500
 Subject: [PATCH 38/61] linux-graphics
 
 WebGL in a Linux build presenting Windows (see the user-agent commit)

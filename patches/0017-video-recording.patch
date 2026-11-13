@@ -1,6 +1,6 @@
-From 6eb28f20455a7cdac41901f5ad8a308985ab3d40 Mon Sep 17 00:00:00 2001
+From 6a15d2fd229a581299999bbd1bf164c354c6a15a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:39:17 -0500
+Date: Fri, 13 Nov 2026 02:13:21 -0500
 Subject: [PATCH 17/61] video-recording
 
 Browser.startVideoRecording, setVideoRecordingTarget, pauseVideoRecording,

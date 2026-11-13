@@ -1,6 +1,6 @@
-From dcc6700fd53b134724d9cf5c768d8194fe776f05 Mon Sep 17 00:00:00 2001
+From a735dc7c4367c0c3b7b5e5373d75b9519c69f9b6 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:38:36 -0500
+Date: Fri, 13 Nov 2026 02:12:43 -0500
 Subject: [PATCH 15/61] frame-stream
 
 Page.startFrameStream, updateFrameStream and stopFrameStream: uncompressed

@@ -1,6 +1,6 @@
-From 851dec350586cd700c6019b808f9281fbe53e30b Mon Sep 17 00:00:00 2001
+From 3ce44c22485741ed506d24461170203dc775ca88 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:40:14 -0500
+Date: Fri, 13 Nov 2026 02:14:17 -0500
 Subject: [PATCH 31/61] headless-parity
 
 A headless browser reports what a headed one does. Its screen

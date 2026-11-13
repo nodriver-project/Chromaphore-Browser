@@ -1,6 +1,6 @@
-From a3540ecadceca4d771668b01d37837b7787685c4 Mon Sep 17 00:00:00 2001
+From 5fdc3b3a3399dc06588a4b8d6711d85c7456b0b8 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:38:19 -0500
+Date: Fri, 13 Nov 2026 02:12:27 -0500
 Subject: [PATCH 11/61] input-actions
 
 The Input domain's actions that move like a hand: dispatchKeystrokes and
@@ -21,6 +21,13 @@ waits for the keyboard's next report (every 8 ms) and is stamped as it
 goes. The tables are in keyboard_typing_tables.inc: without the private
 layer's measured block it types as a plain typist.
 
+On Windows the browser process tells Windows to honour its requests for
+the fine timer, as the GPU process does for itself
+(chrome_browser_main_win.cc). Windows 11 from 22H2 may otherwise ignore
+them while no window of the process can be seen, as a headless
+browser's never can, and the precise wakes that send key and pointer
+events at their times then come on the 15.6 ms system tick.
+
 Riders in files this commit owns: Input.pdl carries the
 permissionPromptDismissed event (dismiss-permission-prompts);
 content/browser/BUILD.gn lists the agent-snapshot and frame-stream
@@ -34,6 +41,7 @@ Linux build presenting Windows the three Windows-only behaviours take
 Windows' form: NumLock on in the lock-key state, wheel notches reported
 as notches, and CRLF line breaks in a paste.
 ---
+ chrome/browser/chrome_browser_main_win.cc     |   10 +
  content/browser/BUILD.gn                      |   39 +
  .../devtools/devtools_instrumentation.cc      |   42 +-
  .../devtools/devtools_instrumentation.h       |   33 +
@@ -77,7 +85,7 @@ as notches, and CRLF line breaks in a paste.
  .../core/exported/web_page_popup_impl.cc      |    1 +
  .../core/exported/web_page_popup_impl.h       |    7 +
  ui/events/blink/web_input_event.cc            |   29 +
- 43 files changed, 31449 insertions(+), 26 deletions(-)
+ 44 files changed, 31459 insertions(+), 26 deletions(-)
  create mode 100644 content/browser/devtools/protocol/action_outcome_watch.cc
  create mode 100644 content/browser/devtools/protocol/action_outcome_watch.h
  create mode 100644 content/browser/devtools/protocol/color_session.cc
@@ -103,6 +111,34 @@ as notches, and CRLF line breaks in a paste.
  create mode 100644 content/browser/devtools/protocol/temporal_session.h
  create mode 100644 content/browser/renderer_host/input/lock_key_event_flags.h
 
+diff --git a/chrome/browser/chrome_browser_main_win.cc b/chrome/browser/chrome_browser_main_win.cc
+index 691b61da00..d67573eb72 100644
+--- a/chrome/browser/chrome_browser_main_win.cc
++++ b/chrome/browser/chrome_browser_main_win.cc
+@@ -49,6 +49,7 @@
+ #include "base/types/expected.h"
+ #include "base/version.h"
+ #include "base/win/pe_image.h"
++#include "base/win/win_util.h"
+ #include "base/win/wrapped_window_proc.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+@@ -562,6 +563,15 @@ ChromeBrowserMainPartsWin::ChromeBrowserMainPartsWin(bool is_integration_test,
+ ChromeBrowserMainPartsWin::~ChromeBrowserMainPartsWin() = default;
+ 
+ int ChromeBrowserMainPartsWin::PreEarlyInitialization() {
++  // browser: Windows is told to grant this process the fine timer it asks
++  // for, as the GPU process tells it for itself. Otherwise Windows 11 may
++  // ignore that request while none of the process's windows can be seen, and
++  // a headless browser's never can; the precise wakes on the UI thread that
++  // send DevTools key and pointer events at their times would then come on
++  // the 15.6 ms system tick. Before Windows 11 22H2 the call does nothing.
++  base::win::SetProcessTimerThrottleState(
++      base::GetCurrentProcessHandle(), base::win::ProcessPowerState::kDisabled);
++
+   if (const int result = ChromeBrowserMainParts::PreEarlyInitialization();
+       result != content::RESULT_CODE_NORMAL_EXIT) {
+     return result;
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
 index 6d2c55f92d..fb34daa4b4 100644
 --- a/content/browser/BUILD.gn

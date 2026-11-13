@@ -1,6 +1,6 @@
-From 0eba07d2900fe47f61e0071fc476fe632ecb39e7 Mon Sep 17 00:00:00 2001
+From f1463d43fb32bcf7225c4ec2ebb9c7d02e3a01b2 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:37:49 -0500
+Date: Fri, 13 Nov 2026 02:12:01 -0500
 Subject: [PATCH 01/61] switch-resolver
 
 browser switch resolver + component scaffolding and switches-dep plumbing.

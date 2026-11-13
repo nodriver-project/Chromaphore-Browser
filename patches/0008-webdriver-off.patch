@@ -1,6 +1,6 @@
-From d91f0b55aac24f54bebec8b6cfe5bc65daeec099 Mon Sep 17 00:00:00 2001
+From 257c6290e272af11266ffecb76a83fa298e1cc29 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Thu, 12 Nov 2026 17:38:01 -0500
+Date: Fri, 13 Nov 2026 02:12:12 -0500
 Subject: [PATCH 08/61] webdriver-off
 
 navigator.webdriver stays false under automation: the AutomationControlled
