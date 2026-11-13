@@ -62,11 +62,11 @@ The release notes also link a VirusTotal scan of the browser's own files (`chrom
 
 ## Automation: custom CDP methods
 
-The browser adds 41 commands and 4 events to the Chrome DevTools Protocol, in the Browser, Input and Page domains. They are listed in the protocol JSON at `http://127.0.0.1:<port>/json/protocol` and callable from any CDP client (Puppeteer or Playwright through `CDPSession.send(...)`, Selenium's CDP bridge, a CDP wrapper library, a raw WebSocket). Every one of them is documented, with parameters, returns and examples, in **[`CDP.md`](CDP.md)**. In short:
+The browser adds 40 commands and 4 events to the Chrome DevTools Protocol, in the Browser, Input and Page domains. They are listed in the protocol JSON at `http://127.0.0.1:<port>/json/protocol` and callable from any CDP client (Puppeteer or Playwright through `CDPSession.send(...)`, Selenium's CDP bridge, a CDP wrapper library, a raw WebSocket). Every one of them is documented, with parameters, returns and examples, in **[`CDP.md`](CDP.md)**. In short:
 
 | Domain | What it adds |
 |---|---|
-| `Browser` | `agentFetch` / `agentFetchCancel` (read a URL in a page that is never shown, HTML extracted as Markdown), `startRecording` / `stopRecording` / `recordingMask` / `recordingStatus` (a HAR with bodies, sockets and compiled scripts, with secrets masked), event `recordingEnded`, `startVideoRecording` / `setVideoRecordingTarget` / `pauseVideoRecording` / `resumeVideoRecording` / `markVideoRecording` / `stopVideoRecording` / `videoRecordingStatus` (one tab recorded to an MP4 with its sound, secret fields black), event `videoRecordingEnded`, and `getFingerprint` (the identity the browser presents, read without touching any page) |
+| `Browser` | `agentFetch` / `agentFetchCancel` (read a URL in a page that is never shown, HTML extracted as Markdown), `startRecording` / `stopRecording` / `recordingMask` / `recordingStatus` (a HAR with bodies, sockets and compiled scripts, with secrets masked), event `recordingEnded`, `startVideoRecording` / `setVideoRecordingTarget` / `pauseVideoRecording` / `resumeVideoRecording` / `markVideoRecording` / `stopVideoRecording` / `videoRecordingStatus` (one tab recorded to an MP4 with its sound, secret fields black), event `videoRecordingEnded` |
 | `Input` | `moveTo`, `revealElement`, `scrollBy`, `performDrag`, `dispatchMousePath`, `dispatchKeystrokes`, `dispatchKeyChord`, `dispatchPaste`, `selectOptions`, `fillDateTime`, `pickColor`, `chooseFiles`, `probeMovementPersona`, and a `carry` mode for the stock `setInterceptDrags`; events `actionOutcome`, `permissionPromptDismissed` |
 | `Page` | `captureAgentSnapshot` / `agentFinishCapture` (one-call perception with layers, deltas, live regions and secret redaction), `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField` (a field the video recording blacks out), `agentNodesAlive`, `agentAnnouncements`, `agentSettleArm` / `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream` / `updateFrameStream` / `stopFrameStream` (frames into shared memory) |
 
@@ -83,8 +83,6 @@ Fingerprint spoofing is **off by default**. Turn it on at **`chrome://browser-se
 An identity is drawn whole from a pool of machine profiles, so its parts agree with each other: a GPU that exists, the processor count and memory such a machine has, a screen at a scale Windows uses, fonts and languages that belong together. Your choice is saved and applied on **every** launch, however the browser is started: a clicked link, a shortcut, or as your default browser. Restart the browser after changing it. The page is equivalent to the `--fingerprint-seed` switch below; a `--fingerprint-seed` on the command line overrides the saved value for that one launch.
 
 Which mode you want depends on the goal. **Auto** breaks correlation between sessions and suits general browsing. **Fixed seed** keeps you consistent to sites that would find a machine whose hardware changes daily more suspicious than one that never changes at all.
-
-`Browser.getFingerprint` reports the identity a running browser presents, every part of it, without running script in any page.
 
 ## Answers like Google Chrome
 
@@ -247,7 +245,7 @@ It is not made for a Linux desktop or a host with a GPU.
 
 ## Source and binary
 
-The binary on the Releases page is the whole browser, free to use: everything this README describes is in it. Its source is published in [`patches/`](patches) except for the fingerprint identity layer: the identity switches above, `chrome://browser-settings` and `Browser.getFingerprint`. That part stays closed so detection vendors cannot simply read how the spoofing works. It is no perfect defence, but it raises their cost.
+The binary on the Releases page is the whole browser, free to use: everything this README describes is in it. Its source is published in [`patches/`](patches) except for the fingerprint identity layer: the identity switches above and `chrome://browser-settings`. That part stays closed so detection vendors cannot simply read how the spoofing works. It is no perfect defence, but it raises their cost.
 
 If you would rather not run a binary you cannot fully inspect, build the browser yourself from `patches/`: you get every automation feature, the Google Chrome parity and the headless behaviour described above, without the fingerprint identity. Typing then keeps one typist's rhythm, from plain timing tables instead of the measured ones the binary carries.
 
