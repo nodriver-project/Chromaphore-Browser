@@ -1,6 +1,6 @@
-From 8dceb24c2ef2ac9ba2aae95cd83c76a339320ee4 Mon Sep 17 00:00:00 2001
+From b0c54011de1d27efc3f7aed1301e83e0efe89886 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:25:34 -0500
+Date: Thu, 12 Nov 2026 17:40:23 -0500
 Subject: [PATCH 35/61] build-config
 
 gitignore adjustments for the custom build.

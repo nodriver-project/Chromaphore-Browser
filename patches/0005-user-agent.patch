@@ -1,6 +1,6 @@
-From 3b8eb491147a43719aaa831e949676ac012c4d5c Mon Sep 17 00:00:00 2001
+From d209e6502831df0efd1f0f7d91029f2839a8aa94 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:22:55 -0500
+Date: Thu, 12 Nov 2026 17:37:57 -0500
 Subject: [PATCH 05/61] user-agent
 
 User-agent + UA client-hints spoof; HeadlessChrome->Chrome product name.

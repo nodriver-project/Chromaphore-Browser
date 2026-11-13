@@ -1,6 +1,6 @@
-From b40e2fcdf2d04b724dcbb2a7a8d1d478755319a3 Mon Sep 17 00:00:00 2001
+From 15658eb3a11c8cd5fce4a84cc37a39f1677a39e7 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:23:01 -0500
+Date: Thu, 12 Nov 2026 17:38:02 -0500
 Subject: [PATCH 09/61] translate-parity
 
 Force TranslateService for hrefTranslate IDL parity.

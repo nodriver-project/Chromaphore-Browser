@@ -1,6 +1,6 @@
-From d5d172b183c1139615dc88b068d77ee5c0ee7c5a Mon Sep 17 00:00:00 2001
+From a5175a1fdea3943a2dc9b8cf65aac219dfeb9e44 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:25:19 -0500
+Date: Thu, 12 Nov 2026 17:40:08 -0500
 Subject: [PATCH 27/61] cancel-print-preview
 
 --cancel-print-preview: a scripted print preview is closed unseen after a

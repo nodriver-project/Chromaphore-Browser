@@ -1,6 +1,6 @@
-From 2f98cfc8efda8ce2567cd995e7fab4373a629140 Mon Sep 17 00:00:00 2001
+From e12b2c9d77742ad2859313091c152e5b9109db62 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:26:04 -0500
+Date: Thu, 12 Nov 2026 17:40:57 -0500
 Subject: [PATCH 37/61] linux-fonts
 
 A Linux build presenting Windows (see the user-agent commit) builds Chrome's

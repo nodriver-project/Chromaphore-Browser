@@ -1,6 +1,6 @@
-From 75b813f8271ed832e901038e5cfefb24f5074449 Mon Sep 17 00:00:00 2001
+From aaf44c6b3cc46f848b0fb9bbdf9a7813745314ba Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:25:15 -0500
+Date: Thu, 12 Nov 2026 17:40:04 -0500
 Subject: [PATCH 26/61] private-clipboard
 
 --private-clipboard: a headed browser gets the headless in-memory

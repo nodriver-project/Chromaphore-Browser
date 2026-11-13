@@ -1,6 +1,6 @@
-From adc8e073f26685fd8660dc66c26bb512acb058fb Mon Sep 17 00:00:00 2001
+From 313568f3373dd4dfaac094cead6de5ef2cc3d12e Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:25:33 -0500
+Date: Thu, 12 Nov 2026 17:40:22 -0500
 Subject: [PATCH 34/61] ai-parity
 
 The built-in AI APIs answer as Chrome does, though this build ships no

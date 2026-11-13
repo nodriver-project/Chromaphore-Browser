@@ -1,6 +1,6 @@
-From 2b629be3d2096c4ab9bed7e9533d550d63e7df55 Mon Sep 17 00:00:00 2001
+From 3a884d557876f7c7e85b8eefffca4e570e6a3360 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:26:11 -0500
+Date: Thu, 12 Nov 2026 17:41:05 -0500
 Subject: [PATCH 39/61] linux-widevine
 
 Widevine in a Linux build presenting Windows (see the user-agent commit)

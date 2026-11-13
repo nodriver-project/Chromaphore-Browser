@@ -1,6 +1,6 @@
-From 5968ad9eef70bd926590b77d0c2f4d83cd558d3e Mon Sep 17 00:00:00 2001
+From 55fb2049f141dbe31e2a3f8ac57fab309ad42f04 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:25:58 -0500
+Date: Thu, 12 Nov 2026 17:40:51 -0500
 Subject: [PATCH 36/61] linux-parity
 
 A Linux build presenting Windows (see the user-agent commit) exposes and
@@ -16,7 +16,7 @@ user-verifying platform authenticator, hybrid transport once the same
 adapter is up, and Secure Payment Confirmation; with a US layout, the
 keyboard layout map of Windows' US layout (IntlBackslash writes a backslash,
 no IntlYen); the CSS system colors Windows maps to its native colors, at
-Windows 10 and 11's defaults and in light mode as there, with Highlight
+Windows 11's defaults and in light mode as there, with Highlight
 unblended as Windows' theme takes it, and the CSS system fonts menu,
 small-caption and status-bar as Windows 11's Segoe UI at 12 px; a mouse, as
 Windows reports one even where none is attached, so (pointer: fine) and
@@ -5024,7 +5024,7 @@ index e11a5e5651..c82e54a610 100644
  
    if (is_chromeos) {
 diff --git a/ui/color/css_system_color_mixer.cc b/ui/color/css_system_color_mixer.cc
-index 2e51a2527f..044c8cbcc2 100644
+index 2e51a2527f..e5ff5c73ba 100644
 --- a/ui/color/css_system_color_mixer.cc
 +++ b/ui/color/css_system_color_mixer.cc
 @@ -5,6 +5,11 @@
@@ -5046,7 +5046,7 @@ index 2e51a2527f..044c8cbcc2 100644
 +#if BUILDFLAG(IS_LINUX)
 +  // browser: a Linux build presenting Windows (as
 +  // blink::PresentsWindowsPlatform(), which ui/ cannot reach) maps what
-+  // Windows maps, at Windows 10 and 11's default colors, and like Windows
++  // Windows maps, at Windows 11's default colors, and like Windows
 +  // only in light mode.
 +  static const bool presents_windows =
 +      !base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -5056,7 +5056,7 @@ index 2e51a2527f..044c8cbcc2 100644
 +      key.color_mode == ColorProviderKey::ColorMode::kLight) {
 +    mixer[kColorCssSystemBtnFace] = {SkColorSetRGB(0xF0, 0xF0, 0xF0)};
 +    mixer[kColorCssSystemGrayText] = {SkColorSetRGB(0x6D, 0x6D, 0x6D)};
-+    mixer[kColorCssSystemHighlight] = {SkColorSetRGB(0x00, 0x78, 0xD7)};
++    mixer[kColorCssSystemHighlight] = {SkColorSetRGB(0x00, 0x78, 0xD4)};
 +    mixer[kColorCssSystemHotlight] = {SkColorSetRGB(0x00, 0x66, 0xCC)};
 +    mixer[kColorCssSystemActiveText] = {kColorCssSystemHotlight};
 +    mixer[kColorCssSystemLinkText] = {kColorCssSystemHotlight};

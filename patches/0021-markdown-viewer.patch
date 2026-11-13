@@ -1,6 +1,6 @@
-From 6f1d460a374953f7858bfeae2eae4403baba2669 Mon Sep 17 00:00:00 2001
+From 4fac34cf8614d5ccfc108de8bcc8db82b21f199a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:24:56 -0500
+Date: Thu, 12 Nov 2026 17:39:45 -0500
 Subject: [PATCH 21/61] markdown-viewer
 
 A built-in viewer for text/markdown: a read-only MV2 component extension

@@ -1,6 +1,6 @@
-From 4542e7c69cfadf2a03e519c8e8603fc4971c6377 Mon Sep 17 00:00:00 2001
+From 9a08029fc9cc992a99f3027361006285a28ed7f1 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:23:27 -0500
+Date: Thu, 12 Nov 2026 17:38:24 -0500
 Subject: [PATCH 13/61] cursor-overlay
 
 CDP screencast cursor overlay compositing. Its page_handler.cc/.h wiring

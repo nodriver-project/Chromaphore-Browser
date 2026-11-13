@@ -1,6 +1,6 @@
-From 9a916937cc81a84d401949c97826cc959fc34bc7 Mon Sep 17 00:00:00 2001
+From dfdcbd0b128a3f162153eaddd04b4fb62a4de713 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:22:49 -0500
+Date: Thu, 12 Nov 2026 17:37:52 -0500
 Subject: [PATCH 03/61] movement-persona
 
 The pointer's human-movement persona: a bit-exact port of the launcher's

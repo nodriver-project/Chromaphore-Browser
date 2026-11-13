@@ -1,6 +1,6 @@
-From 07a3e24d1df5587fb0d82a0c128abbb39b246a08 Mon Sep 17 00:00:00 2001
+From 335f966994a36db92aa89df09ad4701757f110ae Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:23:40 -0500
+Date: Thu, 12 Nov 2026 17:38:35 -0500
 Subject: [PATCH 14/61] agent-snapshot
 
 CDP Page.captureAgentSnapshot / Page.resolveAgentNode: cross-frame

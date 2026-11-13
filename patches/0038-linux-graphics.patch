@@ -1,6 +1,6 @@
-From f73d7e3104313c8627ae79e67ca1214ab0e2c74e Mon Sep 17 00:00:00 2001
+From c4a721781752b74b6d575a3c5a9a1f5de1f0e65f Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:26:09 -0500
+Date: Thu, 12 Nov 2026 17:41:03 -0500
 Subject: [PATCH 38/61] linux-graphics
 
 WebGL in a Linux build presenting Windows (see the user-agent commit)
@@ -13,7 +13,7 @@ another (platform/graphics/gpu/ windows_gpu_profile.h). WebGPU likewise: a
 GPU-less server offers the SwiftShader adapter without
 --enable-unsafe-webgpu (the GPU process lets the CPU adapter past the safety
 level and the blocklist, and receives --use-chromium-defaults), and pages
-see a Windows machine's GPU: its vendor and architecture (intel gen-12-lp by
+see a Windows machine's GPU: its vendor and architecture (intel gen-12lp by
 default, a persona's through webgpu-spoof), its Direct3D 12 subgroup sizes,
 no fallback adapter, the Direct3D 12 features and Chrome's tiered limits
 measured on Windows, and bgra8unorm as the preferred canvas format.
@@ -47,9 +47,9 @@ Nothing changes on Windows or with --use-chromium-defaults.
  .../blink/renderer/modules/webgpu/gpu.cc      |  11 +
  .../renderer/modules/webgpu/gpu_adapter.cc    |  46 ++++
  third_party/blink/renderer/platform/BUILD.gn  |   8 +
- .../graphics/gpu/windows_gpu_profile.cc       | 229 ++++++++++++++++
+ .../graphics/gpu/windows_gpu_profile.cc       | 241 +++++++++++++++++
  .../graphics/gpu/windows_gpu_profile.h        |  78 ++++++
- 15 files changed, 936 insertions(+), 6 deletions(-)
+ 15 files changed, 948 insertions(+), 6 deletions(-)
  create mode 100644 gpu/command_buffer/service/d3d11_shader_translation.cc
  create mode 100644 gpu/command_buffer/service/d3d11_shader_translation.h
  create mode 100644 third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
@@ -1009,10 +1009,10 @@ index 5f771bafbe..55ec53e29c 100644
        "fonts/win/dwrite_font_format_support.cc",
 diff --git a/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
 new file mode 100644
-index 0000000000..0c55088336
+index 0000000000..2643caec1e
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,241 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1186,9 +1186,21 @@ index 0000000000..0c55088336
 +    return std::nullopt;
 +  }
 +  if (vendor == "intel") {
-+    // Dawn lowers Gen 12 LP's minimum to 8.
-+    if (architecture == "gen-12-lp") {
++    // Capability reports of each generation on its newest driver: Gen 12 LP
++    // runs 16 wide (Dawn lowers the minimum to 8); Gen 12 HP and Xe LPG 8 to
++    // 32; Gen 9 and Gen 11 16 only; Gen 8 none read (shader model 5.1,
++    // inferred).
++    if (architecture == "gen-12lp") {
++      return std::array<uint32_t, 2>{8, 16};
++    }
++    if (architecture == "gen-12hp" || architecture == "xe-lpg") {
 +      return std::array<uint32_t, 2>{8, 32};
++    }
++    if (architecture == "gen-9" || architecture == "gen-11") {
++      return std::array<uint32_t, 2>{16, 16};
++    }
++    if (architecture == "gen-8") {
++      return std::array<uint32_t, 2>{0, 0};
 +    }
 +    if (architecture.starts_with("gen-") || architecture.starts_with("xe-")) {
 +      return std::array<uint32_t, 2>{16, 32};
@@ -1244,7 +1256,7 @@ index 0000000000..0c55088336
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
 new file mode 100644
-index 0000000000..e6bcd3f505
+index 0000000000..eadf530687
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
 @@ -0,0 +1,78 @@
@@ -1306,7 +1318,7 @@ index 0000000000..e6bcd3f505
 +// WebGPU: the GPU-less default's adapter.info names, as Dawn gives them for
 +// Iris Xe (0x9A49, Gen 12 LP).
 +inline constexpr char kWindowsGpuWebgpuVendor[] = "intel";
-+inline constexpr char kWindowsGpuWebgpuArchitecture[] = "gen-12-lp";
++inline constexpr char kWindowsGpuWebgpuArchitecture[] = "gen-12lp";
 +
 +// The subgroup sizes Chrome reports on Windows for an architecture, the
 +// Direct3D 12 driver's wave lane counts; nullopt for one not listed.

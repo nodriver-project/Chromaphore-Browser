@@ -1,6 +1,6 @@
-From 52a18ee26a7b8ccaf457bfc1ed6d94b68ee32c1b Mon Sep 17 00:00:00 2001
+From 5efdcc2d57053939297ade0e5a9bf7c841f0c835 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:25:23 -0500
+Date: Thu, 12 Nov 2026 17:40:12 -0500
 Subject: [PATCH 30/61] browser-defaults
 
 Browser default overrides: the browser-defaults preset is expanded before

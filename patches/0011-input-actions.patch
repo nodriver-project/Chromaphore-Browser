@@ -1,6 +1,6 @@
-From 4c1286f27626acfd4b4a4753c934c9492b2e5362 Mon Sep 17 00:00:00 2001
+From a3540ecadceca4d771668b01d37837b7787685c4 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Wed, 11 Nov 2026 03:23:21 -0500
+Date: Thu, 12 Nov 2026 17:38:19 -0500
 Subject: [PATCH 11/61] input-actions
 
 The Input domain's actions that move like a hand: dispatchKeystrokes and
