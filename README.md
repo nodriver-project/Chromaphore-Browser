@@ -45,7 +45,7 @@ Grab the latest build from the [Releases page](../../releases):
 | `register-browser.ps1` | Registers the portable copy with Windows as a browser (optional) |
 | `Chromaphore-<release>-chromium<chromium>-linux-x64.tar.xz` | Linux, for headless servers without a GPU: one folder, `chromaphore/` |
 
-Each release carries two versions: Chromaphore's own and the Chromium it is built on, as in `Chromaphore-<RELEASE>-chromium156.0.8078.47-windows-x64-portable.zip`. Chromaphore's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names, and 1.0.0 the name Chromeleon; they are kept as they were. The SHA-256 of each file is in its release notes.
+Each release carries two versions: Chromaphore's own and the Chromium it is built on, as in `Chromaphore-2.0.0-chromium156.0.8078.47-windows-x64-portable.zip`. Chromaphore's major version goes up only when a release breaks something people rely on: a custom DevTools command or field removed without an alias, or a fingerprint seed that no longer gives the same identity. Releases up to Chromium 153 used the earlier names, and 1.0.0 the name Chromeleon; they are kept as they were. The SHA-256 of each file is in its release notes.
 
 The release notes also link a VirusTotal scan of the browser's own files (`chrome.exe`, `chrome.dll`, `chrome_elf.dll`), and [Install](#install) says what to do if Windows SmartScreen warns.
 
