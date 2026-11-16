@@ -11,12 +11,34 @@ For identity, it reports itself to sites as Google Chrome, answers in headless m
 
 **Windows, and Linux servers.** Download the binary from the [Releases page](../../releases): Windows x64, and Linux x64 for headless servers without a GPU, which presents itself to sites as Windows (see [Linux](#linux-tarball)); the agent features can also be built from the patches in [`patches/`](patches) (see [Source and binary](#source-and-binary)).
 
-**On a Mac?** There's no macOS build yet. Star or watch this repo (**Watch → Custom → Releases**) to hear when one comes out.
+## Quick start
+
+Unzip the portable build from [Releases](../../releases), point `executable_path` at its `chrome.exe`, and drive it with Playwright for Python (`pip install playwright`; no `playwright install` needed):
+
+```python
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(executable_path=r"C:\path\to\chrome.exe", args=["--headless=new"])
+    page = browser.new_page()
+    page.goto("https://example.com")
+    cdp = page.context.new_cdp_session(page)
+    elements = cdp.send("Page.captureAgentSnapshot", {"scope": "on"})["elements"]
+    print(len(elements), "elements;", [(e.get("label"), e.get("name")) for e in elements if e.get("interactive")])
+    browser.close()
+```
+
+It prints `13 elements; [('a1', 'Learn more')]`: one call lists the page's elements, and the one interactive element (the link) gets the label `a1`. The other custom commands are in [`CDP.md`](CDP.md).
+
+**Tested on 1.0.0 (Windows) with** Playwright, Puppeteer, Selenium, patchright, SeleniumBase, [botasaurus](https://github.com/omkarcloud/botasaurus/discussions/311), [crawl4ai](https://github.com/unclecode/crawl4ai/discussions/2344), Scrapling, Crawlee for Python and Hermes Agent. **On 2.0.0 (Linux: Ubuntu 24.04 under WSL2, headless)** with Playwright (`connectOverCDP`) and crawl4ai. The links go to setup notes in each project's Discussions.
+
+⭐ **Star or watch this repo** (**Watch → Custom → Releases**) to hear about new builds. **On a Mac?** There's no macOS build yet; watching Releases tells you when one comes out.
 
 ---
 
 ## Contents
 
+- [Quick start](#quick-start)
 - [Download](#download)
 - [What's in it](#whats-in-it)
 - [Automation: custom CDP methods](#automation-custom-cdp-methods)
