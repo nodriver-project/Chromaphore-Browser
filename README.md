@@ -137,7 +137,7 @@ The preset **turns off Google Safe Browsing**, which is what normally warns you 
 - **Markdown viewer.** `.md` and `.markdown` files, local or served as `text/markdown`, open in a built-in read-only viewer (GitHub-style rendering, math, syntax-highlighted code, light and dark themes), the way PDFs open in Chrome's PDF viewer. It works offline and never writes anything. The installer registers the browser as a handler for both extensions, so it can be chosen as the default app for Markdown under **Settings → Apps → Default apps**; the portable zip gets the same registration from `register-browser.ps1`.
 - **More than one picture-in-picture window.** Every tab's video can have its own picture-in-picture window at the same time; a new one opens in the next free corner of the screen.
 - **Multiview.** The media menu's **Send to Multiview** button collects up to four videos from different tabs into one `chrome://multiview` tab laid out to give the videos the most room.
-- **DRM.** The release bundles the Widevine CDM. The Windows software PlayReady CDM is offered to `primevideo.com` and `amazon.com` (`--software-playready-sites` adds hosts); every other site sees stock Chrome's EME answers. PlayReady works in an installed copy as it is; a portable copy needs one command first (see [Portable (zip)](#portable-zip)).
+- **DRM.** The release bundles the Widevine CDM.
 
 ## Command-line switches
 
@@ -254,7 +254,6 @@ Windows SmartScreen may warn on first run ("Windows protected your PC", unknown 
 
 1. Extract the zip anywhere and run `chrome.exe`, no installation required.
 2. *(Optional)* To make the portable copy selectable as your default browser, download `register-browser.ps1` from the same release, put it in the extracted folder and run it there in an **elevated** PowerShell (or add `-PerUser` to register for just your account, no admin needed), then set it in **Settings → Default apps**. Undo any time with `register-browser.ps1 -Unregister`.
-3. *(Optional)* For PlayReady in a portable copy, run this once in the extracted folder, in PowerShell or a command prompt (no admin needed for a folder you own): `icacls . /grant "*S-1-15-2-2:(OI)(CI)(RX)"`. Windows runs PlayReady in a restricted container, which may read the browser's files only when the folder says so; the installer's folder under Program Files already does. Without it the browser offers no PlayReady at all.
 
 ### Linux (tarball)
 
@@ -282,7 +281,7 @@ python build.py [-j N] [--widevine-dir DIR] [--package]
 
 Requirements, the same as for ungoogled-chromium-windows: Windows 10 or 11 x64, Visual Studio 2026 with the C++ workload and the Windows SDK version Chromium pins (10.0.28000 for this release), Python 3 with the `clang` module (`python -m pip install clang==21.1.7`; V8's build uses it, and the script checks for it first), Git, 7-Zip, around 55 GB of free disk space and 32 GB or more of RAM. A full build takes several hours. Run it from a regular prompt; the script sets up the Visual Studio environment itself. A second run skips the checkout and patching and goes straight to the build; `--clean` starts over.
 
-The Widevine CDM is not in this repository. Pass `--widevine-dir` with a directory holding the CDM's `LICENSE` and `win/x64/manifest.json`, `widevinecdm.dll` and `widevinecdm.dll.sig` to bundle one you obtained yourself. Without it the build disables Widevine, and the browser still plays PlayReady content.
+The Widevine CDM is not in this repository. Pass `--widevine-dir` with a directory holding the CDM's `LICENSE` and `win/x64/manifest.json`, `widevinecdm.dll` and `widevinecdm.dll.sig` to bundle one you obtained yourself. Without it the build disables Widevine.
 
 The language detection model `LanguageDetector` uses is copied by the build from Chromium's own source tree (`components/test/data/translate/valid_model.tflite`) into `LanguageDetection\` beside `chrome.exe`, and packaging ships it.
 
