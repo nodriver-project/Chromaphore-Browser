@@ -5,8 +5,8 @@ This document is the reference for the commands, events and types this browser a
 The additions live in three domains:
 
 - **Browser**: reading a URL without a tab (`agentFetch`), browser-wide network recording (`startRecording` and friends), and recording a tab to a video file (`startVideoRecording` and friends).
-- **Input**: pointer, keyboard and form-control actions carried out whole, inside the browser, with human timing (`moveTo`, `scrollBy`, `performDrag`, `dispatchKeystrokes`, `selectOptions`, `chooseFiles`, ...).
-- **Page**: one-call page perception (`captureAgentSnapshot`), element handles that work across frames (`resolveAgentNode`, `agentHitCheck`, `agentNodesAlive`), live-region and layer reports (`agentAnnouncements`, `agentReport`), waiting for a page to settle (`agentSettle`), history steps that answer when landed (`agentNavigateToHistoryEntry`), secret fields a redacted video recording blacks out (`agentMarkSecretField`), and a shared-memory frame stream (`startFrameStream`).
+- **Input**: pointer, keyboard and form-control actions carried out whole, inside the browser, with human timing (`moveTo`, `scrollBy`, `performDrag`, `dispatchKeystrokes`, `selectOptions`, `chooseFiles`, ...), and reading what the focused field and the browser's own clipboard hold (`readFocusedField`, `readClipboard`, `writeClipboard`).
+- **Page**: one-call page perception (`captureAgentSnapshot`), the text a page draws into its 2D canvases (`agentCanvasText`), element handles that work across frames (`resolveAgentNode`, `agentHitCheck`, `agentNodesAlive`), live-region and layer reports (`agentAnnouncements`, `agentReport`), waiting for a page to settle (`agentSettle`), history steps that answer when landed (`agentNavigateToHistoryEntry`), secret fields a redacted video recording blacks out (`agentMarkSecretField`), and a shared-memory frame stream (`startFrameStream`).
 
 ## How to call them
 
@@ -38,8 +38,8 @@ Each command has a heading, a short description of what it does and when to use 
 ## Contents
 
 - [Browser domain](#browser-domain): `agentFetch`, `agentFetchCancel`, `startRecording`, `stopRecording`, `recordingMask`, `recordingStatus`, `startVideoRecording`, `setVideoRecordingTarget`, `pauseVideoRecording`, `resumeVideoRecording`, `markVideoRecording`, `stopVideoRecording`, `videoRecordingStatus`; events `recordingEnded`, `videoRecordingEnded`; types `AgentFetchRedirect`, `AgentFetchOutlineItem`, `AgentFetchLink`, `VideoRecordingResult`.
-- [Input domain](#input-domain): `dispatchMousePath`, `moveTo`, `revealElement`, `scrollBy`, `performDrag`, `setInterceptDrags` (new `carry` parameter), `dispatchKeystrokes`, `dispatchKeyChord`, `dispatchPaste`, `selectOptions`, `fillDateTime`, `pickColor`, `chooseFiles`, `probeMovementPersona`; events `actionOutcome`, `permissionPromptDismissed`; types `MousePathPoint`, `MousePathEnd`, `MouseWheelNotch`, `MoveEnd`, `PlanRect`, `WheelScroller`, `DragScroll`, `SelectOption`, `NoTypos`, `FieldReading`.
-- [Page domain](#page-domain): `captureAgentSnapshot`, `agentFinishCapture`, `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField`, `agentNodesAlive`, `agentAnnouncements`, `agentSettleArm`, `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream`, `updateFrameStream`, `stopFrameStream`; types for snapshots, deltas, layers, live regions, redaction, node life, reports, action outcomes and settling.
+- [Input domain](#input-domain): `dispatchMousePath`, `moveTo`, `revealElement`, `scrollBy`, `performDrag`, `setInterceptDrags` (new `carry` parameter), `dispatchKeystrokes`, `readFocusedField`, `dispatchKeyChord`, `dispatchPaste`, `readClipboard`, `writeClipboard`, `selectOptions`, `fillDateTime`, `pickColor`, `chooseFiles`, `probeMovementPersona`; events `actionOutcome`, `permissionPromptDismissed`; types `MousePathPoint`, `MousePathEnd`, `MouseWheelNotch`, `MoveEnd`, `PlanRect`, `WheelScroller`, `DragScroll`, `SelectOption`, `NoTypos`, `FieldReading`, `KeystrokeStep`, `KeyChord`, `KeystrokeEvent`, `FieldTarget`.
+- [Page domain](#page-domain): `captureAgentSnapshot`, `agentFinishCapture`, `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField`, `agentNodesAlive`, `agentAnnouncements`, `agentCanvasText`, `agentSettleArm`, `agentSettle`, `agentReport`, `agentNavigateToHistoryEntry`, `startFrameStream`, `updateFrameStream`, `stopFrameStream`; types for snapshots, deltas, layers, live regions, redaction, canvas text, node life, reports, action outcomes and settling.
 - [Switches the custom methods depend on](#switches-the-custom-methods-depend-on).
 
 ---
@@ -907,7 +907,7 @@ Carries out a drag whole, as a hand does: the pointer goes to what is grabbed, p
 Parameters:
 - `grabNodeId`: integer, optional. What to grab, as an element: its backend node id, as `Page.resolveAgentNode` gives it. Goes with `grabFrameId`.
 - `grabFrameId`: string, optional. The grabbed element's local root frame.
-- `grabX`, `grabY`: number, optional. What to grab, as a point in CSS pixels of the main frame's viewport.
+- `grabX`, `grabY`: number, optional. What to grab, as a point in CSS pixels of the main frame's viewport. The point is taken in whichever of the page's frames lies under it, as a click there is: a frame of another site or a fenced frame included, not a guest such as a `<webview>` (what covers the point is then named, `covered`). The drag stays in that frame's document: a target element or a point to let go outside it is refused as `unreachable`.
 - `grabFractionX`, `grabFractionY`: number, optional. Where on the grabbed element to press, as fractions of its box (default its middle; a range input's thumb).
 - `targetNodeId`: integer, optional. Where to let go, as an element; goes with `targetFrameId`, aimed at `aimX`/`aimY` of its box.
 - `targetFrameId`: string, optional. The target element's local root frame.
@@ -947,6 +947,7 @@ Returns:
 - `unexpected`: array of `DragScroll`, optional. The scrolls the drag did not ask for (a page or a library scrolling on its own, a band the plan did not foresee).
 - `notches`: integer, optional. The wheel notches turned.
 - `putBack`: boolean, optional. A pointer drag that was called off was let go where it was grabbed.
+- `buttonDown`: boolean, optional. A pointer drag ended with its own button still down: its press went out and no release of its own followed it (an Escape still on its way when the answer could wait no longer, or its release not delivered while the page's view lived). `Input.moveTo` refuses a press or a click until `Input.moveTo` with `end.action` `release` lets go of it. Absent when the drag left no button of its own down; another call's press is not reported here. `Input.disable` and a renderer change forget the button: an answer they bring about does not say it.
 - `durationMs`: number. How long the drag took, in ms.
 - `replans`: integer, optional. How many times the plan was made again.
 - `corrections`: integer, optional. How many times the landing was corrected.
@@ -1024,8 +1025,11 @@ Returns: nothing.
 
 Types a string with realistic timing and optional typos and corrections. One call replaces a per-key `dispatchKeyEvent` loop, so per-key round-trip latency cannot limit the typing rate. Scheduling and dispatch happen in the browser process; the call returns once the full schedule has run. Focus the field first (for example with `Input.moveTo` and a click); the keys go to whatever has focus.
 
+A call types one string (`text`) or a *burst* (`steps`): strings, Backspaces, pauses and shortcuts in order, played as one hand plays them, on one schedule. Any typing call, chord or paste ends the typing session under way first: the keys it had down come up on the keyboard's next report, and the new call's keys begin after them, its time zero one report later than it would have been (its own `timeline` and `durationMs` are not changed by it).
+
 Parameters:
-- `text`: string, required. Text to type. May contain `\n` (mapped to Enter). Non-ASCII characters are dispatched as text-only key events with no virtual key code.
+- `text`: string, optional. Text to type. May contain `\n` (mapped to Enter). Non-ASCII characters are dispatched as text-only key events with no virtual key code. Exactly one of `text` and `steps` is given.
+- `steps`: array of `KeystrokeStep`, optional. A burst, in place of `text`: its steps in order. The schedule is fixed by the seed, the browser's movement persona and whether typos are allowed: the same three give the same keys at the same times (the typos' own choices and the thinking pauses on one build). At most 10000 steps, 100000 characters and Backspaces, and an hour of pauses in all. Refused while `dispatchKeyChord`'s `phase` `down` holds modifiers (let them up with its `phase` `up`; they also come up when the DevTools session that holds them detaches).
 - `speedMultiplier`: number, optional. Sets the typist's pace, with `keystrokeDelayMin`/`keystrokeDelayMax` (> 0). 1.0 is the typist's own speed; values > 1 type faster, as a faster typist does: the keys overlap more and are held hardly shorter. It stops at about 110 words a minute. The thinking pauses are divided by it. Default 1.0.
 - `keystrokeDelayMin`, `keystrokeDelayMax`: integer, optional. The pace, as a range in ms. A browser types as one person does: a typist whose speed (40 to 75 words a minute) and way of holding keys are drawn from the persona seed (the hand's, see "The hand" above). This range's middle over the default's (60 / 260, middle 160) is how much slower that typist types: the defaults leave the typist's own pace.
 - `keyHoldMin`, `keyHoldMax`: integer, optional. The same for how long a key is held: the typist's holds (about 100 ms at their middle) are stretched by this range's middle over the default's (65 / 130), by 0.6 to 1.6 at most. A quick typist has the next key down before the last one is up. Shift is a key of its own: it goes down ahead of its letter, and repeats when held alone for the keyboard's repeat delay (500 ms), as any held key does. Every key event waits for the keyboard's next report (every 8 ms).
@@ -1037,12 +1041,29 @@ Parameters:
 - `followNavigation`: boolean, optional. Whether the answer waits for a cross-document navigation the keys started to end (at most about 3 s; default true).
 - `readBack`: boolean, optional. Whether the answer says what the focused field held before the first key and once the keys were handled and it had held still for 150 ms (at most 300 ms more); default false.
 - `noTypos`: `NoTypos`, optional. No typo is made in a field this rule holds for, whatever `typoProbability` says. The field the keys start in is read first.
+- `dryRun`: boolean, optional. Plan the call as it would run now (the field read as it would be) and answer `durationMs`, `seed`, `typosAllowed` and the `timeline` as planned; no key is sent, and a session under way is left alone. Default false.
+- `timeline`: boolean, optional. Answer `startEpochMs` and every key event as sent. Default false.
+- `stopWhenFocusLeaves`: boolean, optional. Stop when the focus leaves the field the keys start in (or `expectField`), which must be an element. The field is read once more before the first key (time zero is after it, as after the call's own reading), and again on any notice of a focus change in the tab (an element's focus in the frame that has the focus, or another frame taking it). While a reading is on its way the burst holds its keydowns; keyups and repeats keep their times, but for a later press of a key that is down, and a modifier's keyup that a held key is typed under: that modifier stays down for the hold, with no repeats (rare: a notice between a modifier and its key). The same field resumes it (a date field's parts count as their field), and what was held moves on by whole reports (`slippedMs`); another stops it (`stopped`: `focus`). A reading the page is too busy to answer, or one older than the last notice, is made again, the burst held, for up to 3 s from the notice; then it stops. The browser hears of a focus change when the page makes it, but keys sent before then that the page had not handled yet (queued behind a long task) reach the field that has the focus when it handles them: `uncertainKeys`. Refused when the session has no tab. Default false.
+- `expectField`: `FieldTarget`, optional. The call is refused before any key unless this field has focus, read as `fieldBefore` reads it. A call refused after its field reading (here, or by `stopWhenFocusLeaves`) has still ended the session under way.
+- `typosAllowed`: boolean, optional. Whether typos may be made (`typoProbability`), in place of `noTypos`' reading of the field; a call answers the decision it used.
 
 Returns:
-- `typosCorrected`: integer. How many typos were made and then corrected with Backspace. The page saw each wrong character until it was deleted.
+- `typosCorrected`: integer. How many typos were made and then corrected with Backspace. The page saw each wrong character until it was deleted. For `dryRun`, the typos the plan makes; for a stopped call, those corrected before it stopped.
 - `fieldBefore`: `FieldReading`, optional. With `readBack`: the field before the first key.
 - `fieldAfter`: `FieldReading`, optional. With `readBack`: the field after the keys. Absent when the keys left the document (an Enter that submitted).
 - `actionOutcome`: `Page.ActionOutcome`, optional. What the keys led to.
+- `durationMs`: number, optional. For a call with any of `steps`, `dryRun`, `timeline`, `stopWhenFocusLeaves`, `expectField` and `typosAllowed`: the planned time from time zero (the first planned event, after the field reading) to the end of the last keyup or of a trailing pause, in ms.
+- `seed`: number, optional. For the same calls: the seed used.
+- `typosAllowed`: boolean, optional. For the same calls: whether typos were allowed.
+- `startEpochMs`: number, optional. With `timeline`: time zero as ms since the epoch.
+- `timeline`: array of `KeystrokeEvent`, optional. With `timeline` or `dryRun`: every key event, Shift's own included.
+- `stopped`: string, optional. A call with `steps`, `timeline` or `stopWhenFocusLeaves` that stopped before its end answers success with why: `focus` (the focus left) or `replaced` (a later typing, chord or paste call, an action that types, a renderer change, or the DevTools session detaching; also while its field was still being read, with nothing done). The keys it had down were let up first.
+- `stepsDone`: integer, optional. With `stopped`: the steps wholly done.
+- `charsSent`: integer, optional. With `stopped`: the characters of the step under way whose keys all went out.
+- `inTypo`: boolean, optional. With `stopped`: it stopped inside a typo before its correction.
+- `uncertainKeys`: array of `KeystrokeEvent`, optional. With `stopWhenFocusLeaves`, stopped or not: the key events sent before the browser heard of a focus change that the page had not handled yet; they may have reached another field, even when the focus came back and the burst went on (`focusResumes`).
+- `slippedMs`: number, optional. With `stopWhenFocusLeaves`: how much the holds to read the field moved the rest of the schedule, in ms.
+- `focusResumes`: integer, optional. With `stopWhenFocusLeaves`: how many times a reading after a notice found the focus on the field and the burst went on.
 
 ```json
 {
@@ -1077,6 +1098,78 @@ Example response:
 }
 ```
 
+Example: a burst that types, pauses, takes five characters back, types on and saves, stopping if the focus leaves the field it started in.
+
+```json
+{
+  "method": "Input.dispatchKeystrokes",
+  "params": {
+    "steps": [
+      { "text": "Dear Ana," },
+      { "pauseMs": 900 },
+      { "text": "\nthe figures are atached" },
+      { "backspaces": 5 },
+      { "text": "tached." },
+      { "chord": { "modifiers": 2, "key": "s" } }
+    ],
+    "seed": 7,
+    "typosAllowed": false,
+    "stopWhenFocusLeaves": true
+  }
+}
+```
+
+Example: plan a call without sending a key, to learn how long it will take.
+
+```json
+{
+  "method": "Input.dispatchKeystrokes",
+  "params": { "text": "hi", "seed": 7, "typosAllowed": false, "dryRun": true }
+}
+```
+
+Example response (the times are an illustration; a browser's own typist gives its own):
+
+```json
+{
+  "typosCorrected": 0,
+  "durationMs": 232,
+  "seed": 7,
+  "typosAllowed": false,
+  "timeline": [
+    { "step": 0, "charIndex": 0, "key": "h", "code": "KeyH", "event": "down", "timeMs": 0 },
+    { "step": 0, "charIndex": 0, "key": "h", "code": "KeyH", "event": "up", "timeMs": 104 },
+    { "step": 0, "charIndex": 1, "key": "i", "code": "KeyI", "event": "down", "timeMs": 136 },
+    { "step": 0, "charIndex": 1, "key": "i", "code": "KeyI", "event": "up", "timeMs": 232 }
+  ]
+}
+```
+
+### `Input.readFocusedField`: what the focused field holds
+
+Reads what the focused field holds, as `dispatchKeystrokes`' `fieldBefore` reads it: facts only, never its value. No key is sent, and a typing session under way is left alone. Use it to check where keys would go before typing, or what a field holds after an action that was not typing.
+
+Parameters:
+- `noTypos`: `NoTypos`, optional. As `dispatchKeystrokes`' `noTypos`: the answer's `strict` says whether the rule holds for the field.
+
+Returns:
+- `field`: `FieldReading`, optional. Absent when the focused frame's renderer did not answer in time.
+
+```json
+{
+  "method": "Input.readFocusedField",
+  "params": { "noTypos": { "inputTypes": ["password"] } }
+}
+```
+
+Example response:
+
+```json
+{
+  "field": { "kind": "value", "backendNodeId": 812, "frameId": "5B3A2C...", "length": 11, "selected": 0, "readonly": false, "disabled": false, "strict": false }
+}
+```
+
 ### `Input.dispatchKeyChord`: a modifier chord
 
 Presses a key chord on the typing session's path: modifiers go down as left-hand keys (Ctrl, Shift, Alt, Meta), then the key with them, then all come up, with a hand's timing. Use it for shortcuts (Ctrl+A, Ctrl+Z, Shift+Tab) and, with `phase`, to hold modifiers around a mouse click.
@@ -1084,7 +1177,7 @@ Presses a key chord on the typing session's path: modifiers go down as left-hand
 Parameters:
 - `modifiers`: integer, required. Alt=1, Ctrl=2, Meta/Command=4, Shift=8.
 - `key`: string, optional. The key pressed with the modifiers: one character, such as `"v"` or `"a"`, or a key name: `Enter`, `Tab`, `Backspace`, `Escape`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `ArrowLeft`, `ArrowUp`, `ArrowRight`, `ArrowDown`, `F1`-`F12`, `Space`, `CapsLock`, `NumLock`, `ScrollLock` (the lock itself is the machine's, and does not change). With Shift a character reports its shifted form, and one that only Shift reaches is pressed with Shift. Omit it to press only the modifiers.
-- `phase`: enum, optional. `full` (default): everything goes down and comes up. `down`: only the modifiers go down, and stay down, the last one repeating its keydown as a held key does (after about half a second, then about thirty a second) until the next key input; the call returns once they are down. `up`: held modifiers come up. A ctrl+click is `down`, a mouse click, then `up`.
+- `phase`: enum, optional. `full` (default): everything goes down and comes up. `down`: only the modifiers go down, and stay down, the last one repeating its keydown as a held key does (after about half a second, then about thirty a second) until the next key input; the call returns once they are down. `up`: held modifiers come up. A ctrl+click is `down`, a mouse click, then `up`. Modifiers held by `down` stay down until an `up` names them: through other typing, and through a navigation that keeps the page's widget (as a held key, its keyup then reaches the new document); they come up when the DevTools session detaches, and a page in another renderer forgets them (nothing is left to let up). A burst (`dispatchKeystrokes`' `steps`) is refused while any are held.
 - `speedMultiplier`: number, optional. Divides the chord's timings (default 1.0; larger is faster).
 - `followNavigation`: boolean, optional. With a key: whether the answer waits for a cross-document navigation it started to end (at most about 3 s; default true).
 
@@ -1133,6 +1226,54 @@ Returns:
   "fieldBefore": { "kind": "editor", "backendNodeId": 905, "frameId": "5B3A2C...", "editor": "Monaco", "strict": false },
   "fieldAfter": { "kind": "editor", "backendNodeId": 905, "frameId": "5B3A2C...", "editor": "Monaco", "contains": true },
   "actionOutcome": { "actionId": 21, "handled": true, "waitedMs": 180, "events": [] }
+}
+```
+
+### `Input.readClipboard`: read the browser's own clipboard
+
+Reads this browser's own clipboard as a page's paste would get it, with no paste and the machine's clipboard untouched. **Requires `--private-clipboard`**: the call is refused unless the browser runs with it, since it would otherwise read the clipboard of the person at the machine. The clipboard is one for the whole browser: every tab's copies and pastes share it, and `sequence` tells one content from the next. Use it to read what a page's Copy button or a Ctrl+C put there.
+
+What the text holds depends on what put it there:
+- `dispatchPaste` or `writeClipboard`: the text given, its line breaks CRLF on Windows and on the Linux build presenting Windows, as given on other builds.
+- A page's own copy or cut of a selection (Ctrl+C, Ctrl+X, the context menu, `document.execCommand`): the selection's text with each non-breaking space as a space, its line breaks CRLF on the Windows build only (LF on the Linux build, even when it presents Windows).
+- A page's `clipboardData.setData('text/plain', ...)` in its copy or cut handler: exactly as the page gave it.
+
+Parameters: none.
+
+Returns:
+- `text`: string. What a page's paste handler gets from `clipboardData.getData('text/plain')`; empty when the clipboard holds no text.
+- `html`: string, optional. The HTML, when the clipboard holds HTML: what `getData('text/html')` gets, the whole markup.
+- `sequence`: string. A token for this content of the clipboard: every write, by any tab or by `writeClipboard` and `dispatchPaste`, gives a new one.
+
+```json
+{ "method": "Input.readClipboard" }
+```
+
+Example response:
+
+```json
+{
+  "text": "Order 1042\r\nTotal: 18.50",
+  "html": "<b>Order 1042</b><br>Total: 18.50",
+  "sequence": "7F3A9C0E5B2D4A61C8E0F1A2B3C4D5E6"
+}
+```
+
+### `Input.writeClipboard`: set the browser's own clipboard
+
+Sets this browser's own clipboard without pasting, the machine's clipboard untouched: the text with its line breaks as `dispatchPaste` puts them (CRLF on Windows and on the Linux build presenting Windows), so a write and then Ctrl+V pastes what `dispatchPaste` would; the HTML as given. **Requires `--private-clipboard`**: the call is refused unless the browser runs with it.
+
+Parameters:
+- `text`: string, required. The text.
+- `html`: string, optional. The HTML to put beside it.
+
+Returns:
+- `sequence`: string. The new content's token, as `readClipboard` gives it.
+
+```json
+{
+  "method": "Input.writeClipboard",
+  "params": { "text": "Order 1042\nTotal: 18.50" }
 }
 ```
 
@@ -1541,7 +1682,7 @@ The rule a typing call gives for fields where a wrong character costs something,
 
 #### `Input.FieldReading`
 
-What the focused field holds, read by its own renderer: facts only, never its value. Returned by `dispatchKeystrokes` and `dispatchPaste` with `readBack`.
+What the focused field holds, read by its own renderer: facts only, never its value. Returned by `dispatchKeystrokes` and `dispatchPaste` with `readBack`, and by `readFocusedField`.
 
 - `kind`: string. `value` (an input or a textarea), `editable` (a contenteditable host), `editor` (the hidden input of a CodeMirror, Ace or Monaco editor), `temporal` (a date or time field: an input of type date, time, datetime-local, month or week, whichever of its parts has focus), `other` (focus is on something that holds no text), `none` (nothing but the page has focus).
 - `backendNodeId`: integer, optional. The field, as `Page.resolveAgentNode` names one: its backend node id in its own frame.
@@ -1561,11 +1702,48 @@ What the focused field holds, read by its own renderer: facts only, never its va
 - `contains`: boolean, optional. `dispatchPaste`: the text pasted is in it, line breaks compared as `\n`; absent when it was not looked for (a field over 2,000,000 characters).
 - `moved`: boolean, optional. After the call: the field the reading before it found is still in the page and no longer has focus; focus moved on by itself, as a code split across boxes does.
 
+#### `Input.KeystrokeStep`
+
+One step of a burst (`dispatchKeystrokes`' `steps`): exactly one of its fields.
+
+- `text`: string, optional. Typed as `dispatchKeystrokes` types `text`, typos and thinking pauses included; a typo stays within its step.
+- `backspaces`: integer, optional. Backspace pressed this many times, as a typist presses it.
+- `pauseMs`: integer, optional. A pause in ms, from the last key coming up to the next one going down, Shift included, counted from the keyboard report the last keyup went out on (so rounded up to a report, every 8 ms). A leading pause delays the first key; a trailing one ends the burst that long after its last keyup.
+- `chord`: `KeyChord`, optional. A shortcut, pressed as `dispatchKeyChord` presses one (`phase` `full`), once every key before it is up; the key after it waits for its last modifier to come up.
+
+#### `Input.KeyChord`
+
+A shortcut in a burst.
+
+- `modifiers`: integer. Alt=1, Ctrl=2, Meta/Command=4, Shift=8.
+- `key`: string, optional. As `dispatchKeyChord`'s `key`; omit it for modifiers alone.
+
+#### `Input.KeystrokeEvent`
+
+A key event of a burst as it was sent, or, for `dryRun`, as it is planned.
+
+- `step`: integer. The step it belongs to (0 for a call with `text`).
+- `charIndex`: integer, optional. The character of the step it types (a `text` step), or which Backspace (a `backspaces` step). Absent for a chord's keys and for those of a typo or its correction. A Shift's events carry the character it went down for.
+- `typo`: boolean, optional. It belongs to a typo or its correction.
+- `released`: boolean, optional. A key the burst had down when it was stopped, let up then.
+- `held`: boolean, optional. Sent on its time while the burst held its keydowns for a reading of the field (`stopWhenFocusLeaves`): a keyup or a repeat, which went to whatever had the focus then.
+- `key`: string.
+- `code`: string.
+- `event`: string. `down`, `up`, or `repeat` (a held key's keydown again).
+- `timeMs`: number. In ms from the burst's time zero (`startEpochMs`): as stamped when sent, or as planned.
+
+#### `Input.FieldTarget`
+
+A field, as `Page.resolveAgentNode` names one (`dispatchKeystrokes`' `expectField`).
+
+- `backendNodeId`: integer.
+- `frameId`: `Page.FrameId`.
+
 ---
 
 ## Page domain
 
-The Page commands run on a page session. `captureAgentSnapshot`, `agentNodesAlive`, `agentAnnouncements`, `agentReport`, `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField`, `agentSettle` and `agentNavigateToHistoryEntry` are asynchronous: they answer once every frame has been read, or the wait has ended. A few terms recur:
+The Page commands run on a page session. `captureAgentSnapshot`, `agentNodesAlive`, `agentAnnouncements`, `agentReport`, `resolveAgentNode`, `agentHitCheck`, `agentMarkSecretField`, `agentCanvasText`, `agentSettle` and `agentNavigateToHistoryEntry` are asynchronous: they answer once every frame has been read, or the wait has ended. A few terms recur:
 
 - **Document and listing.** A page's *document* is what the main frame has committed; `documentId` names its id space (the same after a back/forward cache restore). Every `captureAgentSnapshot` is a *listing* of that document, named by `listingId`; the document's last three listings can serve as the baseline of a delta.
 - **Local root.** The frames of one renderer process. A page with out-of-process iframes has several; replies say how many local roots did not answer in time (`unansweredFrames`), and a few fields are given in a local root's own coordinates.
@@ -1903,6 +2081,77 @@ Returns:
   "layersReworded": []
 }
 ```
+
+### `Page.agentCanvasText`: the text a page's 2D canvases show
+
+Answers the text and the filled rectangles the page's 2D canvases still show, in every frame of the page (frames of other processes included), read between the page's tasks, the page unaware. Use it for pages that draw their own text into a canvas instead of the DOM (a document editor that paints its pages, a spreadsheet grid): each run comes with its string, its font and colour, and the place of every character boundary in the space `Input.moveTo`'s `x` and `y` take, so a caret can be put between two characters or a word selected by pointing.
+
+The text is recorded from the draw calls (`fillText`, `strokeText`, the cluster draws, `fillRect`, `clearRect`) and resolved by the clip, redraws of the same run, covering clears and opaque fills; what the record cannot follow makes what it crosses inexact rather than wrong. Text and fills drawn under a shadow, a filter, a composite mode other than `source-over` and `copy`, or inside a layer are not runs or fills: they are operations not followed. Only a `<canvas>` element's 2D context is recorded.
+
+**Requires `--enable-canvas-text-record`**: recording is off unless the browser runs with it, and without it the call fails, saying so.
+
+Parameters:
+- `backendNodeId`: integer, optional. One canvas, with `frameId`. Both or neither.
+- `frameId`: string, optional. The `localRootFrameId` that names that canvas (as `Page.resolveAgentNode` gives it).
+- `inView`: boolean, optional. Only the runs and fills whose quads meet their canvas's `shownRect`, chosen before the caps. Default false.
+
+Returns:
+- `canvases`: array of `AgentCanvas`. Every `<canvas>` of the page, or the one named.
+- `framesLeftOut`: array of string. Local roots that did not answer in time, or whose place in the page could not be found; their canvases are left out.
+- `runsCut`: integer. Runs left out past the answer's caps: 50,000 runs and 500,000 characters (UTF-16 units) in all, each canvas's newest kept.
+- `fillsCut`: integer. Fills left out past the answer's cap: 50,000 fills in all, each canvas's newest kept.
+
+An answer for a page that draws much text can be several megabytes; `inView` keeps it to what shows, and a client whose WebSocket caps a message's size should ask that way or name one canvas.
+
+```json
+{
+  "method": "Page.agentCanvasText",
+  "params": { "inView": true }
+}
+```
+
+Example response:
+
+```json
+{
+  "canvases": [
+    {
+      "backendNodeId": 57,
+      "frameId": "5B3A2C...",
+      "localRootFrameId": "5B3A2C...",
+      "context": "2d",
+      "quad": [{ "x": 120, "y": 96 }, { "x": 936, "y": 96 }, { "x": 936, "y": 1152 }, { "x": 120, "y": 1152 }],
+      "shownRect": { "x": 120, "y": 96, "width": 816, "height": 624 },
+      "exact": true,
+      "truncated": false,
+      "recordBytes": 18432,
+      "recordPeakBytes": 24576,
+      "runs": [
+        {
+          "text": "Hello",
+          "font": "14.6667px Arial",
+          "color": "#000000",
+          "alpha": 1,
+          "stroke": false,
+          "direction": "ltr",
+          "bidi": false,
+          "baseline": { "start": { "x": 216, "y": 210 }, "end": { "x": 249.4, "y": 210 } },
+          "width": 33.4,
+          "advances": [0, 10.6, 18.8, 22, 25.2, 33.4],
+          "quad": [{ "x": 216, "y": 196.7 }, { "x": 249.4, "y": 196.7 }, { "x": 249.4, "y": 213.1 }, { "x": 216, "y": 213.1 }],
+          "exact": true
+        }
+      ],
+      "fills": []
+    }
+  ],
+  "framesLeftOut": [],
+  "runsCut": 0,
+  "fillsCut": 0
+}
+```
+
+To put the caret after "Hel", take boundary 3: `start + (end - start) * advances[3] / width`, here x = 216 + 33.4 × 22 / 33.4 = 238, y = 210, and click there with `Input.moveTo`.
 
 ### `Page.agentSettleArm`: arm a settle for a non-input action
 
@@ -2355,6 +2604,79 @@ A text field of a frozen frame, by its runs: `runs[firstRun, endRun)`. One that 
 - `runs`: array of integer. Indices into the frame's `runs`.
 - `fields`: array of integer. Indices into the frame's `fields`.
 
+#### Canvas text
+
+##### `Page.AgentCanvasPoint`
+
+A point in the space `Input.moveTo`'s `x` and `y` take: the page's root view in DIPs, divided by the browser zoom, the embedding frame's CSS zoom and the pinch zoom. A point `agentCanvasText` answers can be passed to `Input.moveTo` as it is.
+
+- `x`: number.
+- `y`: number.
+
+##### `Page.AgentCanvasRect`
+
+A rectangle in `AgentCanvasPoint`'s space.
+
+- `x`: number.
+- `y`: number.
+- `width`: number.
+- `height`: number.
+
+##### `Page.AgentCanvasBaseline`
+
+A run's baseline, from its left end to its right end. Left is the text's own left (before the canvas transform), whatever the direction: under a half turn it is on the screen's right.
+
+- `start`: `AgentCanvasPoint`.
+- `end`: `AgentCanvasPoint`.
+
+##### `Page.AgentCanvasRun`
+
+A text draw a 2D canvas still shows (`agentCanvasText`).
+
+- `text`: string. The string drawn (for `fillTextCluster` and `strokeTextCluster`, the drawn substring), format characters included. A cluster draw is shaped at read time as that substring alone, so one of a joining script (Arabic, say) or with kerning across its edges may read `fontChanged`.
+- `font`: string. The font the draw used (for a cluster draw, the cluster's font), written from its description as the `font` getter writes one: style, weight, small-caps, computed size and families.
+- `color`: string. The style as `fillStyle` or `strokeStyle` would give it now, or `gradient`, `pattern`.
+- `alpha`: number. `globalAlpha` at the draw.
+- `stroke`: boolean. `strokeText` or `strokeTextCluster`.
+- `direction`: string. `ltr` or `rtl`, as resolved for the draw.
+- `bidi`: boolean. The run holds more than one direction.
+- `baseline`: `AgentCanvasBaseline`.
+- `width`: number. The advance width, in the text's own units (after `letterSpacing`, `wordSpacing`, kerning and the `maxWidth` squeeze).
+- `advances`: array of number. For every UTF-16 boundary from 0 to the text's length, the distance from the left end to that boundary's caret position, in the units of `width`; code units inside one cluster share a distance. For ltr text `advances[0]` is 0, for rtl text it is `width`. The point of boundary i is `start + (end - start) * advances[i] / width`; with `width` 0, `start`.
+- `quad`: array of `AgentCanvasPoint`. The run's box (left end to right end along the baseline, the font's ascent above it to its descent below): left-top, right-top, right-bottom, left-bottom. A run of no width (marks only) has every boundary at `start`.
+- `exact`: boolean.
+- `inexact`: string, optional. Why not exact, until the run is removed or drawn again:
+  - `partlyCovered`: a clear or an opaque fill covered part of its middle half (of what lies on the canvas).
+  - `notFollowed`: an operation the record does not follow crossed its middle half: a path fill or wide stroke, `strokeRect`, an image, `putImageData`, a focus ring, anything drawn in a layer (a layer's end counts its whole clip, as a filter given to `beginLayer` may spread its draws anywhere in it), a draw under a shadow or a filter (a filter set but not yet used counts), another composite mode, a gradient or pattern `fillRect`. A straight stroke along an axis up to 3 px wide (an underline, a squiggle, a rule) counts only where it crosses the middle half, by the whole pixels it touches.
+  - `fontChanged`: the run shapes wider or narrower now than when drawn, or its font changed (a web font loaded, a `FontFace` came or went) before its first read; its `advances` are then the current shaping's, scaled to its `width` (spread evenly over it when nothing could be shaped), so every boundary's point stays in its box. Reading never starts a font load: a run whose font has not drawn since the page's fonts last changed (a web font came, went or loaded), or whose font's list holds a web font not loaded, is shaped with system fonts only, and reads `fontChanged` unless it used none of the page's web fonts.
+
+##### `Page.AgentCanvasFill`
+
+A `fillRect` a 2D canvas still shows (`agentCanvasText`), opaque ones included.
+
+- `quad`: array of `AgentCanvasPoint`.
+- `color`: string.
+- `alpha`: number.
+- `exact`: boolean.
+- `inexact`: string, optional. `partlyCovered` or `notFollowed`, as a run's, judged on the whole fill; a straight stroke up to 3 px wide (an underline drawn over a selection) never makes a fill inexact.
+
+##### `Page.AgentCanvas`
+
+A `<canvas>` element and what its 2D context still shows.
+
+- `backendNodeId`: integer.
+- `frameId`: string. Its own frame.
+- `localRootFrameId`: string. Its local root, for `Page.agentHitCheck`, `Input.revealElement` and `agentCanvasText`'s own `backendNodeId` and `frameId`.
+- `context`: string. `2d`, `webgl`, `webgpu`, `bitmaprenderer`, `offscreen` (control transferred to an OffscreenCanvas) or `none`. Only `2d` canvases carry runs and fills.
+- `quad`: array of `AgentCanvasPoint`, optional. Its content box, as a run's `quad`; absent with no layout box.
+- `shownRect`: `AgentCanvasRect`, optional. The part of it inside the viewport and every clipping ancestor; absent with no layout box, empty when none of it shows. Whether something else covers a point is `Page.agentHitCheck`'s to say.
+- `exact`: boolean. Every run and fill answered exact, and the canvas not truncated.
+- `truncated`: boolean. The record's caps cut what this canvas shows, until it is emptied (reset, a resize, or a cover of the whole canvas): past 20,000 runs, 20,000 fills, 1,000,000 characters or 256 large items (one spanning more than 16 cells of 128 by 32 px) showing at once the oldest went; and a single draw of more than 4,096 characters is not kept (what it draws is not followed).
+- `recordBytes`: number, optional. A `2d` canvas's record: its own memory in bytes (an estimate from its stores' capacities), now.
+- `recordPeakBytes`: number, optional. The same at its highest.
+- `runs`: array of `AgentCanvasRun`.
+- `fills`: array of `AgentCanvasFill`.
+
 #### Node life and controls
 
 ##### `Page.AgentNodeLife`
@@ -2490,7 +2812,8 @@ The methods above are available whenever the browser runs; the switches below ch
 
 | Switch | What it gates |
 | --- | --- |
-| `--private-clipboard` | **Required by `Input.dispatchPaste`**, which is refused without it. Presence-only: the browser keeps its own in-memory clipboard instead of the operating system's, so copy, cut and paste (keyboard shortcuts, `execCommand` and the async Clipboard API alike) work within this browser process and never read or overwrite the clipboard of the person at the machine, nor that of any other browser running beside it. The same platform-independent clipboard headless mode always uses. |
+| `--enable-canvas-text-record` | **Required by `Page.agentCanvasText`**, which fails without it, saying so. Presence-only and off by default: each 2D canvas of a page keeps a record of the text and rectangles drawn into it, at some cost in time to a page that draws much into its canvases (little when it redraws the same thing in the same place). What a page reads back from its canvases is the same with the switch and without it. |
+| `--private-clipboard` | **Required by `Input.dispatchPaste`, `Input.readClipboard` and `Input.writeClipboard`**, which are refused without it. Presence-only: the browser keeps its own in-memory clipboard instead of the operating system's, so copy, cut and paste (keyboard shortcuts, `execCommand` and the async Clipboard API alike) work within this browser process and never read or overwrite the clipboard of the person at the machine, nor that of any other browser running beside it. The same platform-independent clipboard headless mode always uses. |
 | `--dismiss-permission-prompts` | **Required for `Input.permissionPromptDismissed`** to ever fire. Presence-only: permission requests are queued and shown as usual, except that the prompt is never drawn; after a random 1-5 s, the time a person takes to read a prompt and close it, it is dismissed, and the event is sent. No decision is stored for the site; as after a person's dismissals, three of them put it under the 7-day embargo. A request from a background tab waits for the tab to be shown, as the prompt itself would. Also covers File System Access prompts. (The stock `--deny-permission-prompts` denies in the same call and persists the block, as headless mode does; it does not produce the event.) |
 | `--movement-persona-seed` | The seed of the pointer's human-movement persona (one browser, one hand); an int64. It is the persona `Input.moveTo`, `revealElement`, `scrollBy`, `performDrag`, `selectOptions`, `fillDateTime`, `pickColor` and `chooseFiles` move with, the typist `Input.dispatchKeystrokes` types as, and the default `seed` of `Input.probeMovementPersona`. Absent: in the release binary, derived from `--fingerprint-seed` when that is given; otherwise a random seed for each browser run. |
 | `--fingerprint-seed` | **Release binary only.** The master seed of the fingerprint identity, driving every per-switch `auto` / absent-value derivation, the movement persona's seed included when `--movement-persona-seed` is absent. Accepts `auto` or a 32-bit signed integer, and can be saved at `chrome://browser-settings`. |
