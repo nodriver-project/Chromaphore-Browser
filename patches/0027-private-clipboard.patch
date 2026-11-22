@@ -1,7 +1,7 @@
-From 2d560bbc11d3d71f1bad8546e4f658b5641f0718 Mon Sep 17 00:00:00 2001
+From b47ace88cc1fdd9acc7610de536b5a7163a41d0f Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:07 -0500
-Subject: [PATCH 26/61] private-clipboard
+Date: Sun, 22 Nov 2026 13:08:44 -0500
+Subject: [PATCH 27/62] private-clipboard
 
 --private-clipboard: a headed browser gets the headless in-memory
 clipboard, so nothing a page or Input.dispatchPaste puts there reaches the
@@ -13,10 +13,10 @@ system clipboard. The switch declaration rides in switch-resolver.
  3 files changed, 10 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/headless/BUILD.gn b/chrome/browser/headless/BUILD.gn
-index 0d83cc4c30..a541fd5282 100644
+index 424a139c56..870fab4078 100644
 --- a/chrome/browser/headless/BUILD.gn
 +++ b/chrome/browser/headless/BUILD.gn
-@@ -102,6 +102,7 @@ if (!is_android) {
+@@ -93,6 +93,7 @@ if (!is_android) {
        ":headless",
        "//base",
        "//chrome/browser:main_extra_parts",

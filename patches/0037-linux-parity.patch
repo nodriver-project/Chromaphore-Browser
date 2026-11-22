@@ -1,7 +1,7 @@
-From 5255ab5fc8b752faafaf8534ec18050c441783c9 Mon Sep 17 00:00:00 2001
+From d643e199a26cac20d28da590d83987065b9025e7 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:52 -0500
-Subject: [PATCH 36/61] linux-parity
+Date: Sun, 22 Nov 2026 13:09:29 -0500
+Subject: [PATCH 37/62] linux-parity
 
 A Linux build presenting Windows (see the user-agent commit) exposes and
 answers what Windows Chrome does: Web Share, whose service makes the checks
@@ -98,16 +98,16 @@ utility processes (the network service among them) now receive
  net/BUILD.gn                                  |    9 +
  net/socket/socket_posix.cc                    |    9 +
  net/socket/udp_socket_posix.cc                |    8 +
- net/socket/windows_ip_ttl.cc                  |   44 +
+ net/socket/windows_ip_ttl.cc                  |   45 +
  net/socket/windows_ip_ttl.h                   |   24 +
  .../css_superellipse_interpolation_type.cc    |    7 +-
- .../animation/interpolable_aspect_ratio.cc    |    6 +-
- .../core/css/css_math_expression_node.cc      |   19 +-
+ .../animation/interpolable_aspect_ratio.cc    |    7 +-
+ .../core/css/css_math_expression_node.cc      |    7 +-
  .../blink/renderer/core/css/cssom/css_skew.cc |    6 +-
  .../renderer/core/editing/editing_behavior.cc |   37 +-
  .../core/events/pointer_event_util.cc         |   20 +-
  .../renderer/core/exported/web_view_impl.cc   |   18 +
- .../core/frame/web_frame_widget_impl.cc       |    7 +
+ .../core/frame/web_frame_widget_impl.cc       |    8 +
  .../renderer/core/geometry/dom_matrix.cc      |    4 +-
  .../renderer/core/layout/layout_theme.cc      |    8 +
  .../layout_theme_font_provider_default.cc     |   42 +
@@ -120,11 +120,11 @@ utility processes (the network service among them) now receive
  .../peer_connection_dependency_factory.cc     |   26 +
  .../platform/audio/dynamics_compressor.cc     |    9 +-
  .../blink/renderer/platform/blob/blob_data.cc |   25 +-
- .../geometry/calculation_expression_node.cc   |   11 +-
+ .../geometry/calculation_expression_node.cc   |    5 +-
  .../platform/geometry/contoured_rect.cc       |    4 +-
- .../platform/geometry/math_functions.h        |   14 +-
- .../renderer/platform/text/locale_icu.cc      |   24 +
- .../platform/transforms/affine_transform.cc   |   23 +-
+ .../platform/geometry/math_functions.h        |   19 +-
+ .../renderer/platform/text/locale_icu.cc      |   23 +
+ .../platform/transforms/affine_transform.cc   |   22 +-
  .../platform/transforms/affine_transform.h    |    9 +-
  .../renderer/platform/transforms/rotation.cc  |    5 +-
  .../renderer/platform/wtf/text/line_ending.cc |   14 +-
@@ -145,7 +145,7 @@ utility processes (the network service among them) now receive
  ui/gfx/geometry/matrix44.cc                   |    8 +-
  ui/gfx/geometry/platform_math.cc              |  130 +
  ui/gfx/geometry/platform_math.h               |  111 +
- ui/gfx/geometry/quaternion.cc                 |   19 +-
+ ui/gfx/geometry/quaternion.cc                 |   18 +-
  ui/gfx/geometry/sin_cos_degrees.h             |    8 +-
  ui/gfx/geometry/transform.cc                  |    4 +-
  url/BUILD.gn                                  |    1 +
@@ -155,7 +155,7 @@ utility processes (the network service among them) now receive
  url/url_parse_file.cc                         |   53 +-
  url/url_util.cc                               |   37 +-
  url/windows_drive_letter_urls.h               |   55 +
- 78 files changed, 4031 insertions(+), 150 deletions(-)
+ 78 files changed, 4022 insertions(+), 146 deletions(-)
  create mode 100644 content/browser/bluetooth/windows_bluetooth_adapter.cc
  create mode 100644 content/browser/bluetooth/windows_bluetooth_adapter.h
  create mode 100644 net/socket/windows_ip_ttl.cc
@@ -170,10 +170,10 @@ utility processes (the network service among them) now receive
  create mode 100644 url/windows_drive_letter_urls.h
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 6ad28e2929..12b6288049 100644
+index 86acfc5fb5..95c3a1570a 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -3140,6 +3140,14 @@ source_set("browser") {
+@@ -1647,6 +1647,14 @@ source_set("core") {
      ]
    }
  
@@ -186,13 +186,13 @@ index 6ad28e2929..12b6288049 100644
 +  }
 +
    if (is_win || is_mac || is_linux) {
+     sources += [ "platform_util.cc" ]
      deps += [
-       "//chrome/browser/browser_switcher",
 diff --git a/chrome/browser/chrome_browser_interface_binders.cc b/chrome/browser/chrome_browser_interface_binders.cc
-index 455cbfb53c..595700a94c 100644
+index ec0cde4e5e..07c5754d80 100644
 --- a/chrome/browser/chrome_browser_interface_binders.cc
 +++ b/chrome/browser/chrome_browser_interface_binders.cc
-@@ -127,6 +127,13 @@
+@@ -129,6 +129,13 @@
  #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
  #endif
  
@@ -204,9 +204,9 @@ index 455cbfb53c..595700a94c 100644
 +#endif
 +
  #if BUILDFLAG(ENABLE_SPEECH_SERVICE)
+ #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
  #include "chrome/browser/accessibility/live_caption/live_caption_speech_recognition_host.h"
- #include "chrome/browser/accessibility/live_caption/live_caption_unavailability_notifier.h"
-@@ -546,6 +553,12 @@ void PopulateChromeFrameBinders(
+@@ -565,6 +572,12 @@ void PopulateChromeFrameBinders(
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
    map->Add<blink::mojom::ShareService>(&ShareServiceImpl::Create);
  #endif
@@ -220,7 +220,7 @@ index 455cbfb53c..595700a94c 100644
    map->Add<blink::mojom::ShareService>(
        &ForwardToJavaFrame<blink::mojom::ShareService>);
 diff --git a/chrome/browser/webshare/BUILD.gn b/chrome/browser/webshare/BUILD.gn
-index b8ef37c848..44803dab14 100644
+index 6f68da2585..718bdd333a 100644
 --- a/chrome/browser/webshare/BUILD.gn
 +++ b/chrome/browser/webshare/BUILD.gn
 @@ -27,7 +27,8 @@ if (is_chromeos || is_mac) {
@@ -234,7 +234,7 @@ index b8ef37c848..44803dab14 100644
      public = [ "share_service_impl.h" ]
  
 diff --git a/chrome/browser/webshare/share_service_impl.cc b/chrome/browser/webshare/share_service_impl.cc
-index 0dfb383177..b104303829 100644
+index cb279c7eb2..5daa66ec0b 100644
 --- a/chrome/browser/webshare/share_service_impl.cc
 +++ b/chrome/browser/webshare/share_service_impl.cc
 @@ -24,6 +24,10 @@
@@ -248,7 +248,7 @@ index 0dfb383177..b104303829 100644
  #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
  #include "ui/display/types/display_constants.h"
  #if BUILDFLAG(IS_MAC)
-@@ -58,7 +62,9 @@ ShareServiceImpl::ShareServiceImpl(
+@@ -60,7 +64,9 @@ ShareServiceImpl::ShareServiceImpl(
            content::WebContents::FromRenderFrameHost(&render_frame_host))
  #endif
  {
@@ -259,7 +259,7 @@ index 0dfb383177..b104303829 100644
    NOTREACHED();
  #endif
  }
-@@ -391,6 +397,18 @@ void ShareServiceImpl::RunShareOperation(
+@@ -394,6 +400,18 @@ void ShareServiceImpl::RunShareOperation(
            },
            std::move(share_operation), std::move(*blocker),
            std::move(callback)));
@@ -279,10 +279,10 @@ index 0dfb383177..b104303829 100644
    NOTREACHED();
  #endif
 diff --git a/chrome/browser/webshare/share_service_impl.h b/chrome/browser/webshare/share_service_impl.h
-index 12de0a35be..75e8e3dd84 100644
+index ba632c3c74..f65fa5930b 100644
 --- a/chrome/browser/webshare/share_service_impl.h
 +++ b/chrome/browser/webshare/share_service_impl.h
-@@ -85,6 +85,12 @@ class ShareServiceImpl
+@@ -86,6 +86,12 @@ class ShareServiceImpl
    webshare::SharesheetClient sharesheet_client_;
  #endif
  
@@ -296,10 +296,10 @@ index 12de0a35be..75e8e3dd84 100644
  };
  
 diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
-index 9944fac277..6263ceda06 100644
+index d1b71b4afc..e86eb22f39 100644
 --- a/chrome/renderer/chrome_content_renderer_client.cc
 +++ b/chrome/renderer/chrome_content_renderer_client.cc
-@@ -159,6 +159,7 @@
+@@ -158,6 +158,7 @@
  #include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/common/features_generated.h"
  #include "third_party/blink/public/common/tokens/tokens.h"
@@ -307,7 +307,7 @@ index 9944fac277..6263ceda06 100644
  #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-shared.h"
  #include "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
  #include "third_party/blink/public/platform/platform.h"
-@@ -1523,6 +1524,14 @@ void ChromeContentRendererClient::
+@@ -1525,6 +1526,14 @@ void ChromeContentRendererClient::
      BUILDFLAG(IS_MAC)
    blink::WebRuntimeFeatures::EnableWebShare(true);
  #endif
@@ -323,10 +323,10 @@ index 9944fac277..6263ceda06 100644
    if (base::FeatureList::IsEnabled(
            autofill::features::kAutofillPolicyControlledFeatureAutofill)) {
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index fb34daa4b4..0497aa97bc 100644
+index efa958841b..68e8b3f39c 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -2598,6 +2598,15 @@ source_set("browser") {
+@@ -2626,6 +2626,15 @@ source_set("browser") {
      ]
    }
  
@@ -343,7 +343,7 @@ index fb34daa4b4..0497aa97bc 100644
    if (is_chromeos) {
      sources += [
 diff --git a/content/browser/bluetooth/web_bluetooth_service_impl.cc b/content/browser/bluetooth/web_bluetooth_service_impl.cc
-index 6073f520fb..03ffa71a3b 100644
+index bb24edef4a..1ecaf238f1 100644
 --- a/content/browser/bluetooth/web_bluetooth_service_impl.cc
 +++ b/content/browser/bluetooth/web_bluetooth_service_impl.cc
 @@ -23,6 +23,7 @@
@@ -506,7 +506,7 @@ index 0000000000..b6355aff37
 +
 +#endif  // CONTENT_BROWSER_BLUETOOTH_WINDOWS_BLUETOOTH_ADAPTER_H_
 diff --git a/content/browser/indexed_db/instance/leveldb/backing_store.cc b/content/browser/indexed_db/instance/leveldb/backing_store.cc
-index 0b5128d16c..cc765edea8 100644
+index f4f790ee75..0afc4ad5b4 100644
 --- a/content/browser/indexed_db/instance/leveldb/backing_store.cc
 +++ b/content/browser/indexed_db/instance/leveldb/backing_store.cc
 @@ -88,6 +88,9 @@
@@ -519,7 +519,7 @@ index 0b5128d16c..cc765edea8 100644
  #include "third_party/leveldatabase/leveldb_chrome.h"
  #include "third_party/perfetto/include/perfetto/tracing/track.h"
  
-@@ -1651,6 +1654,16 @@ BackingStore::OpenAndVerify(BucketContext& bucket_context,
+@@ -1653,6 +1656,16 @@ BackingStore::OpenAndVerify(BucketContext& bucket_context,
  // static
  uint64_t BackingStore::ReadSizeFromDisk(const base::FilePath& database_path,
                                          const base::FilePath& blob_path) {
@@ -536,7 +536,7 @@ index 0b5128d16c..cc765edea8 100644
    return base::ComputeDirectorySize(database_path) +
           base::ComputeDirectorySize(blob_path);
  }
-@@ -2310,6 +2323,13 @@ uint64_t BackingStore::EstimateSize(bool write_in_progress) const {
+@@ -2312,6 +2325,13 @@ uint64_t BackingStore::EstimateSize(bool write_in_progress) const {
                                           base::File::FLAG_WIN_SHARE_DELETE);
          });
    }
@@ -665,7 +665,7 @@ index c3ed0598e7..8fcb14631e 100644
        *error_message = "An invalid Service-Worker-Allowed header value ('";
        error_message->append(*service_worker_allowed_header_value);
 diff --git a/content/browser/service_worker/service_worker_main_resource_loader.cc b/content/browser/service_worker/service_worker_main_resource_loader.cc
-index 3f8c9e42f0..ecc348d8a2 100644
+index 51300c75b0..05b35174f4 100644
 --- a/content/browser/service_worker/service_worker_main_resource_loader.cc
 +++ b/content/browser/service_worker/service_worker_main_resource_loader.cc
 @@ -23,6 +23,7 @@
@@ -690,7 +690,7 @@ index 3f8c9e42f0..ecc348d8a2 100644
  
  namespace content {
  
-@@ -1409,9 +1412,21 @@ void ServiceWorkerMainResourceLoader::StartResponse(
+@@ -1415,9 +1418,21 @@ void ServiceWorkerMainResourceLoader::StartResponse(
  
    // Handle a redirect response. ComputeRedirectInfo returns non-null redirect
    // info if the given response is a redirect.
@@ -716,7 +716,7 @@ index 3f8c9e42f0..ecc348d8a2 100644
      TRACE_EVENT("ServiceWorker",
                  "ServiceWorkerMainResourceLoader::StartResponse",
 diff --git a/content/browser/webauth/authenticator_common_impl.cc b/content/browser/webauth/authenticator_common_impl.cc
-index 2a61a295d8..d77e852f7c 100644
+index 9e4649349b..d614a81ec6 100644
 --- a/content/browser/webauth/authenticator_common_impl.cc
 +++ b/content/browser/webauth/authenticator_common_impl.cc
 @@ -125,6 +125,11 @@
@@ -731,7 +731,7 @@ index 2a61a295d8..d77e852f7c 100644
  namespace content {
  
  // RequestExtension is a type of extension in a WebAuthn request that might
-@@ -2229,6 +2234,15 @@ void AuthenticatorCommonImpl::GetClientCapabilities(
+@@ -2246,6 +2251,15 @@ void AuthenticatorCommonImpl::GetClientCapabilities(
  
  void AuthenticatorCommonImpl::IsHybridTransportSupported(
      base::OnceCallback<void(bool)> callback) {
@@ -747,7 +747,7 @@ index 2a61a295d8..d77e852f7c 100644
    if (!device::BluetoothAdapterFactory::Get()->IsLowEnergySupported()) {
      std::move(callback).Run(false);
      return;
-@@ -2301,6 +2315,9 @@ void AuthenticatorCommonImpl::ContinueIsUvpaaAfterOverrideCheck(
+@@ -2318,6 +2332,9 @@ void AuthenticatorCommonImpl::ContinueIsUvpaaAfterOverrideCheck(
                                       std::move(uma_decorated_callback));
  #elif BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
    IsUVPlatformAuthenticatorAvailable(std::move(uma_decorated_callback));
@@ -758,10 +758,10 @@ index 2a61a295d8..d77e852f7c 100644
    std::move(uma_decorated_callback).Run(false);
  #endif
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index 14d5e7dc27..15fd70faf1 100644
+index 3125e63aa8..db8bc5b534 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
-@@ -196,6 +196,11 @@
+@@ -197,6 +197,11 @@
  #include "content/child/sandboxed_process_thread_type_handler.h"
  #endif
  
@@ -773,7 +773,7 @@ index 14d5e7dc27..15fd70faf1 100644
  #ifdef ENABLE_VTUNE_JIT_INTERFACE
  #include "v8/third_party/vtune/v8-vtune.h"
  #endif
-@@ -478,6 +483,13 @@ RenderThreadImpl::RenderThreadImpl(
+@@ -479,6 +484,13 @@ RenderThreadImpl::RenderThreadImpl(
  void RenderThreadImpl::Init() {
    TRACE_EVENT0("startup", "RenderThreadImpl::Init");
  
@@ -788,7 +788,7 @@ index 14d5e7dc27..15fd70faf1 100644
  
    GetContentClient()->renderer()->PostIOThreadCreated(GetIOTaskRunner().get());
 diff --git a/content/utility/services.cc b/content/utility/services.cc
-index 679717594a..7c3db7be1b 100644
+index be478b3d0e..49ef5352c6 100644
 --- a/content/utility/services.cc
 +++ b/content/utility/services.cc
 @@ -43,6 +43,8 @@
@@ -800,7 +800,7 @@ index 679717594a..7c3db7be1b 100644
  
  #if BUILDFLAG(IS_MAC)
  #include "base/apple/mach_logging.h"
-@@ -198,6 +200,17 @@ auto RunNetworkService(
+@@ -195,6 +197,17 @@ auto RunNetworkService(
    }
    mojo::InterfaceEndpointClient::SetThreadNameSuffixForMetrics(
        "NetworkServiceOutOfProcess");
@@ -819,10 +819,10 @@ index 679717594a..7c3db7be1b 100644
        std::move(binders), std::move(receiver),
        /*delay_initialization_until_set_client=*/true);
 diff --git a/net/BUILD.gn b/net/BUILD.gn
-index 25521d2e09..07cef92625 100644
+index 80bed64795..00344e12ad 100644
 --- a/net/BUILD.gn
 +++ b/net/BUILD.gn
-@@ -1470,6 +1470,15 @@ component("net") {
+@@ -1500,6 +1500,15 @@ component("net") {
      ]
    }
  
@@ -866,10 +866,10 @@ index d8139fcb70..b2dae54978 100644
  }
  
 diff --git a/net/socket/udp_socket_posix.cc b/net/socket/udp_socket_posix.cc
-index b1f48b0b05..f307eb06b0 100644
+index cb0728ea8d..1a23545692 100644
 --- a/net/socket/udp_socket_posix.cc
 +++ b/net/socket/udp_socket_posix.cc
-@@ -58,6 +58,9 @@
+@@ -55,6 +55,9 @@
  #include "net/log/net_log_source_type.h"
  #include "net/socket/extra_socket_defines.h"
  #include "net/socket/socket_descriptor.h"
@@ -879,7 +879,7 @@ index b1f48b0b05..f307eb06b0 100644
  #include "net/socket/socket_options.h"
  #include "net/socket/socket_tag.h"
  #include "net/socket/udp_net_log_parameters.h"
-@@ -259,6 +262,11 @@ int UDPSocketPosix::Open(AddressFamily address_family) {
+@@ -256,6 +259,11 @@ int UDPSocketPosix::Open(AddressFamily address_family) {
      return MapSystemError(errno);
    }
  
@@ -893,10 +893,10 @@ index b1f48b0b05..f307eb06b0 100644
  
 diff --git a/net/socket/windows_ip_ttl.cc b/net/socket/windows_ip_ttl.cc
 new file mode 100644
-index 0000000000..bee23c8c6b
+index 0000000000..34ef973fdb
 --- /dev/null
 +++ b/net/socket/windows_ip_ttl.cc
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,45 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -917,8 +917,9 @@ index 0000000000..bee23c8c6b
 +constexpr int kWindowsIpTtl = 128;
 +
 +bool PresentsWindows() {
-+  static const bool presents = !base::CommandLine::ForCurrentProcess()->HasSwitch(
-+      ::switches::kUseChromiumDefaults);
++  static const bool presents =
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kUseChromiumDefaults);
 +  return presents;
 +}
 +
@@ -1000,10 +1001,14 @@ index dfe7a9585a..0824f13c30 100644
  }
  
 diff --git a/third_party/blink/renderer/core/animation/interpolable_aspect_ratio.cc b/third_party/blink/renderer/core/animation/interpolable_aspect_ratio.cc
-index e05a074d66..086ff8cf71 100644
+index e05a074d66..81632e76f4 100644
 --- a/third_party/blink/renderer/core/animation/interpolable_aspect_ratio.cc
 +++ b/third_party/blink/renderer/core/animation/interpolable_aspect_ratio.cc
-@@ -6,6 +6,7 @@
+@@ -3,9 +3,11 @@
+ // found in the LICENSE file.
+ 
+ #include "third_party/blink/renderer/core/animation/interpolable_aspect_ratio.h"
++
  #include "third_party/blink/renderer/core/animation/interpolable_value.h"
  #include "third_party/blink/renderer/core/css/resolver/style_resolver_state.h"
  #include "third_party/blink/renderer/core/style/style_aspect_ratio.h"
@@ -1011,7 +1016,7 @@ index e05a074d66..086ff8cf71 100644
  
  namespace blink {
  
-@@ -26,11 +27,12 @@ InterpolableAspectRatio::InterpolableAspectRatio(
+@@ -26,11 +28,12 @@ InterpolableAspectRatio::InterpolableAspectRatio(
    DCHECK(aspect_ratio.height() > 0 && aspect_ratio.width() > 0);
  
    value_ = MakeGarbageCollected<InterpolableNumber>(
@@ -1027,10 +1032,10 @@ index e05a074d66..086ff8cf71 100644
  
  void InterpolableAspectRatio::Scale(double scale) {
 diff --git a/third_party/blink/renderer/core/css/css_math_expression_node.cc b/third_party/blink/renderer/core/css/css_math_expression_node.cc
-index a868a29957..c5b9293c4c 100644
+index 3067e3f750..68aebcc3a3 100644
 --- a/third_party/blink/renderer/core/css/css_math_expression_node.cc
 +++ b/third_party/blink/renderer/core/css/css_math_expression_node.cc
-@@ -69,6 +69,7 @@
+@@ -70,6 +70,7 @@
  #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
  #include "third_party/blink/renderer/platform/wtf/vector_traits.h"
  #include "third_party/blink/renderer/platform/wtf/wtf_size_t.h"
@@ -1038,27 +1043,7 @@ index a868a29957..c5b9293c4c 100644
  #include "ui/gfx/geometry/sin_cos_degrees.h"
  
  namespace blink {
-@@ -2174,7 +2175,8 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateExponentialFunction(
-         for (const CSSMathExpressionNode* operand : operands) {
-           std::optional<double> a = operand->ComputeValueInCanonicalUnit();
-           DCHECK(a.has_value());
--          value = std::hypot(value, a.value());
-+          // browser: as Chrome on Windows computes it (platform_math.h).
-+          value = gfx::PlatformHypot(value, a.value());
-         }
-         unit_type = CSSPrimitiveValue::CanonicalUnit(
-             operands.front()->ResolvedUnitType());
-@@ -2202,7 +2204,8 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateExponentialFunction(
-         double b = ValueAsNumber(operands[1], error);
-         value = std::log2(a) / std::log2(b);
-       } else {
--        value = std::log(a);
-+        // browser: as Chrome on Windows computes it (platform_math.h).
-+        value = gfx::PlatformLog(a);
-       }
-       break;
-     }
-@@ -2214,7 +2217,8 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateExponentialFunction(
+@@ -2127,7 +2128,8 @@ CSSMathExpressionNode* CSSMathExpressionOperation::CreateExponentialFunction(
              CSSMathType());
        }
        double a = ValueAsNumber(operands[0], error);
@@ -1068,7 +1053,7 @@ index a868a29957..c5b9293c4c 100644
        break;
      }
      default:
-@@ -3801,7 +3805,8 @@ double CSSMathExpressionOperation::EvaluateOperator(
+@@ -3718,7 +3720,8 @@ double CSSMathExpressionOperation::EvaluateOperator(
      }
      case CSSMathOperator::kExp: {
        DCHECK_EQ(operands.size(), 1u);
@@ -1078,26 +1063,6 @@ index a868a29957..c5b9293c4c 100644
      }
      case CSSMathOperator::kLog: {
        DCHECK_GE(operands.size(), 1u);
-@@ -3809,7 +3814,8 @@ double CSSMathExpressionOperation::EvaluateOperator(
-       if (operands.size() == 2) {
-         return std::log2(operands.front()) / std::log2(operands.back());
-       }
--      return std::log(operands.front());
-+      // browser: as Chrome on Windows computes it (platform_math.h).
-+      return gfx::PlatformLog(operands.front());
-     }
-     case CSSMathOperator::kSqrt: {
-       DCHECK_EQ(operands.size(), 1u);
-@@ -3819,7 +3825,8 @@ double CSSMathExpressionOperation::EvaluateOperator(
-       DCHECK_GE(operands.size(), 1u);
-       double value = 0;
-       for (double operand : operands) {
--        value = std::hypot(value, operand);
-+        // browser: as Chrome on Windows computes it (platform_math.h).
-+        value = gfx::PlatformHypot(value, operand);
-       }
-       return value;
-     }
 diff --git a/third_party/blink/renderer/core/css/cssom/css_skew.cc b/third_party/blink/renderer/core/css/cssom/css_skew.cc
 index aa02470307..93fb1a4b9e 100644
 --- a/third_party/blink/renderer/core/css/cssom/css_skew.cc
@@ -1179,10 +1144,10 @@ index f7c75030b9..a1cfa625d9 100644
    // Don't insert ASCII character if ctrl w/o alt or meta is on.
    // On Mac, we should ignore events when meta is on (Command-<x>).
 diff --git a/third_party/blink/renderer/core/events/pointer_event_util.cc b/third_party/blink/renderer/core/events/pointer_event_util.cc
-index 7ab7f7c216..c5943276ae 100644
+index e7382028a1..c913c65ba9 100644
 --- a/third_party/blink/renderer/core/events/pointer_event_util.cc
 +++ b/third_party/blink/renderer/core/events/pointer_event_util.cc
-@@ -8,6 +8,7 @@
+@@ -9,6 +9,7 @@
  
  #include "base/numerics/angle_conversions.h"
  #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -1190,7 +1155,7 @@ index 7ab7f7c216..c5943276ae 100644
  
  namespace blink {
  // static
-@@ -41,9 +42,10 @@ double PointerEventUtil::AzimuthFromTilt(double tilt_x_degrees,
+@@ -42,9 +43,10 @@ double PointerEventUtil::AzimuthFromTilt(double tilt_x_degrees,
           abs(tilt_x_degrees) != 90 && abs(tilt_y_degrees) != 90);
    const double tilt_x_radians = base::DegToRad(tilt_x_degrees);
    const double tilt_y_radians = base::DegToRad(tilt_y_degrees);
@@ -1204,20 +1169,20 @@ index 7ab7f7c216..c5943276ae 100644
    azimuth_radians = (azimuth_radians >= 0) ? azimuth_radians
                                             : (azimuth_radians + kTwoPiDouble);
  
-@@ -70,8 +72,10 @@ double PointerEventUtil::AltitudeFromTilt(double tilt_x_degrees,
+@@ -71,8 +73,10 @@ double PointerEventUtil::AltitudeFromTilt(double tilt_x_degrees,
      return kPiOverTwoDouble - abs(tilt_x_radians);
    }
  
 -  return atan(1.0 /
 -              sqrt(pow(tan(tilt_x_radians), 2) + pow(tan(tilt_y_radians), 2)));
 +  // browser: as Chrome on Windows computes it (platform_math.h).
-+  return gfx::PlatformAtan(
-+      1.0 / sqrt(pow(gfx::PlatformTan(tilt_x_radians), 2) +
-+                 pow(gfx::PlatformTan(tilt_y_radians), 2)));
++  return gfx::PlatformAtan(1.0 /
++                           sqrt(pow(gfx::PlatformTan(tilt_x_radians), 2) +
++                                pow(gfx::PlatformTan(tilt_y_radians), 2)));
  }
  
  // static
-@@ -83,7 +87,8 @@ int32_t PointerEventUtil::TiltXFromSpherical(double azimuth_radians,
+@@ -84,7 +88,8 @@ int32_t PointerEventUtil::TiltXFromSpherical(double azimuth_radians,
      // Not using std::round because we need Javascript Math.round behaviour
      // here which is different
      return std::floor(
@@ -1227,7 +1192,7 @@ index 7ab7f7c216..c5943276ae 100644
          0.5);
    }
  
-@@ -109,7 +114,8 @@ int32_t PointerEventUtil::TiltYFromSpherical(double azimuth_radians,
+@@ -110,7 +115,8 @@ int32_t PointerEventUtil::TiltYFromSpherical(double azimuth_radians,
      // Not using std::round because we need Javascript Math.round behaviour
      // here which is different
      return std::floor(
@@ -1236,9 +1201,9 @@ index 7ab7f7c216..c5943276ae 100644
 +                                         gfx::PlatformTan(altitude_radians))) +
          0.5);
    }
-   if (azimuth_radians == 0 || azimuth_radians == kPiDouble ||
+   if (azimuth_radians == 0 || azimuth_radians == std::numbers::pi ||
 diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_party/blink/renderer/core/exported/web_view_impl.cc
-index 387ba3f37d..0b59fc070e 100644
+index e77bb8bc65..884c7e37ea 100644
 --- a/third_party/blink/renderer/core/exported/web_view_impl.cc
 +++ b/third_party/blink/renderer/core/exported/web_view_impl.cc
 @@ -54,6 +54,7 @@
@@ -1249,7 +1214,7 @@ index 387ba3f37d..0b59fc070e 100644
  #include "third_party/blink/public/common/view_source/rendering_preferences.h"
  #include "third_party/blink/public/common/web_preferences/web_preferences.h"
  #include "third_party/blink/public/mojom/frame/frame_replication_state.mojom-blink.h"
-@@ -1945,6 +1946,23 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
+@@ -1949,6 +1950,23 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
    RuntimeEnabledFeatures::SetMiddleClickAutoscrollEnabled(true);
  #endif
  
@@ -1274,22 +1239,23 @@ index 387ba3f37d..0b59fc070e 100644
    // feature and with it the hrefTranslate attribute of HTMLAnchorElement.
    // Chrome ships with Google API keys, so TranslateManager::IsAvailable() is
 diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
-index b2611bce89..94aa41b49b 100644
+index 58822a0748..5ff53ff4b7 100644
 --- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
 +++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
-@@ -1110,6 +1110,13 @@ WebInputEventResult WebFrameWidgetImpl::HandleKeyEvent(
-   const WebInputEvent::Type kContextMenuKeyTriggeringEventType =
+@@ -1117,6 +1117,14 @@ WebInputEventResult WebFrameWidgetImpl::HandleKeyEvent(
  #if BUILDFLAG(IS_WIN)
-       WebInputEvent::Type::kKeyUp;
+   bool is_context_menu_key_triggering_event =
+       event.GetType() == WebInputEvent::Type::kKeyUp;
 +#elif BUILDFLAG(IS_LINUX)
-+      // browser: when the key is released where the context menu comes on
-+      // mouse up, which on Linux is a build presenting Windows
-+      // (WebView::ApplyWebPreferences()): Windows opens the menu on key up.
++  // browser: when the key is released where the context menu comes on
++  // mouse up, which on Linux is a build presenting Windows
++  // (WebView::ApplyWebPreferences()): Windows opens the menu on key up.
++  bool is_context_menu_key_triggering_event =
 +      GetPage()->GetSettings().GetShowContextMenuOnMouseUp()
-+          ? WebInputEvent::Type::kKeyUp
-+          : WebInputEvent::Type::kRawKeyDown;
++          ? event.GetType() == WebInputEvent::Type::kKeyUp
++          : is_key_down;
  #else
-       WebInputEvent::Type::kRawKeyDown;
+   bool is_context_menu_key_triggering_event = is_key_down;
  #endif
 diff --git a/third_party/blink/renderer/core/geometry/dom_matrix.cc b/third_party/blink/renderer/core/geometry/dom_matrix.cc
 index ae3a5a5461..fb0f68139a 100644
@@ -1314,7 +1280,7 @@ index ae3a5a5461..fb0f68139a 100644
  }
  
 diff --git a/third_party/blink/renderer/core/layout/layout_theme.cc b/third_party/blink/renderer/core/layout/layout_theme.cc
-index e3735ca53c..1559a86355 100644
+index 253df40084..f1d64a2d10 100644
 --- a/third_party/blink/renderer/core/layout/layout_theme.cc
 +++ b/third_party/blink/renderer/core/layout/layout_theme.cc
 @@ -23,6 +23,7 @@
@@ -1325,7 +1291,7 @@ index e3735ca53c..1559a86355 100644
  #include "third_party/blink/public/resources/grit/blink_resources.h"
  #include "third_party/blink/public/strings/grit/blink_strings.h"
  #include "third_party/blink/public/web/blink.h"
-@@ -877,6 +878,13 @@ Color LayoutTheme::SystemHighlightFromColorProvider(
+@@ -872,6 +873,13 @@ Color LayoutTheme::SystemHighlightFromColorProvider(
      const ui::ColorProvider* color_provider) const {
    SkColor system_highlight_color =
        color_provider->GetColor(ui::kColorCssSystemHighlight);
@@ -1427,10 +1393,10 @@ index ce9a66ba4d..409b6cf13f 100644
    return true;
  #endif
 diff --git a/third_party/blink/renderer/core/style/basic_shapes.cc b/third_party/blink/renderer/core/style/basic_shapes.cc
-index f717fdaf04..92d5e9bc52 100644
+index b0a328432d..3826864ba6 100644
 --- a/third_party/blink/renderer/core/style/basic_shapes.cc
 +++ b/third_party/blink/renderer/core/style/basic_shapes.cc
-@@ -38,6 +38,7 @@
+@@ -39,6 +39,7 @@
  #include "third_party/blink/renderer/platform/geometry/path.h"
  #include "third_party/blink/renderer/platform/geometry/path_builder.h"
  #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -1438,7 +1404,7 @@ index f717fdaf04..92d5e9bc52 100644
  #include "ui/gfx/geometry/point_f.h"
  #include "ui/gfx/geometry/rect_f.h"
  #include "ui/gfx/geometry/size_f.h"
-@@ -81,7 +82,8 @@ float GetRoundedPolygonRadius(const RoundedPolygonEdge& incoming,
+@@ -82,7 +83,8 @@ float GetRoundedPolygonRadius(const RoundedPolygonEdge& incoming,
    // points INTO the vertex, negate it to get the outward direction.
    const double cos_interior =
        std::clamp(-gfx::DotProduct(incoming.unit, outgoing.unit), -1.0, 1.0);
@@ -1447,8 +1413,8 @@ index f717fdaf04..92d5e9bc52 100644
 +  const double interior_angle = gfx::PlatformAcos(cos_interior);
  
    if (interior_angle <= std::numeric_limits<double>::epsilon() ||
-       std::abs(interior_angle - kPiDouble) <=
-@@ -89,7 +91,7 @@ float GetRoundedPolygonRadius(const RoundedPolygonEdge& incoming,
+       std::abs(interior_angle - std::numbers::pi) <=
+@@ -90,7 +92,7 @@ float GetRoundedPolygonRadius(const RoundedPolygonEdge& incoming,
      return 0.0f;
    }
  
@@ -1518,7 +1484,7 @@ index a43ffe5af9..38882a0baa 100644
      return gfx::PointF();
    // Solve for the point <cx, cy> from a matrix on the form:
 diff --git a/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc b/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc
-index b2897a6c15..fccf11d62e 100644
+index 794929577b..73dead9530 100644
 --- a/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc
 +++ b/third_party/blink/renderer/modules/credentialmanagement/public_key_credential.cc
 @@ -7,6 +7,7 @@
@@ -1593,7 +1559,7 @@ index cbdf6f2c9b..4f53f6565e 100644
    tracer->End();
  }
 diff --git a/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc b/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc
-index b7b7c5a581..8ef171ff3d 100644
+index ba3d20ad79..f1a9105440 100644
 --- a/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc
 +++ b/third_party/blink/renderer/modules/peerconnection/peer_connection_dependency_factory.cc
 @@ -135,6 +135,11 @@
@@ -1633,7 +1599,7 @@ index b7b7c5a581..8ef171ff3d 100644
  scoped_refptr<media::MojoVideoEncoderMetricsProviderFactory>
  CreateMojoVideoEncoderMetricsProviderFactory(LocalFrame* local_frame) {
    CHECK(local_frame);
-@@ -1131,6 +1154,9 @@ PeerConnectionDependencyFactory::CreatePortAllocator(
+@@ -1137,6 +1160,9 @@ PeerConnectionDependencyFactory::CreatePortAllocator(
    auto port_allocator = std::make_unique<P2PPortAllocator>(
        std::move(network_manager), socket_factory_.get(), port_config,
        std::make_unique<LocalNetworkAccessPermissionFactory>(this));
@@ -1644,7 +1610,7 @@ index b7b7c5a581..8ef171ff3d 100644
      port_allocator->SetPortRange(min_port, max_port);
  
 diff --git a/third_party/blink/renderer/platform/audio/dynamics_compressor.cc b/third_party/blink/renderer/platform/audio/dynamics_compressor.cc
-index 8aa8c68156..a90c130c89 100644
+index eeb49ab5ae..50f7fae9ce 100644
 --- a/third_party/blink/renderer/platform/audio/dynamics_compressor.cc
 +++ b/third_party/blink/renderer/platform/audio/dynamics_compressor.cc
 @@ -40,6 +40,7 @@
@@ -1665,7 +1631,7 @@ index 8aa8c68156..a90c130c89 100644
  
        // Calculate total gain using the linear post-gain.
        const float total_gain = linear_post_gain * post_warp_compressor_gain;
-@@ -474,8 +476,9 @@ float DynamicsCompressor::KneeCurve(float x, float k) const {
+@@ -473,8 +475,9 @@ float DynamicsCompressor::KneeCurve(float x, float k) const {
      return x;
    }
  
@@ -1678,12 +1644,12 @@ index 8aa8c68156..a90c130c89 100644
  }
  
 diff --git a/third_party/blink/renderer/platform/blob/blob_data.cc b/third_party/blink/renderer/platform/blob/blob_data.cc
-index 39630ac98f..8668ee1a89 100644
+index d645dacdee..6285540be0 100644
 --- a/third_party/blink/renderer/platform/blob/blob_data.cc
 +++ b/third_party/blink/renderer/platform/blob/blob_data.cc
-@@ -38,8 +38,10 @@
- #include "base/memory/ptr_util.h"
+@@ -39,8 +39,10 @@
  #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
  #include "base/task/single_thread_task_runner.h"
 +#include "build/build_config.h"
  #include "mojo/public/cpp/bindings/remote.h"
@@ -1692,7 +1658,7 @@ index 39630ac98f..8668ee1a89 100644
  #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
  #include "third_party/blink/public/mojom/blob/blob_registry.mojom-blink.h"
  #include "third_party/blink/public/mojom/blob/data_element.mojom-blink.h"
-@@ -144,6 +146,25 @@ void BlobData::AppendBlob(scoped_refptr<BlobDataHandle> data_handle,
+@@ -161,6 +163,25 @@ void BlobData::AppendBlob(scoped_refptr<BlobDataHandle> data_handle,
        DataElementBlob::New(data_handle->CloneBlobRemote(), offset, length)));
  }
  
@@ -1718,7 +1684,7 @@ index 39630ac98f..8668ee1a89 100644
  void BlobData::AppendText(const String& text,
                            bool do_normalize_line_endings_to_native) {
    DCHECK_EQ(file_composition_, FileCompositionStatus::kNoUnknownSizeFiles)
-@@ -155,11 +176,11 @@ void BlobData::AppendText(const String& text,
+@@ -172,11 +193,11 @@ void BlobData::AppendText(const String& text,
      if (utf8_text.length() >
          BlobBytesProvider::kMaxConsolidatedItemSizeInBytes) {
        auto raw_data = RawData::Create();
@@ -1733,21 +1699,10 @@ index 39630ac98f..8668ee1a89 100644
      }
    } else {
 diff --git a/third_party/blink/renderer/platform/geometry/calculation_expression_node.cc b/third_party/blink/renderer/platform/geometry/calculation_expression_node.cc
-index aeafedacb3..591c61fd3d 100644
+index c3512f0e09..fe60fd46c7 100644
 --- a/third_party/blink/renderer/platform/geometry/calculation_expression_node.cc
 +++ b/third_party/blink/renderer/platform/geometry/calculation_expression_node.cc
-@@ -321,8 +321,9 @@ CalculationExpressionOperationNode::CreateSimplified(Children&& children,
-       if (!can_simplify) {
-         break;
-       }
-+      // browser: as Chrome on Windows computes it (platform_math.h).
-       float value = operand_pixels.size() == 1u
--                        ? std::log(operand_pixels.front())
-+                        ? gfx::PlatformLog(operand_pixels.front())
-                         : std::log2(operand_pixels.front()) /
-                               std::log2(operand_pixels.back());
-       return MakeGarbageCollected<CalculationExpressionPixelsAndPercentNode>(
-@@ -377,8 +378,9 @@ CalculationExpressionOperationNode::CreateSimplified(Children&& children,
+@@ -381,8 +381,9 @@ CalculationExpressionOperationNode::CreateSimplified(
          return MakeGarbageCollected<CalculationExpressionNumberNode>(
              EvaluateSignFunction(value));
        } else if (op == CalculationOperator::kExp) {
@@ -1758,17 +1713,7 @@ index aeafedacb3..591c61fd3d 100644
        } else if (op == CalculationOperator::kSqrt) {
          return MakeGarbageCollected<CalculationExpressionNumberNode>(
              std::sqrt(value));
-@@ -565,7 +567,8 @@ float CalculationExpressionOperationNode::Evaluate(
-       DCHECK_GE(children_.size(), 1u);
-       DCHECK_LE(children_.size(), 2u);
-       return children_.size() == 1u
--                 ? std::log(children_.front()->Evaluate(max_value, input))
-+                 ? gfx::PlatformLog(
-+                       children_.front()->Evaluate(max_value, input))
-                  : std::log2(children_.front()->Evaluate(max_value, input)) /
-                        std::log2(children_.back()->Evaluate(max_value, input));
-     }
-@@ -587,7 +590,7 @@ float CalculationExpressionOperationNode::Evaluate(
+@@ -588,7 +589,7 @@ float CalculationExpressionOperationNode::Evaluate(
        if (operator_ == CalculationOperator::kAbs) {
          return std::abs(value);
        } else if (operator_ == CalculationOperator::kExp) {
@@ -1800,18 +1745,18 @@ index 60ed67bbac..fdfda15be9 100644
  
  }  // namespace blink
 diff --git a/third_party/blink/renderer/platform/geometry/math_functions.h b/third_party/blink/renderer/platform/geometry/math_functions.h
-index 84685c9ef2..8caed428f9 100644
+index a8e08d8568..6589faa84f 100644
 --- a/third_party/blink/renderer/platform/geometry/math_functions.h
 +++ b/third_party/blink/renderer/platform/geometry/math_functions.h
-@@ -15,6 +15,7 @@
- #include "base/notreached.h"
- #include "base/numerics/angle_conversions.h"
+@@ -19,6 +19,7 @@
+ #include "third_party/blink/renderer/platform/geometry/progress_clamping.h"
  #include "third_party/blink/renderer/platform/platform_export.h"
+ #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 +#include "ui/gfx/geometry/platform_math.h"
  #include "ui/gfx/geometry/sin_cos_degrees.h"
  
  namespace blink {
-@@ -101,7 +102,8 @@ T TanDegrees(T degrees) {
+@@ -109,7 +110,8 @@ T TanDegrees(T degrees) {
    }
    // Slow path for non-table cases.
    T x = base::DegToRad(degrees);
@@ -1821,7 +1766,7 @@ index 84685c9ef2..8caed428f9 100644
  }
  
  }  // namespace
-@@ -123,23 +125,25 @@ ValueType EvaluateTrigonometricFunction(
+@@ -158,23 +160,24 @@ ValueType EvaluateTrigonometricFunction(
        return TanDegrees(a);
      }
      case OperatorType::kAsin: {
@@ -1846,21 +1791,42 @@ index 84685c9ef2..8caed428f9 100644
      case OperatorType::kAtan2: {
        DCHECK(b.has_value());
 -      ValueType value = base::RadToDeg(std::atan2(a, b.value()));
-+      ValueType value =
-+          base::RadToDeg(gfx::PlatformAtan2(a, b.value()));
++      ValueType value = base::RadToDeg(gfx::PlatformAtan2(a, b.value()));
        DCHECK(value >= -180 && value <= 180 || std::isnan(value));
        return value;
      }
+@@ -333,7 +336,8 @@ ValueType EvaluateLogFunction(ValueType a, std::optional<ValueType> b) {
+   if (b) {
+     return std::log2(a) / std::log2(*b);
+   }
+-  return std::log(a);
++  // browser: as Chrome on Windows computes it (platform_math.h).
++  return gfx::PlatformLog(a);
+ }
+ 
+ template <typename ValueType>
+@@ -362,7 +366,8 @@ ValueType EvaluateHypotIteration(ValueType a, ValueType b) {
+   if (std::isnan(a) || std::isnan(b)) {
+     return std::numeric_limits<ValueType>::quiet_NaN();
+   }
+-  return std::hypot(a, b);
++  // browser: as Chrome on Windows computes it (platform_math.h).
++  return gfx::PlatformHypot(a, b);
+ }
+ 
+ // https://drafts.csswg.org/css-values-5/#random-evaluation
 diff --git a/third_party/blink/renderer/platform/text/locale_icu.cc b/third_party/blink/renderer/platform/text/locale_icu.cc
-index 27e89e3e89..38c00eccad 100644
+index 27e89e3e89..1a5715ef5c 100644
 --- a/third_party/blink/renderer/platform/text/locale_icu.cc
 +++ b/third_party/blink/renderer/platform/text/locale_icu.cc
-@@ -44,6 +44,13 @@
+@@ -41,9 +41,15 @@
+ 
+ #include "base/memory/ptr_util.h"
+ #include "base/numerics/safe_conversions.h"
++#include "build/build_config.h"
  #include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
  #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
  
-+#include "build/build_config.h"
-+
 +#if BUILDFLAG(IS_LINUX)
 +#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
 +#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -1869,7 +1835,7 @@ index 27e89e3e89..38c00eccad 100644
  namespace blink {
  
  std::unique_ptr<Locale> Locale::Create(const String& locale) {
-@@ -293,6 +300,23 @@ void LocaleIcu::InitializeDateTimeFormat() {
+@@ -293,6 +299,23 @@ void LocaleIcu::InitializeDateTimeFormat() {
        GetDateFormatPattern(date_time_format_without_seconds);
    udat_close(date_time_format_without_seconds);
  
@@ -1894,7 +1860,7 @@ index 27e89e3e89..38c00eccad 100644
        CreateLabelVector(medium_time_format_, UDAT_AM_PMS, UCAL_AM, 2);
    if (time_ampm_labels_.empty()) {
 diff --git a/third_party/blink/renderer/platform/transforms/affine_transform.cc b/third_party/blink/renderer/platform/transforms/affine_transform.cc
-index e4550b66ca..8a5270347a 100644
+index e4550b66ca..63055f843a 100644
 --- a/third_party/blink/renderer/platform/transforms/affine_transform.cc
 +++ b/third_party/blink/renderer/platform/transforms/affine_transform.cc
 @@ -35,6 +35,7 @@
@@ -1950,19 +1916,18 @@ index e4550b66ca..8a5270347a 100644
  }
  
  gfx::PointF AffineTransform::MapPoint(const gfx::PointF& point) const {
-@@ -301,7 +308,9 @@ String AffineTransform::ToString(bool as_matrix) const {
+@@ -301,7 +308,8 @@ String AffineTransform::ToString(bool as_matrix) const {
                    decomp->translate[1]);
    }
  
 -  double angle = base::RadToDeg(std::asin(decomp->quaternion.z())) * 2;
 +  // browser: as Chrome on Windows computes it (platform_math.h).
-+  double angle =
-+      base::RadToDeg(gfx::PlatformAsin(decomp->quaternion.z())) * 2;
++  double angle = base::RadToDeg(gfx::PlatformAsin(decomp->quaternion.z())) * 2;
    return Format(
        "translation({:g},{:g}), scale({:g},{:g}), angle({:g}deg), skewxy({:g})",
        decomp->translate[0], decomp->translate[1], decomp->scale[0],
 diff --git a/third_party/blink/renderer/platform/transforms/affine_transform.h b/third_party/blink/renderer/platform/transforms/affine_transform.h
-index 87a77b65a4..9ed3febef3 100644
+index 87a77b65a4..d51ca2ccad 100644
 --- a/third_party/blink/renderer/platform/transforms/affine_transform.h
 +++ b/third_party/blink/renderer/platform/transforms/affine_transform.h
 @@ -35,6 +35,7 @@
@@ -1979,14 +1944,14 @@ index 87a77b65a4..9ed3febef3 100644
    [[nodiscard]] static constexpr AffineTransform MakeSkewX(double angle) {
 -    return AffineTransform(1, 0, std::tan(base::DegToRad(angle)), 1, 0, 0);
 +    // browser: as Chrome on Windows computes it (platform_math.h).
-+    return AffineTransform(1, 0, gfx::PlatformTan(base::DegToRad(angle)), 1,
-+                           0, 0);
++    return AffineTransform(1, 0, gfx::PlatformTan(base::DegToRad(angle)), 1, 0,
++                           0);
    }
    [[nodiscard]] static constexpr AffineTransform MakeSkewY(double angle) {
 -    return AffineTransform(1, std::tan(base::DegToRad(angle)), 0, 1, 0, 0);
 +    // browser: as Chrome on Windows computes it (platform_math.h).
-+    return AffineTransform(1, gfx::PlatformTan(base::DegToRad(angle)), 0, 1,
-+                           0, 0);
++    return AffineTransform(1, gfx::PlatformTan(base::DegToRad(angle)), 0, 1, 0,
++                           0);
    }
    [[nodiscard]] static constexpr AffineTransform Translation(double x,
                                                               double y) {
@@ -2087,7 +2052,7 @@ index f0befcc0c4..2d40498a06 100644
  // append the result to the given buffer.
  // (Normalize to CRLF on Windows and normalize to LF on all other platforms.)
 diff --git a/third_party/leveldatabase/env_chromium.cc b/third_party/leveldatabase/env_chromium.cc
-index 393c170608..e4de6085f6 100644
+index a3eea3b5d6..01a6424010 100644
 --- a/third_party/leveldatabase/env_chromium.cc
 +++ b/third_party/leveldatabase/env_chromium.cc
 @@ -4,9 +4,11 @@
@@ -2294,7 +2259,7 @@ index 393c170608..e4de6085f6 100644
    return MakeSlice(
        std::string_view(reinterpret_cast<const char*>(s.data()), s.size()));
 diff --git a/third_party/leveldatabase/env_chromium.h b/third_party/leveldatabase/env_chromium.h
-index 848be51288..ed970246bf 100644
+index dc086ed623..5adf0d387e 100644
 --- a/third_party/leveldatabase/env_chromium.h
 +++ b/third_party/leveldatabase/env_chromium.h
 @@ -18,6 +18,7 @@
@@ -4954,10 +4919,10 @@ index 0000000000..3d8fdfdcc8
 +
 +#endif /* UCRT_MATH_H */
 diff --git a/ui/base/BUILD.gn b/ui/base/BUILD.gn
-index c8161436a0..6ce69df50e 100644
+index e0fcd30792..797a849115 100644
 --- a/ui/base/BUILD.gn
 +++ b/ui/base/BUILD.gn
-@@ -526,6 +526,11 @@ component("base") {
+@@ -525,6 +525,11 @@ component("base") {
      deps += [ "//third_party/re2" ]
    }
  
@@ -5008,10 +4973,10 @@ index 5c9bf105bb..b00a30fb53 100644
    return std::ranges::any_of(device_data_manager->GetTouchpadDevices(),
                               std::identity(), &InputDevice::enabled) ||
 diff --git a/ui/color/BUILD.gn b/ui/color/BUILD.gn
-index e11a5e5651..c82e54a610 100644
+index e5006c5c67..55d83ec9f2 100644
 --- a/ui/color/BUILD.gn
 +++ b/ui/color/BUILD.gn
-@@ -191,6 +191,11 @@ component("mixers") {
+@@ -195,6 +195,11 @@ component("mixers") {
      "//ui/webui:buildflags",
    ]
  
@@ -5096,7 +5061,7 @@ index aaa3909e8e..06ca6a8dbf 100644
  
  std::tuple<float, float, float> SRGBToSRGBLegacy(float r, float g, float b) {
 diff --git a/ui/gfx/geometry/BUILD.gn b/ui/gfx/geometry/BUILD.gn
-index a5e3e1be9f..385911fe4f 100644
+index 74811b41e9..9ab255287d 100644
 --- a/ui/gfx/geometry/BUILD.gn
 +++ b/ui/gfx/geometry/BUILD.gn
 @@ -18,6 +18,7 @@ component("geometry") {
@@ -5403,7 +5368,7 @@ index 0000000000..815a34f65a
 +
 +#endif  // UI_GFX_GEOMETRY_PLATFORM_MATH_H_
 diff --git a/ui/gfx/geometry/quaternion.cc b/ui/gfx/geometry/quaternion.cc
-index 56e4d78098..ac3ff58427 100644
+index 56e4d78098..84cf3119c4 100644
 --- a/ui/gfx/geometry/quaternion.cc
 +++ b/ui/gfx/geometry/quaternion.cc
 @@ -9,6 +9,7 @@
@@ -5429,7 +5394,7 @@ index 56e4d78098..ac3ff58427 100644
  }
  
  Quaternion::Quaternion(const Vector3dF& from, const Vector3dF& to) {
-@@ -64,8 +66,10 @@ Quaternion Quaternion::FromAxisAngle(double x,
+@@ -64,8 +66,9 @@ Quaternion Quaternion::FromAxisAngle(double x,
    if (std::abs(length) < kEpsilon)
      return Quaternion(0, 0, 0, 1);
  
@@ -5437,12 +5402,11 @@ index 56e4d78098..ac3ff58427 100644
 -  return Quaternion(scale * x, scale * y, scale * z, std::cos(0.5 * angle));
 +  // browser: as Chrome on Windows computes them (platform_math.h).
 +  double scale = PlatformSin(0.5 * angle) / length;
-+  return Quaternion(scale * x, scale * y, scale * z,
-+                    PlatformCos(0.5 * angle));
++  return Quaternion(scale * x, scale * y, scale * z, PlatformCos(0.5 * angle));
  }
  
  // Adapted from https://www.euclideanspace.com/maths/algebra/realNormedAlgebra/
-@@ -95,10 +99,11 @@ Quaternion Quaternion::Slerp(const Quaternion& to, double t) const {
+@@ -95,10 +98,11 @@ Quaternion Quaternion::Slerp(const Quaternion& to, double t) const {
      return *this;
    }
  
@@ -5513,7 +5477,7 @@ index 6c0f8d9141..d9f62b1558 100644
  
  inline bool ApproximatelyZero(double x, double tolerance) {
 diff --git a/url/BUILD.gn b/url/BUILD.gn
-index 0bed260d89..01ff272f08 100644
+index 822f0fb29f..f140d9d298 100644
 --- a/url/BUILD.gn
 +++ b/url/BUILD.gn
 @@ -61,6 +61,7 @@ component("url") {
@@ -5810,7 +5774,7 @@ index 9b00bc9e72..09d4125423 100644
    // Easy and common case, the full path immediately follows the scheme
    // (modulo slashes), as in "file://c:/foo". Just treat everything from
 diff --git a/url/url_util.cc b/url/url_util.cc
-index a4db1afa91..309664b0d6 100644
+index a4db1afa91..93aa01ae2a 100644
 --- a/url/url_util.cc
 +++ b/url/url_util.cc
 @@ -23,9 +23,40 @@
@@ -5869,8 +5833,8 @@ index a4db1afa91..309664b0d6 100644
    // doing so.
 -  if (DoesBeginUncPath(spec, 0, false) || DoesBeginWindowsDriveSpec(spec, 0)) {
 +  // browser: and on Linux presenting Windows (windows_drive_letter_urls.h).
-+  if (WindowsDriveLetterUrlsApply() &&
-+      (DoesBeginUncPath(spec, 0, false) || DoesBeginWindowsDriveSpec(spec, 0))) {
++  if (WindowsDriveLetterUrlsApply() && (DoesBeginUncPath(spec, 0, false) ||
++                                        DoesBeginWindowsDriveSpec(spec, 0))) {
      return CanonicalizeFileUrl(spec, ParseFileUrl(spec), charset_converter,
                                 output, output_parsed);
    }

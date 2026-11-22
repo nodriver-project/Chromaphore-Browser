@@ -1,7 +1,7 @@
-From 46b3015daef4aa19fb9f51f0f4f7a2b170a9f377 Mon Sep 17 00:00:00 2001
+From c38c1aaa3be91f6eb01566726db8f1735e1f642c Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:20 -0500
-Subject: [PATCH 32/61] timer-uptime
+Date: Sun, 22 Nov 2026 13:08:57 -0500
+Subject: [PATCH 33/62] timer-uptime
 
 Pages no longer see how long the machine has been up. Chrome clamps
 DOMHighResTimeStamps (performance.now(), event and animation frame times) as
@@ -34,10 +34,10 @@ declaration rides in switch-resolver.
  create mode 100644 third_party/blink/renderer/core/timing/session_clock_offset.h
 
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index 6551558d19..d342aa6cf1 100644
+index f0165a5f33..8a86641f16 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
-@@ -3803,6 +3803,23 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
+@@ -3837,6 +3837,23 @@ static void AppendCompositorCommandLineFlags(base::CommandLine* command_line) {
      command_line->AppendSwitch(switches::kEnableMainFrameBeforeActivation);
  }
  
@@ -61,7 +61,7 @@ index 6551558d19..d342aa6cf1 100644
  void RenderProcessHostImpl::AppendRendererCommandLine(
      base::CommandLine* command_line) {
    // Pass the process type first, so it shows first in process listings.
-@@ -3841,6 +3858,14 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
+@@ -3875,6 +3892,14 @@ void RenderProcessHostImpl::AppendRendererCommandLine(
        *base::CommandLine::ForCurrentProcess();
    PropagateBrowserCommandLineToRenderer(browser_command_line, command_line);
  
@@ -77,19 +77,19 @@ index 6551558d19..d342aa6cf1 100644
    const std::string locale =
        GetContentClient()->browser()->GetApplicationLocale();
 diff --git a/third_party/blink/renderer/core/timing/build.gni b/third_party/blink/renderer/core/timing/build.gni
-index 83fd57ba76..47de7a2537 100644
+index d988a94f12..2c98be0923 100644
 --- a/third_party/blink/renderer/core/timing/build.gni
 +++ b/third_party/blink/renderer/core/timing/build.gni
-@@ -106,6 +106,7 @@ blink_core_sources_timing = [
+@@ -102,6 +102,7 @@ blink_core_sources_timing = [
    "responsiveness_metrics.h",
    "render_blocking_metrics_reporter.cc",
    "render_blocking_metrics_reporter.h",
 +  "session_clock_offset.h",
-   "speculation_data.cc",
-   "speculation_data.h",
-   "speculation_navigation_data.cc",
+   "soft_navigation_context.cc",
+   "soft_navigation_context.h",
+   "soft_navigation_heuristics.cc",
 diff --git a/third_party/blink/renderer/core/timing/performance.cc b/third_party/blink/renderer/core/timing/performance.cc
-index ecda8175b8..a3a4297e8f 100644
+index 48501952bb..de686c70c3 100644
 --- a/third_party/blink/renderer/core/timing/performance.cc
 +++ b/third_party/blink/renderer/core/timing/performance.cc
 @@ -35,12 +35,15 @@
@@ -139,7 +139,7 @@ index ecda8175b8..a3a4297e8f 100644
  void RecordLongTaskUkm(ExecutionContext* execution_context,
                         base::TimeDelta start_time,
                         base::TimeDelta duration) {
-@@ -1324,6 +1344,10 @@ DOMHighResTimeStamp Performance::ClampTimeResolution(
+@@ -1334,6 +1354,10 @@ DOMHighResTimeStamp Performance::ClampTimeResolution(
        .InMillisecondsF();
  }
  
@@ -150,9 +150,9 @@ index ecda8175b8..a3a4297e8f 100644
  // static
  DOMHighResTimeStamp Performance::MonotonicTimeToDOMHighResTimeStamp(
      base::TimeTicks time_origin,
-@@ -1334,10 +1358,16 @@ DOMHighResTimeStamp Performance::MonotonicTimeToDOMHighResTimeStamp(
-   if (monotonic_time.is_null() || time_origin.is_null())
+@@ -1345,10 +1369,16 @@ DOMHighResTimeStamp Performance::MonotonicTimeToDOMHighResTimeStamp(
      return 0.0;
+   }
  
 +  // browser: both times are clamped as values of the monotonic clock, which
 +  // counts from boot, and the rounding of their difference grows with the
@@ -167,7 +167,7 @@ index ecda8175b8..a3a4297e8f 100644
 -      ClampTimeResolution(time_origin.since_origin(),
 +      ClampTimeResolution(time_origin.since_origin() + offset,
                            cross_origin_isolated_capability);
-   if (clamped_time < 0 && !allow_negative_value)
+   if (clamped_time < 0 && !allow_negative_value) {
      return 0.0;
 diff --git a/third_party/blink/renderer/core/timing/session_clock_offset.h b/third_party/blink/renderer/core/timing/session_clock_offset.h
 new file mode 100644
@@ -200,7 +200,7 @@ index 0000000000..7b94176ad4
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_SESSION_CLOCK_OFFSET_H_
 diff --git a/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc b/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc
-index 727877a720..a5e4fc7e6c 100644
+index bf63fc2c50..b830a1cd61 100644
 --- a/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc
 +++ b/third_party/blink/renderer/modules/breakout_box/frame_queue_underlying_source.cc
 @@ -15,6 +15,7 @@
@@ -211,7 +211,7 @@ index 727877a720..a5e4fc7e6c 100644
  #include "third_party/blink/renderer/core/timing/time_clamper.h"
  #include "third_party/blink/renderer/modules/webcodecs/audio_data.h"
  #include "third_party/blink/renderer/modules/webcodecs/video_frame.h"
-@@ -535,12 +536,15 @@ FrameQueueUnderlyingSource<scoped_refptr<media::VideoFrame>>::MakeBlinkFrame(
+@@ -606,12 +607,15 @@ FrameQueueUnderlyingSource<scoped_refptr<media::VideoFrame>>::MakeBlinkFrame(
    auto timestamp = media_frame->timestamp();
    if (base::FeatureList::IsEnabled(
            kBreakoutBoxPreferCaptureTimestampInVideoFrames)) {
@@ -230,10 +230,10 @@ index 727877a720..a5e4fc7e6c 100644
    }
  
 diff --git a/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc b/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc
-index 6383719008..9440e6d935 100644
+index 6536082d77..6dff722472 100644
 --- a/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc
 +++ b/third_party/blink/renderer/modules/breakout_box/media_stream_audio_track_underlying_source.cc
-@@ -16,6 +16,7 @@
+@@ -14,6 +14,7 @@
  #include "third_party/blink/renderer/core/execution_context/execution_context.h"
  #include "third_party/blink/renderer/core/streams/readable_stream_transferring_optimizer.h"
  #include "third_party/blink/renderer/core/timing/performance.h"
@@ -241,7 +241,7 @@ index 6383719008..9440e6d935 100644
  #include "third_party/blink/renderer/modules/breakout_box/breakout_box_util.h"
  #include "third_party/blink/renderer/modules/breakout_box/frame_queue_transferring_optimizer.h"
  #include "third_party/blink/renderer/modules/breakout_box/metrics.h"
-@@ -83,7 +84,8 @@ class AudioBufferPoolImpl
+@@ -81,7 +82,8 @@ class AudioBufferPoolImpl
                is_cross_origin_isolated);
        timestamp = base::Milliseconds(page_relative_timestamp);
      } else {

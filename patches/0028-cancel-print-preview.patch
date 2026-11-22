@@ -1,7 +1,7 @@
-From 4c7c321e331892b0f613a5192b84cf3b0e71463a Mon Sep 17 00:00:00 2001
+From 5b444bc1f689da4f792e1df83acfedd3035b13a7 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:11 -0500
-Subject: [PATCH 27/61] cancel-print-preview
+Date: Sun, 22 Nov 2026 13:08:48 -0500
+Subject: [PATCH 28/62] cancel-print-preview
 
 --cancel-print-preview: a scripted print preview is closed unseen after a
 short random delay, headed or headless, and the WebContents observer
@@ -21,10 +21,10 @@ report it. The switch declaration rides in switch-resolver.
  10 files changed, 116 insertions(+)
 
 diff --git a/chrome/browser/printing/BUILD.gn b/chrome/browser/printing/BUILD.gn
-index cefebfbe33..b44bbbba5b 100644
+index 3168c27664..ccb9636344 100644
 --- a/chrome/browser/printing/BUILD.gn
 +++ b/chrome/browser/printing/BUILD.gn
-@@ -210,6 +210,7 @@ if (enable_printing) {
+@@ -213,6 +213,7 @@ if (enable_printing) {
          "//chrome/browser/task_manager",
          "//chrome/browser/ui/webui",
          "//chrome/browser/ui/webui/print_preview",
@@ -43,7 +43,7 @@ index 1f4600fbb9..dcef995adc 100644
  ]
  
 diff --git a/chrome/browser/printing/print_view_manager.cc b/chrome/browser/printing/print_view_manager.cc
-index 25f1aa604a..88a8aaf9bd 100644
+index 49a87cb382..01b6da89d4 100644
 --- a/chrome/browser/printing/print_view_manager.cc
 +++ b/chrome/browser/printing/print_view_manager.cc
 @@ -12,9 +12,12 @@
@@ -133,10 +133,10 @@ index fa223e1add..d455f1d7bc 100644
    // RejectPrintPreviewRequestIfRestricted(). Based on value of
    // `should_proceed`, continues to show the print preview or cancels it.
 diff --git a/chrome/browser/printing/print_view_manager_base.cc b/chrome/browser/printing/print_view_manager_base.cc
-index b673362fe8..a61ee124f9 100644
+index 87a3d41490..4d5ca18360 100644
 --- a/chrome/browser/printing/print_view_manager_base.cc
 +++ b/chrome/browser/printing/print_view_manager_base.cc
-@@ -648,6 +648,12 @@ void PrintViewManagerBase::ScriptedPrint(mojom::ScriptedPrintParamsPtr params,
+@@ -649,6 +649,12 @@ void PrintViewManagerBase::ScriptedPrint(mojom::ScriptedPrintParamsPtr params,
    }
  #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
  
@@ -160,10 +160,10 @@ index 887dba3926..31b494937c 100644
    "+components/discardable_memory/service",
    "+components/enterprise/buildflags",
 diff --git a/components/printing/browser/headless/BUILD.gn b/components/printing/browser/headless/BUILD.gn
-index bf986b7ef3..7d9789a659 100644
+index d5ad8aa9db..2fc9062d87 100644
 --- a/components/printing/browser/headless/BUILD.gn
 +++ b/components/printing/browser/headless/BUILD.gn
-@@ -16,6 +16,7 @@ static_library("headless") {
+@@ -14,6 +14,7 @@ static_library("headless") {
  
    deps = [
      "//base",
@@ -289,10 +289,10 @@ index 47b2871b4c..9e991e7a56 100644
  };
  
 diff --git a/content/public/browser/web_contents_observer.h b/content/public/browser/web_contents_observer.h
-index 18af23b6aa..c38f18d0f5 100644
+index 4a7e6555fd..965f349bd2 100644
 --- a/content/public/browser/web_contents_observer.h
 +++ b/content/public/browser/web_contents_observer.h
-@@ -521,6 +521,11 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
+@@ -519,6 +519,11 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
    // This method is invoked when the visible security state of the page changes.
    virtual void DidChangeVisibleSecurityState() {}
  

@@ -1,7 +1,7 @@
-From 1a5edbb9f71fe791a379414a4746818971213463 Mon Sep 17 00:00:00 2001
+From 9ce46e31eee093cf2327ed42d4012892baea34b4 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:59 -0500
-Subject: [PATCH 37/61] linux-fonts
+Date: Sun, 22 Nov 2026 13:09:35 -0500
+Subject: [PATCH 38/62] linux-fonts
 
 A Linux build presenting Windows (see the user-agent commit) builds Chrome's
 fontconfig from the Windows fonts it ships and nothing else, as a Windows
@@ -52,25 +52,25 @@ steps. Linux draws text with Skia's Fontations port, which a patch to
 third_party/skia (fontations-natural-mode, skia/ in the export) teaches the
 mode; the first FontCache of each process switches it on.
 ---
- chrome/browser/ui/prefs/prefs_tab_helper.cc   |  98 +++++++++++
+ chrome/browser/ui/prefs/prefs_tab_helper.cc   |  97 +++++++++++
  .../renderer_host/render_view_host_impl.cc    |   8 +
  skia/ext/legacy_display_globals.cc            |  15 ++
  third_party/blink/renderer/platform/BUILD.gn  |  12 ++
  .../renderer/platform/fonts/font_cache.cc     |  28 +++-
  .../renderer/platform/fonts/font_metrics.cc   |  17 ++
- .../platform/fonts/linux/font_cache_linux.cc  |  39 +++++
- .../fonts/linux/windows_gdi_advances.cc       | 153 ++++++++++++++++++
+ .../platform/fonts/linux/font_cache_linux.cc  |  38 +++++
+ .../fonts/linux/windows_gdi_advances.cc       | 151 ++++++++++++++++++
  .../fonts/linux/windows_gdi_advances.h        |  30 ++++
- .../fonts/linux/windows_vertical_metrics.cc   |  67 ++++++++
+ .../fonts/linux/windows_vertical_metrics.cc   |  66 ++++++++
  .../fonts/linux/windows_vertical_metrics.h    |  31 ++++
- .../platform/fonts/shaping/harfbuzz_face.cc   |  39 ++++-
+ .../platform/fonts/shaping/harfbuzz_face.cc   |  36 ++++-
  .../fonts/shaping/harfbuzz_font_data.h        |  26 +++
  .../platform/fonts/simple_font_data.cc        |  76 +++++++++
  .../platform/fonts/skia/font_cache_skia.cc    | 101 ++++++++++++
  ui/gfx/BUILD.gn                               |   6 +
  ui/gfx/linux/fontconfig_font_files.h          |  30 ++++
  ui/gfx/linux/fontconfig_util.cc               | 141 ++++++++++++++++
- 18 files changed, 913 insertions(+), 4 deletions(-)
+ 18 files changed, 906 insertions(+), 3 deletions(-)
  create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc
  create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.h
  create mode 100644 third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc
@@ -78,20 +78,20 @@ mode; the first FontCache of each process switches it on.
  create mode 100644 ui/gfx/linux/fontconfig_font_files.h
 
 diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/prefs/prefs_tab_helper.cc
-index 87dc1b8b9a..b618588717 100644
+index 2b807aed45..d2c5a5ae7c 100644
 --- a/chrome/browser/ui/prefs/prefs_tab_helper.cc
 +++ b/chrome/browser/ui/prefs/prefs_tab_helper.cc
-@@ -42,6 +42,7 @@
- #include "extensions/buildflags/buildflags.h"
+@@ -44,6 +44,7 @@
  #include "media/media_buildflags.h"
  #include "third_party/blink/public/common/features.h"
-+#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
  #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
++#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
  #include "third_party/blink/public/common/web_preferences/web_preferences.h"
  #include "third_party/icu/source/common/unicode/uchar.h"
-@@ -312,6 +313,89 @@ void RegisterLocalizedFontPref(user_prefs::PrefRegistrySyncable* registry,
- }
+ #include "third_party/icu/source/common/unicode/uscript.h"
+@@ -332,6 +333,89 @@ Profile* GetProfileForPrefs(WebContents* contents) {
  #endif
+ }
  
 +#if BUILDFLAG(IS_LINUX)
 +// browser: the font defaults Windows registers (locale_settings_win.grd and
@@ -179,7 +179,7 @@ index 87dc1b8b9a..b618588717 100644
  }  // namespace
  
  PrefsTabHelper::PrefsTabHelper(WebContents* contents)
-@@ -418,7 +502,21 @@ void PrefsTabHelper::RegisterProfilePrefs(
+@@ -438,7 +522,20 @@ void PrefsTabHelper::RegisterProfilePrefs(
    // Register font prefs that have defaults.
    std::set<std::string> fonts_with_defaults;
    UScriptCode browser_script = GetScriptOfBrowserLocale(locale);
@@ -188,8 +188,7 @@ index 87dc1b8b9a..b618588717 100644
 +  // presenting Windows.
 +  const bool windows_font_defaults = blink::PresentsWindowsPlatform();
 +  if (windows_font_defaults) {
-+    RegisterWindowsFontDefaults(registry, browser_script,
-+                                fonts_with_defaults);
++    RegisterWindowsFontDefaults(registry, browser_script, fonts_with_defaults);
 +  }
 +#endif
    for (FontDefault pref : kFontDefaults) {
@@ -202,7 +201,7 @@ index 87dc1b8b9a..b618588717 100644
      if (pref.pref_name == prefs::kWebKitFixedFontFamily) {
        if (ShouldUseAlternateDefaultFixedFont(
 diff --git a/content/browser/renderer_host/render_view_host_impl.cc b/content/browser/renderer_host/render_view_host_impl.cc
-index 512116f099..a367080b03 100644
+index 51e84cf8aa..a507f5ae9b 100644
 --- a/content/browser/renderer_host/render_view_host_impl.cc
 +++ b/content/browser/renderer_host/render_view_host_impl.cc
 @@ -87,6 +87,7 @@
@@ -261,10 +260,10 @@ index 2cae07d71a..7f3a63629c 100644
        command_line->GetSwitchValueASCII(switches::kTextContrast);
    double contrast_double;
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index 02b7415ff1..5f771bafbe 100644
+index ec13ed0736..0514645923 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -1765,6 +1765,18 @@ component("platform") {
+@@ -1798,6 +1798,18 @@ component("platform") {
      ]
    }
  
@@ -284,7 +283,7 @@ index 02b7415ff1..5f771bafbe 100644
      sources += [
        "fonts/win/dwrite_font_format_support.cc",
 diff --git a/third_party/blink/renderer/platform/fonts/font_cache.cc b/third_party/blink/renderer/platform/fonts/font_cache.cc
-index 09a2d1c79e..3504312bf9 100644
+index 07c2f084f9..efceec9d1e 100644
 --- a/third_party/blink/renderer/platform/fonts/font_cache.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_cache.cc
 @@ -74,6 +74,11 @@
@@ -337,7 +336,7 @@ index 09a2d1c79e..3504312bf9 100644
  FontCache::~FontCache() = default;
  
 diff --git a/third_party/blink/renderer/platform/fonts/font_metrics.cc b/third_party/blink/renderer/platform/fonts/font_metrics.cc
-index 11f9a7e8fc..3f5c246be2 100644
+index dbc02916cc..11a90e3552 100644
 --- a/third_party/blink/renderer/platform/fonts/font_metrics.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_metrics.cc
 @@ -39,6 +39,11 @@
@@ -372,10 +371,10 @@ index 11f9a7e8fc..3f5c246be2 100644
    bool is_vdmx_valid = false;
  
 diff --git a/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc b/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc
-index 0880cdb41c..be2a8b45c0 100644
+index f95d267dfd..bf54aa1c9e 100644
 --- a/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc
 +++ b/third_party/blink/renderer/platform/fonts/linux/font_cache_linux.cc
-@@ -27,6 +27,14 @@
+@@ -27,6 +27,13 @@
  #include "build/build_config.h"
  #include "third_party/blink/public/platform/linux/web_sandbox_support.h"
  #include "third_party/blink/public/platform/platform.h"
@@ -385,12 +384,11 @@ index 0880cdb41c..be2a8b45c0 100644
 +#include "third_party/blink/public/common/user_agent/presents_windows_platform.h"
 +#include "third_party/blink/renderer/platform/fonts/font_face_creation_params.h"
 +#include "third_party/blink/renderer/platform/fonts/win/font_fallback_win.h"
-+#include "third_party/blink/renderer/platform/text/character.h"
 +#endif
  #include "third_party/blink/renderer/platform/fonts/font_fallback_priority.h"
  #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
  #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
-@@ -68,6 +76,37 @@ const SimpleFontData* FontCache::PlatformFallbackFontForCharacter(
+@@ -70,6 +77,37 @@ const SimpleFontData* FontCache::PlatformFallbackFontForCharacter(
      UChar32 c,
      const SimpleFontData*,
      FontFallbackPriority fallback_priority) {
@@ -409,7 +407,7 @@ index 0880cdb41c..be2a8b45c0 100644
 +      }
 +    }
 +    FontFallbackPriority priority = fallback_priority;
-+    if (priority == FontFallbackPriority::kText && Character::IsEmoji(c)) {
++    if (priority == FontFallbackPriority::kText && unicode::IsEmoji(c)) {
 +      priority = FontFallbackPriority::kEmojiText;
 +    }
 +    UScriptCode script;
@@ -417,8 +415,8 @@ index 0880cdb41c..be2a8b45c0 100644
 +        c, font_description.GenericFamily(), font_description.Locale(),
 +        priority, *skia::DefaultFontMgr(), script);
 +    if (!family.empty()) {
-+      const FontPlatformData* data = GetFontPlatformData(
-+          font_description, FontFaceCreationParams(family));
++      const FontPlatformData* data =
++          GetFontPlatformData(font_description, FontFaceCreationParams(family));
 +      if (data && data->FontContainsCharacter(c)) {
 +        return FontDataFromFontPlatformData(data);
 +      }
@@ -430,10 +428,10 @@ index 0880cdb41c..be2a8b45c0 100644
      // with the FAMILY emoji in the hope to find a suitable emoji font.
 diff --git a/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc b/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc
 new file mode 100644
-index 0000000000..056b54e07c
+index 0000000000..e8cedefeee
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/fonts/linux/windows_gdi_advances.cc
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,151 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -530,8 +528,7 @@ index 0000000000..056b54e07c
 +
 +// As SkScalerContext_DW's has_bitmap_strike().
 +bool HasBitmapStrike(const SkTypeface& typeface, PpemRange range) {
-+  const uint32_t sizes =
-+      SizeCount(typeface, kEblcTag, kBitmapSizeRecordSize);
++  const uint32_t sizes = SizeCount(typeface, kEblcTag, kBitmapSizeRecordSize);
 +  for (uint32_t i = 0; i < sizes; ++i) {
 +    // startGlyphIndex, endGlyphIndex, ppemX and ppemY, at 40 to 45.
 +    std::array<uint8_t, 6> tail;
@@ -546,14 +543,13 @@ index 0000000000..056b54e07c
 +      return true;
 +    }
 +  }
-+  const uint32_t scales =
-+      SizeCount(typeface, kEbscTag, kBitmapScaleRecordSize);
++  const uint32_t scales = SizeCount(typeface, kEbscTag, kBitmapScaleRecordSize);
 +  for (uint32_t i = 0; i < scales; ++i) {
 +    // ppemX and ppemY, after the two 12-byte line metrics.
 +    std::array<uint8_t, 2> ppem;
-+    if (typeface.getTableData(kEbscTag,
-+                              kTableHeaderSize + kBitmapScaleRecordSize * i + 24,
-+                              ppem.size(), ppem.data()) != ppem.size()) {
++    if (typeface.getTableData(
++            kEbscTag, kTableHeaderSize + kBitmapScaleRecordSize * i + 24,
++            ppem.size(), ppem.data()) != ppem.size()) {
 +      return false;
 +    }
 +    if (ppem[0] == ppem[1] && range.min <= ppem[0] && ppem[0] <= range.max) {
@@ -625,10 +621,10 @@ index 0000000000..dd67c9fee8
 +#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_GDI_ADVANCES_H_
 diff --git a/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc b/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc
 new file mode 100644
-index 0000000000..d070e7487d
+index 0000000000..3118603975
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/fonts/linux/windows_vertical_metrics.cc
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,66 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -676,8 +672,7 @@ index 0000000000..d070e7487d
 +  std::array<uint8_t, kHheaSize> hhea;
 +  if (units_per_em <= 0 ||
 +      face.getTableData(kOs2Tag, 0, os2.size(), os2.data()) != os2.size() ||
-+      face.getTableData(kHheaTag, 0, hhea.size(), hhea.data()) !=
-+          hhea.size()) {
++      face.getTableData(kHheaTag, 0, hhea.size(), hhea.data()) != hhea.size()) {
 +    return std::nullopt;
 +  }
 +  const float scale = size / units_per_em;
@@ -734,10 +729,10 @@ index 0000000000..b59483aebf
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_LINUX_WINDOWS_VERTICAL_METRICS_H_
 diff --git a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc
-index 99f7c8fc72..462994d760 100644
+index 4369c81dff..912aefd16f 100644
 --- a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc
 +++ b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.cc
-@@ -302,6 +302,18 @@ static unsigned int HarfBuzzGetNominalGlyphs(
+@@ -303,6 +303,18 @@ static unsigned int HarfBuzzGetNominalGlyphs(
    return done;
  }
  
@@ -756,7 +751,7 @@ index 99f7c8fc72..462994d760 100644
  static hb_position_t HarfBuzzGetGlyphHorizontalAdvance(hb_font_t* hb_font,
                                                         void* font_data,
                                                         hb_codepoint_t glyph,
-@@ -310,8 +322,15 @@ static hb_position_t HarfBuzzGetGlyphHorizontalAdvance(hb_font_t* hb_font,
+@@ -311,8 +323,15 @@ static hb_position_t HarfBuzzGetGlyphHorizontalAdvance(hb_font_t* hb_font,
        reinterpret_cast<HarfBuzzFontData*>(font_data);
    hb_position_t advance = 0;
    SkFontGetGlyphWidthForHarfBuzz(hb_font_data->EnsureStrikeRef(),
@@ -773,15 +768,13 @@ index 99f7c8fc72..462994d760 100644
    return advance;
  }
  
-@@ -329,8 +348,22 @@ static void HarfBuzzGetGlyphHorizontalAdvances(
+@@ -330,8 +349,21 @@ static void HarfBuzzGetGlyphHorizontalAdvances(
    CHECK_EQ(glyph_stride % 4, 0u);
    CHECK_EQ(advance_stride % 4, 0u);
    SkFontGetGlyphWidthForHarfBuzz(
 -      hb_font_data->EnsureStrikeRef(), hb_font_data->font_.isSubpixel(), count,
--      first_glyph, glyph_stride / 4, first_advance, advance_stride / 4);
-+      hb_font_data->EnsureStrikeRef(), AdvancesAreSubpixel(hb_font_data),
-+      count, first_glyph, glyph_stride / 4, first_advance,
-+      advance_stride / 4);
++      hb_font_data->EnsureStrikeRef(), AdvancesAreSubpixel(hb_font_data), count,
+       first_glyph, glyph_stride / 4, first_advance, advance_stride / 4);
 +#if BUILDFLAG(IS_LINUX)
 +  // browser: at the exact size, as DirectWrite's (windows_gdi_advances.h).
 +  const float exact = ExactAdvanceScale(hb_font_data->font_);
@@ -799,7 +792,7 @@ index 99f7c8fc72..462994d760 100644
  
  static hb_bool_t HarfBuzzGetGlyphVerticalOrigin(hb_font_t* hb_font,
 diff --git a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h
-index 4a3bd2b950..8d91702104 100644
+index 1c34a86a58..5ace2d421e 100644
 --- a/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h
 +++ b/third_party/blink/renderer/platform/fonts/shaping/harfbuzz_font_data.h
 @@ -7,8 +7,10 @@
@@ -824,7 +817,7 @@ index 4a3bd2b950..8d91702104 100644
  struct hb_font_t;
  
  namespace blink {
-@@ -56,6 +62,11 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
+@@ -57,6 +63,11 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
      if (strike_ref_ && font_ != new_font) {
        strike_ref_ = SkStrikeRef();
      }
@@ -836,7 +829,7 @@ index 4a3bd2b950..8d91702104 100644
      font_ = std::move(new_font);
  
      if (vertical_layout == HarfBuzzFace::kPrepareForVerticalLayout)
-@@ -102,6 +113,17 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
+@@ -103,6 +114,17 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
      return vertical_data_.Get();
    }
  
@@ -854,7 +847,7 @@ index 4a3bd2b950..8d91702104 100644
    VariationSelectorMode GetVariationSelectorMode() const {
      return variation_selector_mode_;
    }
-@@ -114,6 +136,10 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
+@@ -115,6 +137,10 @@ struct HarfBuzzFontData final : public GarbageCollected<HarfBuzzFontData> {
    // Lazily-populated cached strike for the HarfBuzz advance callbacks; reset
    // when `font_` changes. See `UpdateFallbackMetricsAndScale`.
    SkStrikeRef strike_ref_;
@@ -866,7 +859,7 @@ index 4a3bd2b950..8d91702104 100644
    // Capture these scaled fallback metrics from FontPlatformData so that a
    // OpenTypeVerticalData object can be constructed from them when needed.
 diff --git a/third_party/blink/renderer/platform/fonts/simple_font_data.cc b/third_party/blink/renderer/platform/fonts/simple_font_data.cc
-index a3afa4fa66..ee8ff37433 100644
+index a147db831d..f95676ec0f 100644
 --- a/third_party/blink/renderer/platform/fonts/simple_font_data.cc
 +++ b/third_party/blink/renderer/platform/fonts/simple_font_data.cc
 @@ -62,6 +62,12 @@
@@ -996,7 +989,7 @@ index a3afa4fa66..ee8ff37433 100644
  
  inline float SimpleFontData::ZeroInlineSize() const {
 diff --git a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
-index 31af2c1f7c..1c2c1d4e04 100644
+index 35776799ee..9da77678f3 100644
 --- a/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 +++ b/third_party/blink/renderer/platform/fonts/skia/font_cache_skia.cc
 @@ -61,6 +61,11 @@
@@ -1122,10 +1115,10 @@ index 31af2c1f7c..1c2c1d4e04 100644
    typeface = CreateTypeface(font_description, creation_params, name);
  #endif
 diff --git a/ui/gfx/BUILD.gn b/ui/gfx/BUILD.gn
-index 9da1b20464..b683836ef7 100644
+index 24bc26eb55..29b0dfac47 100644
 --- a/ui/gfx/BUILD.gn
 +++ b/ui/gfx/BUILD.gn
-@@ -245,6 +245,12 @@ component("gfx") {
+@@ -244,6 +244,12 @@ component("gfx") {
      deps += [ "//third_party/fontconfig" ]
    }
  
@@ -1175,15 +1168,16 @@ index 0000000000..cb1f6d4090
 +
 +#endif  // UI_GFX_LINUX_FONTCONFIG_FONT_FILES_H_
 diff --git a/ui/gfx/linux/fontconfig_util.cc b/ui/gfx/linux/fontconfig_util.cc
-index a1aecb9e48..cbab0588dc 100644
+index 3397bafba1..3d466bfbad 100644
 --- a/ui/gfx/linux/fontconfig_util.cc
 +++ b/ui/gfx/linux/fontconfig_util.cc
-@@ -10,8 +10,20 @@
- #include "base/environment.h"
- #include "base/memory/raw_ptr.h"
+@@ -13,9 +13,21 @@
  #include "base/no_destructor.h"
+ #include "base/task/thread_pool.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
 +#include "build/build_config.h"
  #include "ui/gfx/font_render_params.h"
+ #include "ui/gfx/switches.h"
  
 +#if BUILDFLAG(IS_LINUX)
 +#include "base/base_paths.h"
@@ -1199,7 +1193,7 @@ index a1aecb9e48..cbab0588dc 100644
  #if BUILDFLAG(IS_CHROMEOS)
  #include "base/check_deref.h"
  #include "base/containers/flat_set.h"
-@@ -23,6 +35,120 @@ namespace gfx {
+@@ -27,6 +39,120 @@ namespace gfx {
  
  namespace {
  
@@ -1320,7 +1314,7 @@ index a1aecb9e48..cbab0588dc 100644
  #if BUILDFLAG(IS_CHROMEOS)
  constexpr base::FilePath::CharType kGoogleSansVariablePath[] =
      FILE_PATH_LITERAL("/usr/share/fonts/google-sans/variable");
-@@ -57,6 +183,15 @@ class COMPONENT_EXPORT(GFX) GlobalFontConfig {
+@@ -61,6 +187,15 @@ class COMPONENT_EXPORT(GFX) GlobalFontConfig {
      // interface.
      FcInit();
  
@@ -1336,9 +1330,9 @@ index a1aecb9e48..cbab0588dc 100644
      // Increment the reference counter to avoid the config to be deleted while
      // being used (see http://crbug.com/1004254).
      fc_config_ = FcConfigGetCurrent();
-@@ -205,6 +340,12 @@ bool GetFontConfigPropertyAsBool(FcPattern* pattern, const char* property) {
- 
- }  // namespace
+@@ -222,6 +357,12 @@ void InitializeGlobalFontConfigAsync() {
+   }
+ }
  
 +#if BUILDFLAG(IS_LINUX)
 +void SetFontconfigFontFilesProvider(FontconfigFontFilesProvider provider) {

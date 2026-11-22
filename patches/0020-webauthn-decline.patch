@@ -1,7 +1,7 @@
-From 2f1f2df9eccc2692091c395da1bd84ac4dc30777 Mon Sep 17 00:00:00 2001
+From df85c70abbb08a1cfb370295b7b2fd153ee5cbf7 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:13:35 -0500
-Subject: [PATCH 19/61] webauthn-decline
+Date: Sun, 22 Nov 2026 13:08:10 -0500
+Subject: [PATCH 20/62] webauthn-decline
 
 WebAuthn auto-decline.
 ---
@@ -10,7 +10,7 @@ WebAuthn auto-decline.
  2 files changed, 100 insertions(+)
 
 diff --git a/content/browser/webauth/authenticator_impl.cc b/content/browser/webauth/authenticator_impl.cc
-index f1b1006d7b..a7658f6d28 100644
+index 5af5e5ac1a..077a1300e4 100644
 --- a/content/browser/webauth/authenticator_impl.cc
 +++ b/content/browser/webauth/authenticator_impl.cc
 @@ -7,12 +7,51 @@
@@ -65,7 +65,7 @@ index f1b1006d7b..a7658f6d28 100644
  void AuthenticatorImpl::Create(
      RenderFrameHost* render_frame_host,
      mojo::PendingReceiver<blink::mojom::Authenticator> receiver) {
-@@ -67,6 +106,14 @@ AuthenticatorImpl::~AuthenticatorImpl() = default;
+@@ -69,6 +108,14 @@ AuthenticatorImpl::~AuthenticatorImpl() = default;
  void AuthenticatorImpl::MakeCredential(
      blink::mojom::PublicKeyCredentialCreationOptionsPtr options,
      MakeCredentialCallback callback) {
@@ -80,7 +80,7 @@ index f1b1006d7b..a7658f6d28 100644
    authenticator_common_impl_->MakeCredential(origin(), std::move(options),
                                               /*payment_options=*/nullptr,
                                               std::move(callback));
-@@ -76,11 +123,45 @@ void AuthenticatorImpl::MakeCredential(
+@@ -78,11 +125,45 @@ void AuthenticatorImpl::MakeCredential(
  void AuthenticatorImpl::GetCredential(
      blink::mojom::GetCredentialOptionsPtr options,
      GetCredentialCallback callback) {
@@ -126,7 +126,7 @@ index f1b1006d7b..a7658f6d28 100644
  // mojom::Authenticator
  void AuthenticatorImpl::Report(
      blink::mojom::PublicKeyCredentialReportOptionsPtr options,
-@@ -109,6 +190,11 @@ void AuthenticatorImpl::IsConditionalMediationAvailable(
+@@ -111,6 +192,11 @@ void AuthenticatorImpl::IsConditionalMediationAvailable(
  }
  
  void AuthenticatorImpl::Cancel() {
@@ -139,19 +139,20 @@ index f1b1006d7b..a7658f6d28 100644
  }
  
 diff --git a/content/browser/webauth/authenticator_impl.h b/content/browser/webauth/authenticator_impl.h
-index e357d494d7..3edc070e24 100644
+index 510b956225..a244714fbe 100644
 --- a/content/browser/webauth/authenticator_impl.h
 +++ b/content/browser/webauth/authenticator_impl.h
-@@ -9,6 +9,8 @@
+@@ -9,7 +9,9 @@
  
  #include <memory>
  
 +#include "base/functional/callback.h"
+ #include "base/memory/self_deleting.h"
 +#include "base/timer/timer.h"
  #include "content/common/content_export.h"
  #include "content/public/browser/document_service.h"
  #include "mojo/public/cpp/bindings/pending_receiver.h"
-@@ -66,11 +68,23 @@ class CONTENT_EXPORT AuthenticatorImpl
+@@ -69,11 +71,23 @@ class CONTENT_EXPORT AuthenticatorImpl
        IsConditionalMediationAvailableCallback callback) override;
    void Cancel() override;
  

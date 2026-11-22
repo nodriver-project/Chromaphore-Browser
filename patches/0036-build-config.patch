@@ -1,7 +1,7 @@
-From b8f0c67c80dec27dbeadb4a849774351f7f12353 Mon Sep 17 00:00:00 2001
+From de1e30e4caf67760635f0f0472d785489b55707b Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:26 -0500
-Subject: [PATCH 35/61] build-config
+Date: Sun, 22 Nov 2026 13:09:03 -0500
+Subject: [PATCH 36/62] build-config
 
 gitignore adjustments for the custom build.
 ---
@@ -10,7 +10,7 @@ gitignore adjustments for the custom build.
  2 files changed, 7 insertions(+), 3 deletions(-)
 
 diff --git a/.gitignore b/.gitignore
-index cb5831733f..aa7f419223 100644
+index 5b3019f681..3e8f4ff1ff 100644
 --- a/.gitignore
 +++ b/.gitignore
 @@ -289,9 +289,7 @@ vs-chromium-project.txt
@@ -33,7 +33,7 @@ index cb5831733f..aa7f419223 100644
  /ui/file_manager/integration_tests/tsconfig.json
  /ui/keyboard/keyboard_mojom_bindings.xml
 diff --git a/third_party/.gitignore b/third_party/.gitignore
-index 33637b2b24..b91b60154a 100644
+index fb98853dc6..f816ff5a9b 100644
 --- a/third_party/.gitignore
 +++ b/third_party/.gitignore
 @@ -56,6 +56,7 @@

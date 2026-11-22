@@ -1,7 +1,7 @@
-From 6cb37406cb5a8cc3b8772598cb855e85b23b06ef Mon Sep 17 00:00:00 2001
+From 7446678632759f01f9fad3a795d90cb045edd3a1 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:13:49 -0500
-Subject: [PATCH 22/61] widevine-cdm
+Date: Sun, 22 Nov 2026 13:08:25 -0500
+Subject: [PATCH 23/62] widevine-cdm
 
 Widevine CDM host-file path.
 ---

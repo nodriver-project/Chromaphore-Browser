@@ -1,4 +1,4 @@
-From 1ba63ddfabdc78cdc5c3b9c4f8d2c159078b6916 Mon Sep 17 00:00:00 2001
+From d76da84206a621f2c1b8fa19c15b1255f108c496 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
 Date: Sun, 1 Nov 2026 20:29:54 -0500
 Subject: [PATCH 2/3] v8-inspector-neuter
@@ -11,7 +11,7 @@ messageAdded) that leak automation timing through CDP.
  2 files changed, 13 insertions(+), 36 deletions(-)
 
 diff --git a/src/inspector/v8-runtime-agent-impl.cc b/src/inspector/v8-runtime-agent-impl.cc
-index 0120bbd5..183a7f4c 100644
+index ac4cd7f1..a8b4887f 100644
 --- a/src/inspector/v8-runtime-agent-impl.cc
 +++ b/src/inspector/v8-runtime-agent-impl.cc
 @@ -678,7 +678,8 @@ Response V8RuntimeAgentImpl::setMaxCallStackSizeToCapture(int size) {
@@ -24,7 +24,7 @@ index 0120bbd5..183a7f4c 100644
    return Response::Success();
  }
  
-@@ -1074,32 +1075,8 @@ void V8RuntimeAgentImpl::bindingCalled(const String16& name,
+@@ -1082,32 +1083,8 @@ void V8RuntimeAgentImpl::bindingCalled(const String16& name,
  }
  
  void V8RuntimeAgentImpl::addBindings(InspectedContext* context) {
@@ -59,7 +59,7 @@ index 0120bbd5..183a7f4c 100644
  }
  
  void V8RuntimeAgentImpl::restore() {
-@@ -1114,11 +1091,7 @@ void V8RuntimeAgentImpl::restore() {
+@@ -1122,11 +1099,7 @@ void V8RuntimeAgentImpl::restore() {
      m_session->setCustomObjectFormatterEnabled(true);
    }
  
@@ -72,7 +72,7 @@ index 0120bbd5..183a7f4c 100644
  
    m_inspector->forEachContext(
        m_session->contextGroupId(),
-@@ -1134,8 +1107,9 @@ Response V8RuntimeAgentImpl::enable() {
+@@ -1142,8 +1115,9 @@ Response V8RuntimeAgentImpl::enable() {
        m_session->contextGroupId());
    m_enabled = true;
    m_state->setBoolean(V8RuntimeAgentImplState::runtimeEnabled, true);
@@ -84,7 +84,7 @@ index 0120bbd5..183a7f4c 100644
    m_session->reportAllContexts(this);
    V8ConsoleMessageStorage* storage =
        m_inspector->ensureConsoleMessageStorage(m_session->contextGroupId());
-@@ -1234,7 +1208,8 @@ void V8RuntimeAgentImpl::inspect(
+@@ -1242,7 +1216,8 @@ void V8RuntimeAgentImpl::inspect(
  }
  
  void V8RuntimeAgentImpl::messageAdded(V8ConsoleMessage* message) {

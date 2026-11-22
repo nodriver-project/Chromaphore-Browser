@@ -1,7 +1,7 @@
-From 6a15d2fd229a581299999bbd1bf164c354c6a15a Mon Sep 17 00:00:00 2001
+From 1b24e3b06fa9eeb69cfec34e4b6543d87a59f90b Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:13:21 -0500
-Subject: [PATCH 17/61] video-recording
+Date: Sun, 22 Nov 2026 13:07:57 -0500
+Subject: [PATCH 18/62] video-recording
 
 Browser.startVideoRecording, setVideoRecordingTarget, pauseVideoRecording,
 resumeVideoRecording, markVideoRecording, stopVideoRecording,
@@ -69,7 +69,7 @@ render_process_host_impl.cc are this commit's own.
  cc/trees/commit_state.h                       |    6 +
  cc/trees/layer_tree_host.cc                   |   10 +
  cc/trees/layer_tree_host.h                    |    5 +
- cc/trees/layer_tree_host_impl.cc              |   24 +
+ cc/trees/layer_tree_host_impl.cc              |   22 +
  cc/trees/layer_tree_host_impl.h               |    3 +
  cc/trees/layer_tree_impl.cc                   |    7 +
  cc/trees/layer_tree_impl.h                    |    9 +
@@ -77,16 +77,16 @@ render_process_host_impl.cc are this commit's own.
  .../common/quads/compositor_frame_metadata.h  |   12 +
  .../viz/host/host_frame_sink_manager.cc       |   38 +
  components/viz/host/host_frame_sink_manager.h |   16 +
- .../viz/service/display/surface_aggregator.cc |   33 +
+ .../viz/service/display/surface_aggregator.cc |   32 +
  .../frame_sinks/frame_sink_manager_impl.cc    |   11 +
  .../frame_sinks/frame_sink_manager_impl.h     |    5 +
  .../viz/service/surfaces/surface_manager.h    |   12 +
  components/viz/test/test_frame_sink_manager.h |    7 +
  content/browser/devtools/DEPS                 |    3 +
- .../browser/devtools/agent_audio_capture.cc   |  240 ++
+ .../browser/devtools/agent_audio_capture.cc   |  238 ++
  .../browser/devtools/agent_audio_capture.h    |  104 +
- .../browser/devtools/agent_video_recorder.cc  | 2589 +++++++++++++++++
- .../browser/devtools/agent_video_recorder.h   |  597 ++++
+ .../browser/devtools/agent_video_recorder.cc  | 2592 +++++++++++++++++
+ .../browser/devtools/agent_video_recorder.h   |  595 ++++
  .../devtools/protocol/browser_handler.cc      |  238 +-
  .../devtools/protocol/browser_handler.h       |   49 +
  .../frame_sink_video_capture_device.cc        |   31 +-
@@ -95,16 +95,16 @@ render_process_host_impl.cc are this commit's own.
  .../capture/web_contents_frame_tracker.h      |   12 +
  .../web_contents_video_capture_device.cc      |    6 +
  .../web_contents_video_capture_device.h       |    5 +
- .../renderer_host/render_process_host_impl.cc |   45 +
+ .../renderer_host/render_process_host_impl.cc |   44 +
  .../renderer_host/render_process_host_impl.h  |    5 +
- .../agent_video_encoding_service/BUILD.gn     |   40 +
- .../agent_audio_track.cc                      |  612 ++++
+ .../agent_video_encoding_service/BUILD.gn     |   41 +
+ .../agent_audio_track.cc                      |  608 ++++
  .../agent_audio_track.h                       |  216 ++
- .../agent_video_encoding_service_impl.cc      |  833 ++++++
- .../agent_video_encoding_service_impl.h       |  284 ++
- .../agent_video_hardware_encoder.cc           |  597 ++++
- .../agent_video_hardware_encoder.h            |  232 ++
- .../public/mojom/BUILD.gn                     |   14 +
+ .../agent_video_encoding_service_impl.cc      |  826 ++++++
+ .../agent_video_encoding_service_impl.h       |  283 ++
+ .../agent_video_hardware_encoder.cc           |  590 ++++
+ .../agent_video_hardware_encoder.h            |  231 ++
+ .../public/mojom/BUILD.gn                     |   15 +
  .../mojom/agent_video_encoding_service.mojom  |  149 +
  content/utility/BUILD.gn                      |    2 +
  content/utility/services.cc                   |   12 +
@@ -121,7 +121,7 @@ render_process_host_impl.cc are this commit's own.
  .../core/editing/caret_display_item_client.cc |   25 +
  .../core/editing/caret_display_item_client.h  |    4 +
  .../commands/composite_edit_command.cc        |    9 +
- .../renderer/core/frame/local_frame_view.cc   |   97 +-
+ .../renderer/core/frame/local_frame_view.cc   |   96 +-
  .../renderer/core/frame/local_frame_view.h    |   20 +
  .../core/input/keyboard_event_manager.cc      |   11 +
  third_party/blink/renderer/core/page/page.cc  |   21 +
@@ -130,7 +130,7 @@ render_process_host_impl.cc are this commit's own.
  .../paint/agent_redaction/agent_field_rules.h |   32 +
  .../paint/agent_redaction/agent_redaction.cc  |  114 +
  .../paint/agent_redaction/agent_redaction.h   |   59 +
- .../agent_redaction/agent_redaction_marks.cc  |  194 ++
+ .../agent_redaction/agent_redaction_marks.cc  |  193 ++
  .../agent_redaction/agent_redaction_marks.h   |   99 +
  .../agent_redaction_painter.cc                |  117 +
  .../agent_redaction/agent_redaction_painter.h |   70 +
@@ -141,7 +141,7 @@ render_process_host_impl.cc are this commit's own.
  .../platform/graphics/paint/display_item.cc   |    2 +
  .../platform/graphics/paint/display_item.h    |    3 +
  .../graphics/video_frame_submitter.cc         |    3 +
- 76 files changed, 8177 insertions(+), 25 deletions(-)
+ 76 files changed, 8152 insertions(+), 25 deletions(-)
  create mode 100644 content/browser/devtools/agent_audio_capture.cc
  create mode 100644 content/browser/devtools/agent_audio_capture.h
  create mode 100644 content/browser/devtools/agent_video_recorder.cc
@@ -197,10 +197,10 @@ index 9d885219f1..49797b80b1 100644
  
  struct CC_EXPORT ThreadUnsafeCommitState {
 diff --git a/cc/trees/layer_tree_host.cc b/cc/trees/layer_tree_host.cc
-index 5192a70f7c..14ca795512 100644
+index 363c224077..e1c85b09b2 100644
 --- a/cc/trees/layer_tree_host.cc
 +++ b/cc/trees/layer_tree_host.cc
-@@ -1797,6 +1797,16 @@ void LayerTreeHost::SetPrimaryMainFrameItemSequenceNumber(
+@@ -1847,6 +1847,16 @@ void LayerTreeHost::SetPrimaryMainFrameItemSequenceNumber(
    SetNeedsCommit();
  }
  
@@ -218,10 +218,10 @@ index 5192a70f7c..14ca795512 100644
    // We can still request a new viz::LocalSurfaceId but that request will be
    // deferred until we have a valid viz::LocalSurfaceId from the parent.
 diff --git a/cc/trees/layer_tree_host.h b/cc/trees/layer_tree_host.h
-index 478cd5e174..64854e65df 100644
+index 7368a33731..6fab526a22 100644
 --- a/cc/trees/layer_tree_host.h
 +++ b/cc/trees/layer_tree_host.h
-@@ -653,6 +653,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
+@@ -658,6 +658,11 @@ class CC_EXPORT LayerTreeHost : public MutatorHostDelegate {
      return pending_commit_state()->primary_main_frame_item_sequence_number;
    }
  
@@ -234,10 +234,10 @@ index 478cd5e174..64854e65df 100644
    // the state.
    bool new_local_surface_id_request_for_testing() const {
 diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
-index ba702d1093..5903636d81 100644
+index 2d305d0242..33279c4634 100644
 --- a/cc/trees/layer_tree_host_impl.cc
 +++ b/cc/trees/layer_tree_host_impl.cc
-@@ -1076,6 +1076,15 @@ bool LayerTreeHostImpl::HasDamage() const {
+@@ -1157,6 +1157,14 @@ bool LayerTreeHostImpl::HasDamage() const {
      return true;
    }
  
@@ -245,15 +245,14 @@ index ba702d1093..5903636d81 100644
 +  // changed, or a still page would stay black in a redacted copy. The
 +  // activation that brought it also damaged the whole viewport (see
 +  // ActivateSyncTree); this holds until a frame has carried it.
-+  if (last_draw_redaction_generation_ !=
-+      active_tree->redaction_generation()) {
++  if (last_draw_redaction_generation_ != active_tree->redaction_generation()) {
 +    return true;
 +  }
 +
    // Unbounded elements can be positioned outside the root viewport, so check if
    // any unbounded render surface has damage even if the root surface has none.
    if (settings_.enable_unbounded_element) {
-@@ -2534,6 +2543,10 @@ viz::CompositorFrameMetadata LayerTreeHostImpl::MakeCompositorFrameMetadata(
+@@ -2636,6 +2644,10 @@ viz::CompositorFrameMetadata LayerTreeHostImpl::MakeCompositorFrameMetadata(
    metadata.is_handling_animation = HasMainThreadAnimation(active_types) ||
                                     HasCompositorThreadAnimation(active_types);
  
@@ -264,7 +263,7 @@ index ba702d1093..5903636d81 100644
    const base::flat_set<viz::SurfaceRange>& referenced_surfaces =
        active_tree_->SurfaceRanges();
    for (auto& surface_range : referenced_surfaces) {
-@@ -3301,6 +3314,8 @@ viz::CompositorFrame LayerTreeHostImpl::GenerateCompositorFrame(
+@@ -3441,6 +3453,8 @@ viz::CompositorFrame LayerTreeHostImpl::GenerateCompositorFrame(
    }
  
    last_draw_local_surface_id_ = GetCurrentLocalSurfaceId();
@@ -273,7 +272,7 @@ index ba702d1093..5903636d81 100644
  
    if (const char* client_name = GetClientNameForMetrics()) {
      size_t total_quad_count = 0;
-@@ -3885,6 +3900,15 @@ void LayerTreeHostImpl::ActivateSyncTree() {
+@@ -4028,6 +4042,14 @@ void LayerTreeHostImpl::ActivateSyncTree() {
    }
  
    active_tree_->DidBecomeActive();
@@ -282,18 +281,17 @@ index ba702d1093..5903636d81 100644
 +  // only when its damage is not empty, and a capturer with no news hands
 +  // back the frame it has: a still page would stay black in a redacted
 +  // recording.
-+  if (active_tree_->redaction_generation() !=
-+      last_draw_redaction_generation_) {
++  if (active_tree_->redaction_generation() != last_draw_redaction_generation_) {
 +    SetFullViewportDamage();
 +  }
    RenewTreePriority();
  
    // If we have any picture layers, then by activating we also modified tile
 diff --git a/cc/trees/layer_tree_host_impl.h b/cc/trees/layer_tree_host_impl.h
-index 6f7651e8dd..c2a77b9902 100644
+index 6afe325e1e..f713792baa 100644
 --- a/cc/trees/layer_tree_host_impl.h
 +++ b/cc/trees/layer_tree_host_impl.h
-@@ -1285,6 +1285,9 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
+@@ -1274,6 +1274,9 @@ class CC_EXPORT LayerTreeHostImpl : public TileManagerClient,
    uint32_t next_frame_token_from_client_ = viz::kInvalidFrameToken;
  
    viz::LocalSurfaceId last_draw_local_surface_id_;
@@ -304,10 +302,10 @@ index 6f7651e8dd..c2a77b9902 100644
    std::optional<RenderFrameMetadata> last_draw_render_frame_metadata_;
    // The viz::LocalSurfaceId to unthrottle drawing for.
 diff --git a/cc/trees/layer_tree_impl.cc b/cc/trees/layer_tree_impl.cc
-index aae25d05ab..f9ce39a224 100644
+index b7ebfbe1b1..6f2d24de1d 100644
 --- a/cc/trees/layer_tree_impl.cc
 +++ b/cc/trees/layer_tree_impl.cc
-@@ -929,6 +929,10 @@ void LayerTreeImpl::PullLayerTreePropertiesFrom(CommitState& commit_state) {
+@@ -958,6 +958,10 @@ void LayerTreeImpl::PullLayerTreePropertiesFrom(CommitState& commit_state) {
    set_primary_main_frame_item_sequence_number(
        commit_state.primary_main_frame_item_sequence_number);
  
@@ -318,7 +316,7 @@ index aae25d05ab..f9ce39a224 100644
    SetLocalSurfaceIdFromParent(commit_state.local_surface_id_from_parent);
  
    if (commit_state.pending_page_scale_animation) {
-@@ -1055,6 +1059,9 @@ void LayerTreeImpl::PushPropertiesTo(LayerTreeImpl* target_tree) {
+@@ -1084,6 +1088,9 @@ void LayerTreeImpl::PushPropertiesTo(LayerTreeImpl* target_tree) {
    target_tree->set_primary_main_frame_item_sequence_number(
        primary_main_frame_item_sequence_number());
  
@@ -329,10 +327,10 @@ index aae25d05ab..f9ce39a224 100644
        std::move(pending_page_scale_animation_);
  
 diff --git a/cc/trees/layer_tree_impl.h b/cc/trees/layer_tree_impl.h
-index 7ae7de0e4d..3f0918337d 100644
+index f0d1449d94..a0b880f500 100644
 --- a/cc/trees/layer_tree_impl.h
 +++ b/cc/trees/layer_tree_impl.h
-@@ -431,6 +431,12 @@ class CC_EXPORT LayerTreeImpl {
+@@ -438,6 +438,12 @@ class CC_EXPORT LayerTreeImpl {
      return primary_main_frame_item_sequence_number_;
    }
  
@@ -345,7 +343,7 @@ index 7ae7de0e4d..3f0918337d 100644
    void SetDeviceViewportRect(const gfx::Rect& device_viewport_rect);
  
    // TODO(fsamuel): The reason this is not a trivial accessor is because it
-@@ -1061,6 +1067,9 @@ class CC_EXPORT LayerTreeImpl {
+@@ -1075,6 +1081,9 @@ class CC_EXPORT LayerTreeImpl {
    int64_t primary_main_frame_item_sequence_number_ =
        RenderFrameMetadata::kInvalidItemSequenceNumber;
  
@@ -356,10 +354,10 @@ index 7ae7de0e4d..3f0918337d 100644
    STACK_ALLOCATED_IGNORE("Correctness ensured by DiscardableImageMapUpdater")
    raw_ptr<DiscardableImageMapUpdater> discardable_image_map_updater_;
 diff --git a/components/viz/common/quads/compositor_frame_metadata.cc b/components/viz/common/quads/compositor_frame_metadata.cc
-index d4d75393cb..da3d0f3603 100644
+index ed2640648c..4771347c18 100644
 --- a/components/viz/common/quads/compositor_frame_metadata.cc
 +++ b/components/viz/common/quads/compositor_frame_metadata.cc
-@@ -112,6 +112,9 @@ void CompositorFrameMetadata::AsValueInto(
+@@ -110,6 +110,9 @@ void CompositorFrameMetadata::AsValueInto(
    value->SetBoolean("has_screenshot_destination",
                      screenshot_destination.has_value());
    value->SetBoolean("is_software", is_software);
@@ -369,7 +367,7 @@ index d4d75393cb..da3d0f3603 100644
  
    value->BeginArray("offset_tag_definitions");
    for (const auto& definition : offset_tag_definitions) {
-@@ -169,6 +172,9 @@ CompositorFrameMetadata::CompositorFrameMetadata(
+@@ -166,6 +169,9 @@ CompositorFrameMetadata::CompositorFrameMetadata(
        has_shared_element_resources(other.has_shared_element_resources),
        screenshot_destination(other.screenshot_destination),
        is_software(other.is_software),
@@ -380,7 +378,7 @@ index d4d75393cb..da3d0f3603 100644
        offset_tag_values(other.offset_tag_values),
        frame_interval_inputs(other.frame_interval_inputs),
 diff --git a/components/viz/common/quads/compositor_frame_metadata.h b/components/viz/common/quads/compositor_frame_metadata.h
-index c85790fc00..0eff07c060 100644
+index be84eba231..bca0fe6d41 100644
 --- a/components/viz/common/quads/compositor_frame_metadata.h
 +++ b/components/viz/common/quads/compositor_frame_metadata.h
 @@ -67,6 +67,11 @@ struct VIZ_COMMON_EXPORT SurfaceIdAndDeadline {
@@ -395,7 +393,7 @@ index c85790fc00..0eff07c060 100644
  class VIZ_COMMON_EXPORT FrameTokenGenerator {
   public:
    inline uint32_t operator++() {
-@@ -235,6 +240,13 @@ class VIZ_COMMON_EXPORT CompositorFrameMetadata {
+@@ -233,6 +238,13 @@ class VIZ_COMMON_EXPORT CompositorFrameMetadata {
    // TransferableResource::is_software for details.
    bool is_software = false;
  
@@ -514,10 +512,10 @@ index 891beb58a3..4983fd2f38 100644
    // `ScreenshotDestinationReadyCallback` is invoked to stash the screenshot to
    // the correct destination.
 diff --git a/components/viz/service/display/surface_aggregator.cc b/components/viz/service/display/surface_aggregator.cc
-index d5116fa02c..3ab1c923d7 100644
+index 9e25476e5f..377e0e7f92 100644
 --- a/components/viz/service/display/surface_aggregator.cc
 +++ b/components/viz/service/display/surface_aggregator.cc
-@@ -27,6 +27,7 @@
+@@ -28,6 +28,7 @@
  #include "components/viz/common/quads/aggregated_render_pass.h"
  #include "components/viz/common/quads/aggregated_render_pass_draw_quad.h"
  #include "components/viz/common/quads/compositor_frame.h"
@@ -525,7 +523,7 @@ index d5116fa02c..3ab1c923d7 100644
  #include "components/viz/common/quads/compositor_render_pass_draw_quad.h"
  #include "components/viz/common/quads/debug_border_draw_quad.h"
  #include "components/viz/common/quads/draw_quad.h"
-@@ -1360,6 +1361,24 @@ void SurfaceAggregator::CopyQuadsToPass(
+@@ -1349,6 +1350,24 @@ void SurfaceAggregator::CopyQuadsToPass(
    const QuadList& source_quad_list = source_pass.quad_list;
    const SharedQuadState* last_copied_source_shared_quad_state = nullptr;
  
@@ -550,7 +548,7 @@ index d5116fa02c..3ab1c923d7 100644
  #if DCHECK_IS_ON()
    const SharedQuadStateList& source_shared_quad_state_list =
        source_pass.shared_quad_state_list;
-@@ -1473,6 +1492,20 @@ void SurfaceAggregator::CopyQuadsToPass(
+@@ -1462,6 +1481,19 @@ void SurfaceAggregator::CopyQuadsToPass(
          last_copied_source_shared_quad_state = quad->shared_quad_state;
        }
  
@@ -562,9 +560,8 @@ index d5116fa02c..3ab1c923d7 100644
 +      if (redact_frame && !quad->DynamicCast<CompositorRenderPassDrawQuad>()) {
 +        auto* black_quad =
 +            dest_pass->CreateAndAppendDrawQuad<SolidColorDrawQuad>();
-+        black_quad->SetNew(dest_pass->shared_quad_state_list.back(),
-+                           quad->rect, quad->visible_rect, SkColors::kBlack,
-+                           false);
++        black_quad->SetNew(dest_pass->shared_quad_state_list.back(), quad->rect,
++                           quad->visible_rect, SkColors::kBlack, false);
 +        continue;
 +      }
 +
@@ -572,10 +569,10 @@ index d5116fa02c..3ab1c923d7 100644
        if (const auto* pass_quad =
                quad->DynamicCast<CompositorRenderPassDrawQuad>()) {
 diff --git a/components/viz/service/frame_sinks/frame_sink_manager_impl.cc b/components/viz/service/frame_sinks/frame_sink_manager_impl.cc
-index 2be3e5291b..a9158dd9af 100644
+index e6bce9966d..9ce59394dd 100644
 --- a/components/viz/service/frame_sinks/frame_sink_manager_impl.cc
 +++ b/components/viz/service/frame_sinks/frame_sink_manager_impl.cc
-@@ -1229,6 +1229,17 @@ void FrameSinkManagerImpl::UpdateDebugRendererSettings(
+@@ -1258,6 +1258,17 @@ void FrameSinkManagerImpl::UpdateDebugRendererSettings(
    debug_settings_ = debug_settings;
  }
  
@@ -594,10 +591,10 @@ index 2be3e5291b..a9158dd9af 100644
  
  void FrameSinkManagerImpl::UpdateThrottlingRecursively(
 diff --git a/components/viz/service/frame_sinks/frame_sink_manager_impl.h b/components/viz/service/frame_sinks/frame_sink_manager_impl.h
-index 43b8df9abf..a27f41936e 100644
+index 2970a272b4..6f0d99755f 100644
 --- a/components/viz/service/frame_sinks/frame_sink_manager_impl.h
 +++ b/components/viz/service/frame_sinks/frame_sink_manager_impl.h
-@@ -201,6 +201,11 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
+@@ -207,6 +207,11 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
  #endif
    void UpdateDebugRendererSettings(
        const DebugRendererSettings& debug_settings) override;
@@ -610,7 +607,7 @@ index 43b8df9abf..a27f41936e 100644
                  base::TimeDelta interval) override;
    void StartThrottlingAllFrameSinks(base::TimeDelta interval) override;
 diff --git a/components/viz/service/surfaces/surface_manager.h b/components/viz/service/surfaces/surface_manager.h
-index 13c62e728d..fdb6e2f432 100644
+index f3c9f6df9b..1301ef8761 100644
 --- a/components/viz/service/surfaces/surface_manager.h
 +++ b/components/viz/service/surfaces/surface_manager.h
 @@ -78,6 +78,15 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
@@ -629,7 +626,7 @@ index 13c62e728d..fdb6e2f432 100644
    // Sets an alternative base::TickClock to pass into surfaces for surface
    // synchronization deadlines. This allows unit tests to mock the wall clock.
    void SetTickClockForTesting(const base::TickClock* tick_clock);
-@@ -316,6 +325,9 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
+@@ -336,6 +345,9 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
  
    std::optional<uint32_t> activation_deadline_in_frames_;
  
@@ -665,11 +662,11 @@ index 629ce42bc7..6c439039b4 100644
                  base::TimeDelta interval) override {}
    void StartThrottlingAllFrameSinks(base::TimeDelta interval) override {}
 diff --git a/content/browser/devtools/DEPS b/content/browser/devtools/DEPS
-index e872fadd9a..a4645debfb 100644
+index be5c2e2ed9..c6d4afe722 100644
 --- a/content/browser/devtools/DEPS
 +++ b/content/browser/devtools/DEPS
-@@ -8,4 +8,7 @@ include_rules = [
-   "+components/crash/content/browser/error_reporting",
+@@ -10,4 +10,7 @@ include_rules = [
+   "+components/url_pattern",
    # For FuzzTest fuzzers.
    "+third_party/fuzztest",
 +  # browser: for the video recorder's encoding service in
@@ -678,10 +675,10 @@ index e872fadd9a..a4645debfb 100644
  ]
 diff --git a/content/browser/devtools/agent_audio_capture.cc b/content/browser/devtools/agent_audio_capture.cc
 new file mode 100644
-index 0000000000..8e8d2434bc
+index 0000000000..796829de5f
 --- /dev/null
 +++ b/content/browser/devtools/agent_audio_capture.cc
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,238 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -747,9 +744,9 @@ index 0000000000..8e8d2434bc
 +        stream_factory_.BindNewPipeAndPassReceiver());
 +
 +    auto client = stream_client_receiver_.BindNewPipeAndPassRemote();
-+    stream_client_receiver_.set_disconnect_handler(base::BindOnce(
-+        &TabLoopbackIpc::OnError, weak_factory_.GetWeakPtr(),
-+        media::mojom::InputStreamErrorCode::kUnknown));
++    stream_client_receiver_.set_disconnect_handler(
++        base::BindOnce(&TabLoopbackIpc::OnError, weak_factory_.GetWeakPtr(),
++                       media::mojom::InputStreamErrorCode::kUnknown));
 +
 +    mojo::PendingRemote<media::mojom::AudioInputStreamObserver> observer;
 +    mojo::MakeSelfOwnedReceiver(std::make_unique<NoStreamObserver>(),
@@ -853,8 +850,8 @@ index 0000000000..8e8d2434bc
 +      media::AudioInputDevice::DeadStreamDetection::kDisabled);
 +  device_->Initialize(
 +      media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-+                             media::ChannelLayoutConfig::Stereo(),
-+                             kSampleRate, kFramesPerBuffer),
++                             media::ChannelLayoutConfig::Stereo(), kSampleRate,
++                             kFramesPerBuffer),
 +      this);
 +  running_ = true;
 +  device_->Start();
@@ -884,9 +881,8 @@ index 0000000000..8e8d2434bc
 +  scoped_refptr<media::AudioBuffer> buffer = media::AudioBuffer::CopyFrom(
 +      kSampleRate, base::TimeDelta(), audio_source);
 +  task_runner_->PostTask(
-+      FROM_HERE, base::BindOnce(&AgentAudioCapture::DeliverCaptured,
-+                                weak_this_, std::move(buffer),
-+                                audio_capture_time));
++      FROM_HERE, base::BindOnce(&AgentAudioCapture::DeliverCaptured, weak_this_,
++                                std::move(buffer), audio_capture_time));
 +}
 +
 +void AgentAudioCapture::OnCaptureError(
@@ -894,9 +890,8 @@ index 0000000000..8e8d2434bc
 +    const std::string& message) {
 +  // Either thread: always posted, so the client never hears of it from
 +  // inside the device.
-+  task_runner_->PostTask(FROM_HERE,
-+                         base::BindOnce(&AgentAudioCapture::DeliverError,
-+                                        weak_this_));
++  task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&AgentAudioCapture::DeliverError, weak_this_));
 +}
 +
 +void AgentAudioCapture::OnCaptureMuted(bool is_muted) {}
@@ -1034,10 +1029,10 @@ index 0000000000..65ae80bfb4
 +#endif  // CONTENT_BROWSER_DEVTOOLS_AGENT_AUDIO_CAPTURE_H_
 diff --git a/content/browser/devtools/agent_video_recorder.cc b/content/browser/devtools/agent_video_recorder.cc
 new file mode 100644
-index 0000000000..1268567f64
+index 0000000000..8ab52a9687
 --- /dev/null
 +++ b/content/browser/devtools/agent_video_recorder.cc
-@@ -0,0 +1,2589 @@
+@@ -0,0 +1,2592 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1068,6 +1063,7 @@ index 0000000000..1268567f64
 +#include "base/memory/shared_memory_mapping.h"
 +#include "base/memory/weak_ptr.h"
 +#include "base/notreached.h"
++#include "base/numerics/clamped_math.h"
 +#include "base/numerics/safe_conversions.h"
 +#include "base/strings/strcat.h"
 +#include "base/strings/string_number_conversions.h"
@@ -1186,8 +1182,8 @@ index 0000000000..1268567f64
 +// The sidecar line types the recorder writes itself; a mark may not use
 +// them.
 +constexpr std::string_view kOwnEventTypes[] = {
-+    "start",        "end",   "pause",    "resume", "target",
-+    "targetFailed", "click", "audioLost"};
++    "start",  "end",          "pause", "resume",
++    "target", "targetFailed", "click", "audioLost"};
 +
 +int EvenFloor(int value) {
 +  return value & ~1;
@@ -1328,8 +1324,7 @@ index 0000000000..1268567f64
 +              float* start,
 +              float* span) {
 +  // viz's scale for the axis (Transform, video_capture_overlay.cc:127-130).
-+  const float scale =
-+      static_cast<float>(length) / static_cast<float>(source);
++  const float scale = static_cast<float>(length) / static_cast<float>(source);
 +  // The even surface edge nearest the ideal, then its even neighbours. At a
 +  // scale of at most 1 the surface edges that land on a frame edge span at
 +  // least 2 pixels, so one of them always does.
@@ -1379,9 +1374,8 @@ index 0000000000..1268567f64
 +                              const gfx::Rect& content) {
 +  const double kx = static_cast<double>(content.width()) / source.width();
 +  const double ky = static_cast<double>(content.height()) / source.height();
-+  return gfx::PointF(
-+      static_cast<float>(content.x() + position.x() * dsf * kx),
-+      static_cast<float>(content.y() + position.y() * dsf * ky));
++  return gfx::PointF(static_cast<float>(content.x() + position.x() * dsf * kx),
++                     static_cast<float>(content.y() + position.y() * dsf * ky));
 +}
 +
 +// Where a cursor's sprite goes.
@@ -1408,19 +1402,19 @@ index 0000000000..1268567f64
 +  // The region viz scales the surface into
 +  // (frame_sink_video_capturer_impl.cc:603).
 +  const gfx::Rect content =
-+      source.IsEmpty() ? gfx::Rect()
-+                       : media::ComputeLetterboxRegionForI420(
-+                             gfx::Rect(output), source);
++      source.IsEmpty()
++          ? gfx::Rect()
++          : media::ComputeLetterboxRegionForI420(gfx::Rect(output), source);
 +  if (content.IsEmpty()) {
 +    return placement;
 +  }
 +  placement.point = CursorPointInFile(position, source, dsf, content);
-+  const int x = EvenFrameStart(placement.point.x() - hotspot.x(),
-+                               sprite_size.width(), content.x(),
-+                               content.width());
-+  const int y = EvenFrameStart(placement.point.y() - hotspot.y(),
-+                               sprite_size.height(), content.y(),
-+                               content.height());
++  const int x =
++      EvenFrameStart(placement.point.x() - hotspot.x(), sprite_size.width(),
++                     content.x(), content.width());
++  const int y =
++      EvenFrameStart(placement.point.y() - hotspot.y(), sprite_size.height(),
++                     content.y(), content.height());
 +  float bx = 0;
 +  float by = 0;
 +  float bw = 0;
@@ -1730,8 +1724,8 @@ index 0000000000..1268567f64
 +      // GPU buffers are not asked for (BufferFormatPreference::kDefault).
 +      return;
 +    }
-+    buffers_[buffer_id] = base::MakeRefCounted<Buffer>(std::move(read_only),
-+                                                       std::move(writable));
++    buffers_[buffer_id] =
++        base::MakeRefCounted<Buffer>(std::move(read_only), std::move(writable));
 +  }
 +
 +  void OnFrameReadyInBuffer(media::ReadyFrameInBuffer ready) {
@@ -1746,7 +1740,7 @@ index 0000000000..1268567f64
 +    }
 +    base::span<const uint8_t> memory = it->second->memory();
 +    if (memory.size() < media::VideoFrame::AllocationSize(info->pixel_format,
-+                                                         info->coded_size)) {
++                                                          info->coded_size)) {
 +      return;
 +    }
 +    const gfx::Rect visible_rect = info->visible_rect;
@@ -1790,8 +1784,8 @@ index 0000000000..1268567f64
 +    }
 +    cursor_clicks_seen_ = cursor->click_count();
 +    // Unretained: the subscription is this capture's and goes before it.
-+    cursor_changed_ = cursor->AddChangedCallback(base::BindRepeating(
-+        &Capture::OnCursorChanged, base::Unretained(this)));
++    cursor_changed_ = cursor->AddChangedCallback(
++        base::BindRepeating(&Capture::OnCursorChanged, base::Unretained(this)));
 +    // So that the first frame carries the cursor; the view's size and scale
 +    // stand in for a frame's until one comes.
 +    cursor_dirty_ = true;
@@ -1820,11 +1814,11 @@ index 0000000000..1268567f64
 +    if (!cursor_overlay_) {
 +      return;
 +    }
-+    if (metadata.source_size && metadata.device_scale_factor) {
++    if (metadata.capture.source_size && metadata.device_scale_factor) {
 +      const float dsf = static_cast<float>(*metadata.device_scale_factor);
-+      if (*metadata.source_size != cursor_source_size_ ||
++      if (*metadata.capture.source_size != cursor_source_size_ ||
 +          dsf != cursor_dsf_) {
-+        cursor_source_size_ = *metadata.source_size;
++        cursor_source_size_ = *metadata.capture.source_size;
 +        cursor_dsf_ = dsf;
 +        cursor_dirty_ = true;
 +      }
@@ -1879,10 +1873,10 @@ index 0000000000..1268567f64
 +    gfx::Size source;
 +    float dsf = 0;
 +    CursorSurface(&source, &dsf);
-+    const gfx::Rect content =
-+        source.IsEmpty() ? gfx::Rect()
-+                         : media::ComputeLetterboxRegionForI420(
-+                               gfx::Rect(recorder_->size_), source);
++    const gfx::Rect content = source.IsEmpty()
++                                  ? gfx::Rect()
++                                  : media::ComputeLetterboxRegionForI420(
++                                        gfx::Rect(recorder_->size_), source);
 +    // No cursor before input has placed it.
 +    if (!cursor || !cursor->has_position() || content.IsEmpty() ||
 +        !std::isfinite(dsf) || dsf <= 0) {
@@ -1901,8 +1895,8 @@ index 0000000000..1268567f64
 +      cursor_hotspot_ = hotspot;
 +      cursor_sprite_size_ = gfx::Size(sprite.width(), sprite.height());
 +      cursor_bounds_ =
-+          PlaceCursor(cursor->position(), cursor_hotspot_,
-+                      cursor_sprite_size_, source, dsf, recorder_->size_)
++          PlaceCursor(cursor->position(), cursor_hotspot_, cursor_sprite_size_,
++                      source, dsf, recorder_->size_)
 +              .bounds;
 +      cursor_shown_ = true;
 +      cursor_overlay_->SetImageAndBounds(sprite, cursor_bounds_);
@@ -1974,18 +1968,18 @@ index 0000000000..1268567f64
 +
 +  void OnError() {
 +    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-+        FROM_HERE, base::BindOnce(&AgentVideoRecorder::OnCaptureError,
-+                                  recorder_->weak_factory_.GetWeakPtr(),
-+                                  serial_));
++        FROM_HERE,
++        base::BindOnce(&AgentVideoRecorder::OnCaptureError,
++                       recorder_->weak_factory_.GetWeakPtr(), serial_));
 +  }
 +
 +  // WebContentsObserver:
 +  void WebContentsDestroyed() override {
 +    Stop();
 +    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-+        FROM_HERE, base::BindOnce(&AgentVideoRecorder::OnCaptureLost,
-+                                  recorder_->weak_factory_.GetWeakPtr(),
-+                                  serial_));
++        FROM_HERE,
++        base::BindOnce(&AgentVideoRecorder::OnCaptureLost,
++                       recorder_->weak_factory_.GetWeakPtr(), serial_));
 +  }
 +
 +  const raw_ptr<AgentVideoRecorder> recorder_;
@@ -2214,8 +2208,13 @@ index 0000000000..1268567f64
 +    if (!field.timescale) {
 +      continue;
 +    }
-+    const uint64_t units = base::checked_cast<uint64_t>(
-+        (duration_us * field.timescale + 500000) / 1000000);
++    // Both numbers come from the encoding service. Whole seconds and the
++    // rest are scaled apart, so that no product can overflow.
++    const uint64_t length_us = static_cast<uint64_t>(duration_us);
++    const uint64_t timescale = field.timescale;
++    const uint64_t units =
++        base::ClampAdd(base::ClampMul(length_us / 1000000, timescale),
++                       ((length_us % 1000000) * timescale + 500000) / 1000000);
 +    const size_t bytes = field.wide ? 8 : 4;
 +    const uint64_t value =
 +        field.wide ? units : std::min<uint64_t>(units, 0xffffffffu);
@@ -2275,14 +2274,14 @@ index 0000000000..1268567f64
 +
 +AgentVideoRecorder::Options::Options() = default;
 +AgentVideoRecorder::Options::Options(Options&&) = default;
-+AgentVideoRecorder::Options& AgentVideoRecorder::Options::operator=(
-+    Options&&) = default;
++AgentVideoRecorder::Options& AgentVideoRecorder::Options::operator=(Options&&) =
++    default;
 +AgentVideoRecorder::Options::~Options() = default;
 +
 +AgentVideoRecorder::Started::Started() = default;
 +AgentVideoRecorder::Started::Started(Started&&) = default;
-+AgentVideoRecorder::Started& AgentVideoRecorder::Started::operator=(
-+    Started&&) = default;
++AgentVideoRecorder::Started& AgentVideoRecorder::Started::operator=(Started&&) =
++    default;
 +AgentVideoRecorder::Started::~Started() = default;
 +
 +AgentVideoRecorder::Result::Result() = default;
@@ -2332,8 +2331,7 @@ index 0000000000..1268567f64
 +      events_path_(base::FilePath(options.path.RemoveFinalExtension().value() +
 +                                  FILE_PATH_LITERAL(".events.ndjson"))),
 +      fps_(options.fps),
-+      time_limit_(
-+          base::Minutes(options.max_minutes.value_or(kDefaultMinutes))),
++      time_limit_(base::Minutes(options.max_minutes.value_or(kDefaultMinutes))),
 +      size_(size),
 +      bitrate_bps_(bitrate_bps),
 +      max_bytes_(2 *
@@ -2392,10 +2390,9 @@ index 0000000000..1268567f64
 +  }
 +  if (result.status == Files::OpenResult::Status::kExists) {
 +    // A path is the client's own and no secret.
-+    FailStart(protocol::Response::InvalidParams(
-+        base::StrCat({"A file already exists at ",
-+                      result.existing.AsUTF8Unsafe(),
-+                      "; choose another path."})));
++    FailStart(protocol::Response::InvalidParams(base::StrCat(
++        {"A file already exists at ", result.existing.AsUTF8Unsafe(),
++         "; choose another path."})));
 +    return;
 +  }
 +  if (result.status != Files::OpenResult::Status::kOk) {
@@ -2404,17 +2401,17 @@ index 0000000000..1268567f64
 +    return;
 +  }
 +  state_ = State::kStarting;
-+  service_ = ServiceProcessHost::Launch<
-+      encoding_mojom::AgentVideoEncodingService>(
-+      ServiceProcessHost::Options()
-+          .WithDisplayName("Video Recording Encoder")
++  service_ =
++      ServiceProcessHost::Launch<encoding_mojom::AgentVideoEncodingService>(
++          ServiceProcessHost::Options()
++              .WithDisplayName("Video Recording Encoder")
 +#if BUILDFLAG(IS_MAC)
-+          .WithChildFlags(ChildProcessHost::CHILD_RENDERER)
++              .WithChildFlags(ChildProcessHost::CHILD_RENDERER)
 +#endif
-+          .WithProcessCallback(
-+              base::BindOnce(&AgentVideoRecorder::OnServiceLaunched,
-+                             weak_factory_.GetWeakPtr()))
-+          .Pass());
++              .WithProcessCallback(
++                  base::BindOnce(&AgentVideoRecorder::OnServiceLaunched,
++                                 weak_factory_.GetWeakPtr()))
++              .Pass());
 +  service_.set_disconnect_handler(base::BindOnce(
 +      &AgentVideoRecorder::OnServiceGone, base::Unretained(this)));
 +  // The GPU process's video encoders, for the service to try its H.264
@@ -2445,16 +2442,15 @@ index 0000000000..1268567f64
 +        media_factory_.BindNewPipeAndPassReceiver(), std::move(no_frame));
 +    media_factory_->CreateAudioEncoder(aac.InitWithNewPipeAndPassReceiver());
 +  }
-+  service_->Start(
-+      client_receiver_.BindNewPipeAndPassRemote(),
-+      encoding_mojom::AgentVideoEncodingOptions::New(
-+          base::checked_cast<uint32_t>(size_.width()),
-+          base::checked_cast<uint32_t>(size_.height()),
-+          base::checked_cast<uint32_t>(fps_), bitrate_bps_, audio_requested_,
-+          encoder_choice_, audio_codec_choice_),
-+      std::move(hardware), std::move(aac),
-+      base::BindOnce(&AgentVideoRecorder::OnServiceStarted,
-+                     weak_factory_.GetWeakPtr()));
++  service_->Start(client_receiver_.BindNewPipeAndPassRemote(),
++                  encoding_mojom::AgentVideoEncodingOptions::New(
++                      base::checked_cast<uint32_t>(size_.width()),
++                      base::checked_cast<uint32_t>(size_.height()),
++                      base::checked_cast<uint32_t>(fps_), bitrate_bps_,
++                      audio_requested_, encoder_choice_, audio_codec_choice_),
++                  std::move(hardware), std::move(aac),
++                  base::BindOnce(&AgentVideoRecorder::OnServiceStarted,
++                                 weak_factory_.GetWeakPtr()));
 +  start_timer_.Start(FROM_HERE, kStartTimeout,
 +                     base::BindOnce(&AgentVideoRecorder::OnStartTimeout,
 +                                    base::Unretained(this)));
@@ -2477,8 +2473,8 @@ index 0000000000..1268567f64
 +  if (service_process_.IsValid()) {
 +    service_process_.Terminate(RESULT_CODE_HUNG, /*wait=*/false);
 +  }
-+  FailStart(protocol::Response::ServerError(
-+      "The encoder did not start in time."));
++  FailStart(
++      protocol::Response::ServerError("The encoder did not start in time."));
 +}
 +
 +void AgentVideoRecorder::OnServiceStarted(
@@ -2585,9 +2581,9 @@ index 0000000000..1268567f64
 +  Registry::Get().Release(this);
 +}
 +
-+std::unique_ptr<AgentVideoRecorder::Capture>
-+AgentVideoRecorder::StartCaptureOf(WebContents* target,
-+                                   const std::string& target_id) {
++std::unique_ptr<AgentVideoRecorder::Capture> AgentVideoRecorder::StartCaptureOf(
++    WebContents* target,
++    const std::string& target_id) {
 +  auto capture = std::make_unique<Capture>(this, target, target_id,
 +                                           next_capture_serial_++);
 +  if (!capture->Start(capture_params_,
@@ -3255,7 +3251,9 @@ index 0000000000..1268567f64
 +  // A move still in its overlap did not happen.
 +  DropPending();
 +  end_media_time_ms_ = MediaTimeMs();
-+  stopped_at_ = base::TimeTicks::Now();
++  // The clock stood still from the pause on.
++  stopped_at_ =
++      state_ == State::kPaused ? pause_started_ : base::TimeTicks::Now();
 +  state_ = State::kStopping;
 +  reason_ = reason;
 +  error_ = std::move(error);
@@ -3476,8 +3474,8 @@ index 0000000000..1268567f64
 +  };
 +  if (recorder_) {
 +    refuse(protocol::Response::ServerError(
-+        base::StrCat({"A video recording is already running (",
-+                      recorder_->id(), "); stop it first."})));
++        base::StrCat({"A video recording is already running (", recorder_->id(),
++                      "); stop it first."})));
 +    return;
 +  }
 +  if (options.fps < 1 || options.fps > kMaxFps) {
@@ -3497,8 +3495,8 @@ index 0000000000..1268567f64
 +  }
 +  if (options.bitrate_kbps && (*options.bitrate_kbps < kMinBitrateKbps ||
 +                               *options.bitrate_kbps > kMaxBitrateKbps)) {
-+    refuse(protocol::Response::InvalidParams(
-+        "bitrateKbps must be 100-100000."));
++    refuse(
++        protocol::Response::InvalidParams("bitrateKbps must be 100-100000."));
 +    return;
 +  }
 +  if ((options.width && *options.width < kMinSide) ||
@@ -3524,8 +3522,8 @@ index 0000000000..1268567f64
 +  }
 +  const gfx::Size page = PagePixelSize(target);
 +  if (page.width() < kMinSide || page.height() < kMinSide) {
-+    refuse(protocol::Response::ServerError(
-+        "The page has no size to record yet."));
++    refuse(
++        protocol::Response::ServerError("The page has no size to record yet."));
 +    return;
 +  }
 +
@@ -3547,8 +3545,8 @@ index 0000000000..1268567f64
 +  }
 +  const gfx::Size size(EvenFloor(width), EvenFloor(height));
 +  if (size.width() < kMinSide || size.height() < kMinSide) {
-+    refuse(protocol::Response::InvalidParams(
-+        "The file must be at least 16x16."));
++    refuse(
++        protocol::Response::InvalidParams("The file must be at least 16x16."));
 +    return;
 +  }
 +
@@ -3560,10 +3558,10 @@ index 0000000000..1268567f64
 +  if (options.bitrate_kbps) {
 +    bitrate_bps = base::checked_cast<uint32_t>(*options.bitrate_kbps) * 1000;
 +  } else {
-+    bitrate_bps = base::ClampRound<uint32_t>(std::clamp(
-+        static_cast<double>(size.GetArea()) * options.fps *
-+            kDefaultBitsPerPixel,
-+        kMinDefaultBitrate, kMaxDefaultBitrate));
++    bitrate_bps = base::ClampRound<uint32_t>(
++        std::clamp(static_cast<double>(size.GetArea()) * options.fps *
++                       kDefaultBitsPerPixel,
++                   kMinDefaultBitrate, kMaxDefaultBitrate));
 +  }
 +  // One sequence for every recording's files, so a failed start's Discard
 +  // always runs before the next start's Open. Made at the first recording.
@@ -3629,10 +3627,10 @@ index 0000000000..1268567f64
 +}  // namespace content
 diff --git a/content/browser/devtools/agent_video_recorder.h b/content/browser/devtools/agent_video_recorder.h
 new file mode 100644
-index 0000000000..8554c61cf1
+index 0000000000..7840bd8fc5
 --- /dev/null
 +++ b/content/browser/devtools/agent_video_recorder.h
-@@ -0,0 +1,597 @@
+@@ -0,0 +1,595 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -3834,9 +3832,8 @@ index 0000000000..8554c61cf1
 +      base::OnceCallback<void(base::expected<Started, protocol::Response>)>;
 +  using StopCallback =
 +      base::OnceCallback<void(base::expected<Result, protocol::Response>)>;
-+  using EndedCallback =
-+      base::OnceCallback<void(const std::string& recording_id,
-+                              const Result& result)>;
++  using EndedCallback = base::OnceCallback<void(const std::string& recording_id,
++                                                const Result& result)>;
 +
 +  // The one recording of this browser.
 +  class Registry;
@@ -4025,9 +4022,8 @@ index 0000000000..8554c61cf1
 +  // agent_video_encoding_service::mojom::AgentVideoEncodingServiceClient:
 +  void OnData(const std::vector<uint8_t>& data) override;
 +  void OnAudioEnded() override;
-+  void OnClosed(
-+      agent_video_encoding_service::mojom::AgentVideoEncodingStatsPtr stats)
-+      override;
++  void OnClosed(agent_video_encoding_service::mojom::AgentVideoEncodingStatsPtr
++                    stats) override;
 +
 +  void OnServiceGone();
 +  void OnCloseTimeout();
@@ -4231,7 +4227,7 @@ index 0000000000..8554c61cf1
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_AGENT_VIDEO_RECORDER_H_
 diff --git a/content/browser/devtools/protocol/browser_handler.cc b/content/browser/devtools/protocol/browser_handler.cc
-index e4b87a6ee3..7f4a902134 100644
+index 7b41adf4e4..513843b69c 100644
 --- a/content/browser/devtools/protocol/browser_handler.cc
 +++ b/content/browser/devtools/protocol/browser_handler.cc
 @@ -13,6 +13,7 @@
@@ -4242,7 +4238,7 @@ index e4b87a6ee3..7f4a902134 100644
  #include "base/functional/bind.h"
  #include "base/functional/callback.h"
  #include "base/functional/callback_helpers.h"
-@@ -29,6 +30,7 @@
+@@ -30,6 +31,7 @@
  #include "build/build_config.h"
  #include "build/util/chromium_git_revision.h"
  #include "components/download/public/common/download_item.h"
@@ -4305,7 +4301,7 @@ index e4b87a6ee3..7f4a902134 100644
    // TODO: this leaks context ids for all contexts with overridden permissions.
    for (auto& browser_context_id : contexts_with_overridden_permissions_) {
      content::BrowserContext* browser_context = nullptr;
-@@ -865,5 +904,202 @@ std::unique_ptr<Browser::Histogram> BrowserHandler::GetHistogramData(
+@@ -869,5 +908,202 @@ std::unique_ptr<Browser::Histogram> BrowserHandler::GetHistogramData(
    return result;
  }
  
@@ -4365,11 +4361,11 @@ index e4b87a6ee3..7f4a902134 100644
 +              callback->sendFailure(started.error());
 +              return;
 +            }
-+            callback->sendSuccess(
-+                started->recording_id, started->size.width(),
-+                started->size.height(), started->encoder, started->audio,
-+                started->redacted, started->events_path.AsUTF8Unsafe(),
-+                started->ends_at_ms);
++            callback->sendSuccess(started->recording_id, started->size.width(),
++                                  started->size.height(), started->encoder,
++                                  started->audio, started->redacted,
++                                  started->events_path.AsUTF8Unsafe(),
++                                  started->ends_at_ms);
 +          },
 +          std::move(callback)));
 +}
@@ -4509,7 +4505,7 @@ index e4b87a6ee3..7f4a902134 100644
  }  // namespace protocol
  }  // namespace content
 diff --git a/content/browser/devtools/protocol/browser_handler.h b/content/browser/devtools/protocol/browser_handler.h
-index 9e1ba76dba..e519757164 100644
+index 4fcb087395..3a7de7f8c0 100644
 --- a/content/browser/devtools/protocol/browser_handler.h
 +++ b/content/browser/devtools/protocol/browser_handler.h
 @@ -13,6 +13,7 @@
@@ -4583,7 +4579,7 @@ index 9e1ba76dba..e519757164 100644
    // format. If `get_delta` is true, returns the only the new data since the
    // last `get_delta` true call for the given histogram, or all data if it's
 diff --git a/content/browser/media/capture/frame_sink_video_capture_device.cc b/content/browser/media/capture/frame_sink_video_capture_device.cc
-index 11de39a74c..285b268b8d 100644
+index 7cc182d919..795c638688 100644
 --- a/content/browser/media/capture/frame_sink_video_capture_device.cc
 +++ b/content/browser/media/capture/frame_sink_video_capture_device.cc
 @@ -338,12 +338,16 @@ void FrameSinkVideoCaptureDevice::AllocateCapturer(
@@ -4664,7 +4660,7 @@ index 93589d2987..2e8a13147a 100644
    base::WeakPtrFactory<FrameSinkVideoCaptureDevice> weak_factory_{this};
  };
 diff --git a/content/browser/media/capture/web_contents_frame_tracker.cc b/content/browser/media/capture/web_contents_frame_tracker.cc
-index 94bac1f77a..61b31340ae 100644
+index 94bac1f77a..e09a5f28cc 100644
 --- a/content/browser/media/capture/web_contents_frame_tracker.cc
 +++ b/content/browser/media/capture/web_contents_frame_tracker.cc
 @@ -131,7 +131,9 @@ class CapturedTabRegistry {
@@ -4712,8 +4708,8 @@ index 94bac1f77a..61b31340ae 100644
    if (web_contents()) {
      // If the routing ID was invalid, don't set up a context.
 -    context_ = std::make_unique<WebContentsContext>(web_contents());
-+    context_ = std::make_unique<WebContentsContext>(web_contents(),
-+                                                    stay_hidden_);
++    context_ =
++        std::make_unique<WebContentsContext>(web_contents(), stay_hidden_);
    }
    OnPossibleTargetChange();
  }
@@ -4771,7 +4767,7 @@ index d16982390a..3325b5b7f5 100644
    // sub-capture-target-version is incremented. This value is used in frames'
    // metadata so as to allow other modules (mostly Blink) to see which frames
 diff --git a/content/browser/media/capture/web_contents_video_capture_device.cc b/content/browser/media/capture/web_contents_video_capture_device.cc
-index 0b488bbb12..bc0bb08f6a 100644
+index 6aa96e059b..ca4dad80e4 100644
 --- a/content/browser/media/capture/web_contents_video_capture_device.cc
 +++ b/content/browser/media/capture/web_contents_video_capture_device.cc
 @@ -41,6 +41,12 @@ WebContentsVideoCaptureDevice::WebContentsVideoCaptureDevice(
@@ -4804,10 +4800,10 @@ index 2bf817361b..d3f0a90971 100644
    void ApplySubCaptureTarget(
        media::mojom::SubCaptureTargetType type,
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index d64e01a32e..6551558d19 100644
+index 2a6f28bb41..f0165a5f33 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
-@@ -323,6 +323,27 @@ bool g_run_renderer_in_process = false;
+@@ -323,6 +323,26 @@ bool g_run_renderer_in_process = false;
  // script.
  bool g_script_recording = false;
  
@@ -4826,16 +4822,15 @@ index d64e01a32e..6551558d19 100644
 +    "agent-redaction-skip-renderers-for-testing";
 +
 +bool TellsRenderersAgentRedaction() {
-+  static const bool tells =
-+      !base::CommandLine::ForCurrentProcess()->HasSwitch(
-+          kAgentRedactionSkipRenderersForTesting);
++  static const bool tells = !base::CommandLine::ForCurrentProcess()->HasSwitch(
++      kAgentRedactionSkipRenderersForTesting);
 +  return tells;
 +}
 +
  RendererMainThreadFactoryFunction g_renderer_main_thread_factory = nullptr;
  
  base::Thread* g_in_process_thread = nullptr;
-@@ -2065,6 +2086,11 @@ bool RenderProcessHostImpl::Init() {
+@@ -2086,6 +2106,11 @@ bool RenderProcessHostImpl::Init() {
    if (g_script_recording) {
      GetRendererInterface()->SetScriptRecording(true);
    }
@@ -4847,7 +4842,7 @@ index d64e01a32e..6551558d19 100644
  
    if (run_renderer_in_process()) {
      CHECK(g_renderer_main_thread_factory, base::NotFatalUntil::M152);
-@@ -5276,6 +5302,25 @@ void RenderProcessHost::SetScriptRecording(bool enabled) {
+@@ -5326,6 +5351,25 @@ void RenderProcessHost::SetScriptRecording(bool enabled) {
    }
  }
  
@@ -4874,10 +4869,10 @@ index d64e01a32e..6551558d19 100644
  size_t RenderProcessHostImpl::GetCount() {
    return GetAllHosts().size();
 diff --git a/content/browser/renderer_host/render_process_host_impl.h b/content/browser/renderer_host/render_process_host_impl.h
-index ef1ccc3400..c464b96f6a 100644
+index 06cf8acb23..7cf946720a 100644
 --- a/content/browser/renderer_host/render_process_host_impl.h
 +++ b/content/browser/renderer_host/render_process_host_impl.h
-@@ -742,6 +742,11 @@ class CONTENT_EXPORT RenderProcessHostImpl
+@@ -748,6 +748,11 @@ class CONTENT_EXPORT RenderProcessHostImpl
    // Iterate over all renderers and clear their in-memory resource cache.
    static void ClearAllResourceCaches();
  
@@ -4891,10 +4886,10 @@ index ef1ccc3400..c464b96f6a 100644
    }
 diff --git a/content/services/agent_video_encoding_service/BUILD.gn b/content/services/agent_video_encoding_service/BUILD.gn
 new file mode 100644
-index 0000000000..454fb2f204
+index 0000000000..3384425517
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/BUILD.gn
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,41 @@
 +# Copyright 2026 The browser Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -4929,6 +4924,7 @@ index 0000000000..454fb2f204
 +    "//media/mojo/clients",
 +    "//media/mojo/common",
 +    "//media/mojo/mojom",
++    "//media/mojo/mojom:video_encode",
 +    "//mojo/public/cpp/bindings",
 +    "//ui/gfx/geometry",
 +  ]
@@ -4937,10 +4933,10 @@ index 0000000000..454fb2f204
 +}
 diff --git a/content/services/agent_video_encoding_service/agent_audio_track.cc b/content/services/agent_video_encoding_service/agent_audio_track.cc
 new file mode 100644
-index 0000000000..7ab35ba229
+index 0000000000..2e353e495b
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/agent_audio_track.cc
-@@ -0,0 +1,612 @@
+@@ -0,0 +1,608 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5097,15 +5093,14 @@ index 0000000000..7ab35ba229
 +  state_ = State::kTestingAac;
 +  encoder_ = std::make_unique<media::MojoAudioEncoder>(std::move(aac));
 +  // The timer is this object's, so its task never outlives it.
-+  test_timer_.Start(FROM_HERE, kAacTestTimeout,
-+                    base::BindOnce(&AgentAudioTrack::OnAacFailed,
-+                                   base::Unretained(this)));
-+  encoder_->Initialize(
-+      EncoderOptions(media::AudioCodec::kAAC),
-+      base::BindRepeating(&AgentAudioTrack::OnEncoderOutput,
-+                          encoder_weak_factory_.GetWeakPtr()),
-+      base::BindOnce(&AgentAudioTrack::OnAacInitialized,
-+                     encoder_weak_factory_.GetWeakPtr()));
++  test_timer_.Start(
++      FROM_HERE, kAacTestTimeout,
++      base::BindOnce(&AgentAudioTrack::OnAacFailed, base::Unretained(this)));
++  encoder_->Initialize(EncoderOptions(media::AudioCodec::kAAC),
++                       base::BindRepeating(&AgentAudioTrack::OnEncoderOutput,
++                                           encoder_weak_factory_.GetWeakPtr()),
++                       base::BindOnce(&AgentAudioTrack::OnAacInitialized,
++                                      encoder_weak_factory_.GetWeakPtr()));
 +}
 +
 +void AgentAudioTrack::OnAacInitialized(media::EncoderStatus status) {
@@ -5188,12 +5183,11 @@ index 0000000000..7ab35ba229
 +  state_ = State::kStartingOpus;
 +  encoder_ = std::make_unique<media::OffloadingAudioEncoder>(
 +      std::make_unique<media::AudioOpusEncoder>());
-+  encoder_->Initialize(
-+      EncoderOptions(media::AudioCodec::kOpus),
-+      base::BindRepeating(&AgentAudioTrack::OnEncoderOutput,
-+                          encoder_weak_factory_.GetWeakPtr()),
-+      base::BindOnce(&AgentAudioTrack::OnOpusInitialized,
-+                     encoder_weak_factory_.GetWeakPtr()));
++  encoder_->Initialize(EncoderOptions(media::AudioCodec::kOpus),
++                       base::BindRepeating(&AgentAudioTrack::OnEncoderOutput,
++                                           encoder_weak_factory_.GetWeakPtr()),
++                       base::BindOnce(&AgentAudioTrack::OnOpusInitialized,
++                                      encoder_weak_factory_.GetWeakPtr()));
 +}
 +
 +void AgentAudioTrack::OnOpusInitialized(media::EncoderStatus status) {
@@ -5243,9 +5237,8 @@ index 0000000000..7ab35ba229
 +  if (frames < 1 || frames > kMaxBufferFrames) {
 +    return;
 +  }
-+  const int64_t at =
-+      media::AudioTimestampHelper::TimeToFrames(buffer.timestamp(),
-+                                                kSampleRate);
++  const int64_t at = media::AudioTimestampHelper::TimeToFrames(
++      buffer.timestamp(), kSampleRate);
 +  int64_t skip = 0;
 +  if (!timeline_started_) {
 +    // The timeline stands at 0: the whole lateness becomes silence, so the
@@ -5273,8 +5266,8 @@ index 0000000000..7ab35ba229
 +  }
 +  std::unique_ptr<media::AudioBus> bus =
 +      media::AudioBus::Create(kChannels, static_cast<int>(frames - skip));
-+  buffer.ReadFrames(static_cast<int>(frames - skip), static_cast<int>(skip),
-+                    0, bus.get());
++  buffer.ReadFrames(static_cast<int>(frames - skip), static_cast<int>(skip), 0,
++                    bus.get());
 +  Feed(std::move(bus));
 +}
 +
@@ -5376,9 +5369,8 @@ index 0000000000..7ab35ba229
 +  }
 +  // The GPU process's word is checked before it reaches the muxer, which
 +  // CHECKs the parameters of the first packet.
-+  if (output.params.IsValid() &&
-+      (output.params.sample_rate() != kSampleRate ||
-+       output.params.channels() != kChannels)) {
++  if (output.params.IsValid() && (output.params.sample_rate() != kSampleRate ||
++                                  output.params.channels() != kChannels)) {
 +    Fail("the encoder's output has another format");
 +    return;
 +  }
@@ -5777,10 +5769,10 @@ index 0000000000..592360c3a8
 +#endif  // CONTENT_SERVICES_AGENT_VIDEO_ENCODING_SERVICE_AGENT_AUDIO_TRACK_H_
 diff --git a/content/services/agent_video_encoding_service/agent_video_encoding_service_impl.cc b/content/services/agent_video_encoding_service/agent_video_encoding_service_impl.cc
 new file mode 100644
-index 0000000000..7220ea3a30
+index 0000000000..138ad211c0
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/agent_video_encoding_service_impl.cc
-@@ -0,0 +1,833 @@
+@@ -0,0 +1,826 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -5866,11 +5858,9 @@ index 0000000000..7220ea3a30
 +}
 +
 +void AgentVideoEncodingServiceImpl::Start(
-+    mojo::PendingRemote<encoding_mojom::AgentVideoEncodingServiceClient>
-+        client,
++    mojo::PendingRemote<encoding_mojom::AgentVideoEncodingServiceClient> client,
 +    encoding_mojom::AgentVideoEncodingOptionsPtr options,
-+    mojo::PendingRemote<media::mojom::VideoEncodeAcceleratorProvider>
-+        hardware,
++    mojo::PendingRemote<media::mojom::VideoEncodeAcceleratorProvider> hardware,
 +    mojo::PendingRemote<media::mojom::AudioEncoder> aac,
 +    StartCallback callback) {
 +  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -5880,8 +5870,7 @@ index 0000000000..7220ea3a30
 +  }
 +  // The browser checks all of these before it starts the service.
 +  if (options->fps < 1 || options->fps > 60 || options->width < kMinSide ||
-+      options->height < kMinSide || options->width % 2 ||
-+      options->height % 2 ||
++      options->height < kMinSide || options->width % 2 || options->height % 2 ||
 +      options->width > static_cast<uint32_t>(media::limits::kMaxDimension) ||
 +      options->height > static_cast<uint32_t>(media::limits::kMaxDimension) ||
 +      options->bitrate_bps == 0) {
@@ -6004,8 +5993,7 @@ index 0000000000..7220ea3a30
 +  if (!video_started_ || !audio_settled_) {
 +    return;
 +  }
-+  const bool has_audio =
-+      audio_codec_ != encoding_mojom::AgentAudioCodec::kNone;
++  const bool has_audio = audio_codec_ != encoding_mojom::AgentAudioCodec::kNone;
 +  // The muxer takes one of these two at construction; without sound it is
 +  // unused.
 +  const media::AudioCodec audio_codec =
@@ -6021,8 +6009,8 @@ index 0000000000..7220ea3a30
 +  muxer_ = std::make_unique<media::Mp4Muxer>(
 +      audio_codec, /*has_video=*/true, has_audio,
 +      std::make_unique<media::Mp4MuxerDelegate>(
-+          audio_codec, media::VideoCodec::kH264,
-+          media::H264PROFILE_BASELINE, std::nullopt,
++          audio_codec, media::VideoCodec::kH264, media::H264PROFILE_BASELINE,
++          std::nullopt,
 +          /*add_parameter_sets_in_bitstream=*/false,
 +          base::BindRepeating(&AgentVideoEncodingServiceImpl::OnMuxerData,
 +                              weak_factory_.GetWeakPtr())),
@@ -6074,8 +6062,7 @@ index 0000000000..7220ea3a30
 +    return;
 +  }
 +  const int code = static_cast<int>(status.code());
-+  LOG(WARNING) << "Video recording hardware encoder failed to start: "
-+               << code;
++  LOG(WARNING) << "Video recording hardware encoder failed to start: " << code;
 +  // The encoder answers from a task of its own, never from inside one of its
 +  // methods, so it may go here.
 +  encoder_.reset();
@@ -6108,8 +6095,7 @@ index 0000000000..7220ea3a30
 +  // A frame the browser held at the previous frame's time (it never sends
 +  // one before another) is stamped later than its moment, so it does not
 +  // move the file's time on this process's clock.
-+  if (!received_serial_ || awaiting_frame_ ||
-+      media_time > newest_media_time_) {
++  if (!received_serial_ || awaiting_frame_ || media_time > newest_media_time_) {
 +    media_zero_ = reference_time - media_time;
 +  }
 +  newest_media_time_ = media_time;
@@ -6140,7 +6126,7 @@ index 0000000000..7220ea3a30
 +  if (buffer->end_of_stream ||
 +      buffer->sample_format != media::kSampleFormatPlanarF32 ||
 +      buffer->sample_rate != AgentAudioTrack::kSampleRate ||
-+      buffer->channel_count != AgentAudioTrack::kChannels ||
++      buffer->channel_layout_config.channels() != AgentAudioTrack::kChannels ||
 +      buffer->frame_count < 1 ||
 +      buffer->frame_count > AgentAudioTrack::kMaxBufferFrames ||
 +      buffer->timestamp.is_negative() || buffer->timestamp > base::Days(1)) {
@@ -6252,8 +6238,7 @@ index 0000000000..7220ea3a30
 +  ScheduleNextTick();
 +}
 +
-+void AgentVideoEncodingServiceImpl::EncodeTicks(int64_t last_due,
-+                                                bool at_end) {
++void AgentVideoEncodingServiceImpl::EncodeTicks(int64_t last_due, bool at_end) {
 +  if (last_due < next_tick_) {
 +    return;
 +  }
@@ -6326,10 +6311,10 @@ index 0000000000..7220ea3a30
 +    last_keyframe_tick_ = tick;
 +  }
 +  ++encodes_in_flight_;
-+  encoder_->Encode(
-+      std::move(sample), media::VideoEncoder::EncodeOptions(keyframe),
-+      base::BindOnce(&AgentVideoEncodingServiceImpl::OnEncodeDone,
-+                     weak_factory_.GetWeakPtr()));
++  encoder_->Encode(std::move(sample),
++                   media::VideoEncoder::EncodeOptions(keyframe),
++                   base::BindOnce(&AgentVideoEncodingServiceImpl::OnEncodeDone,
++                                  weak_factory_.GetWeakPtr()));
 +}
 +
 +void AgentVideoEncodingServiceImpl::OnEncodeDone(media::EncoderStatus status) {
@@ -6402,10 +6387,10 @@ index 0000000000..7220ea3a30
 +  }
 +  media::Muxer::VideoParameters params(size_, fps_, media::VideoCodec::kH264,
 +                                       output.color_space, std::nullopt);
-+  PutVideo(media::Muxer::EncodedFrame(std::move(params),
-+                                      std::move(first_description),
-+                                      std::move(buffer)),
-+           timestamp);
++  PutVideo(
++      media::Muxer::EncodedFrame(
++          std::move(params), std::move(first_description), std::move(buffer)),
++      timestamp);
 +  ++frames_;
 +  last_sample_time_ = timestamp;
 +}
@@ -6616,10 +6601,10 @@ index 0000000000..7220ea3a30
 +}  // namespace content
 diff --git a/content/services/agent_video_encoding_service/agent_video_encoding_service_impl.h b/content/services/agent_video_encoding_service/agent_video_encoding_service_impl.h
 new file mode 100644
-index 0000000000..9509a4fb63
+index 0000000000..8dd59a3c7e
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/agent_video_encoding_service_impl.h
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,283 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -6709,8 +6694,7 @@ index 0000000000..9509a4fb63
 +      mojo::PendingRemote<
 +          agent_video_encoding_service::mojom::AgentVideoEncodingServiceClient>
 +          client,
-+      agent_video_encoding_service::mojom::AgentVideoEncodingOptionsPtr
-+          options,
++      agent_video_encoding_service::mojom::AgentVideoEncodingOptionsPtr options,
 +      mojo::PendingRemote<media::mojom::VideoEncodeAcceleratorProvider>
 +          hardware,
 +      mojo::PendingRemote<media::mojom::AudioEncoder> aac,
@@ -6813,8 +6797,8 @@ index 0000000000..9509a4fb63
 +  // the encoder having stopped.
 +  void Fail(const media::EncoderStatus& status);
 +
-+  agent_video_encoding_service::mojom::AgentVideoEncodingStatsPtr
-+  MakeStats() const;
++  agent_video_encoding_service::mojom::AgentVideoEncodingStatsPtr MakeStats()
++      const;
 +
 +  SEQUENCE_CHECKER(sequence_checker_);
 +
@@ -6906,10 +6890,10 @@ index 0000000000..9509a4fb63
 +#endif  // CONTENT_SERVICES_AGENT_VIDEO_ENCODING_SERVICE_AGENT_VIDEO_ENCODING_SERVICE_IMPL_H_
 diff --git a/content/services/agent_video_encoding_service/agent_video_hardware_encoder.cc b/content/services/agent_video_encoding_service/agent_video_hardware_encoder.cc
 new file mode 100644
-index 0000000000..e202592828
+index 0000000000..98b12eca62
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/agent_video_hardware_encoder.cc
-@@ -0,0 +1,597 @@
+@@ -0,0 +1,590 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -6965,8 +6949,7 @@ index 0000000000..e202592828
 +}  // namespace
 +
 +AgentVideoHardwareEncoder::OutputBuffer::OutputBuffer() = default;
-+AgentVideoHardwareEncoder::OutputBuffer::OutputBuffer(OutputBuffer&&) =
-+    default;
++AgentVideoHardwareEncoder::OutputBuffer::OutputBuffer(OutputBuffer&&) = default;
 +AgentVideoHardwareEncoder::OutputBuffer&
 +AgentVideoHardwareEncoder::OutputBuffer::operator=(OutputBuffer&&) = default;
 +AgentVideoHardwareEncoder::OutputBuffer::~OutputBuffer() = default;
@@ -6980,8 +6963,7 @@ index 0000000000..e202592828
 +AgentVideoHardwareEncoder::EncodeInFlight::~EncodeInFlight() = default;
 +
 +AgentVideoHardwareEncoder::AgentVideoHardwareEncoder(
-+    mojo::PendingRemote<media::mojom::VideoEncodeAcceleratorProvider>
-+        provider)
++    mojo::PendingRemote<media::mojom::VideoEncodeAcceleratorProvider> provider)
 +    : pending_provider_(std::move(provider)) {}
 +
 +AgentVideoHardwareEncoder::~AgentVideoHardwareEncoder() {
@@ -7170,9 +7152,8 @@ index 0000000000..e202592828
 +  // Asked once, before the first frame: the GPU process refuses a frame
 +  // sent before it.
 +  if (state_ != State::kStarting || !buffers_.empty()) {
-+    Fail(media::EncoderStatus(
-+        media::EncoderStatus::Codes::kEncoderIllegalState,
-+        "output buffers asked twice"));
++    Fail(media::EncoderStatus(media::EncoderStatus::Codes::kEncoderIllegalState,
++                              "output buffers asked twice"));
 +    return;
 +  }
 +  // The frames go unpadded, and the buffers stay bounded.
@@ -7212,9 +7193,8 @@ index 0000000000..e202592828
 +    return;
 +  }
 +  if (!TakeBuffer(id) || pending_.empty()) {
-+    Fail(media::EncoderStatus(
-+        media::EncoderStatus::Codes::kInvalidOutputBuffer,
-+        "output not asked for"));
++    Fail(media::EncoderStatus(media::EncoderStatus::Codes::kInvalidOutputBuffer,
++                              "output not asked for"));
 +    return;
 +  }
 +  // One output per input, in input order: this is the oldest frame's.
@@ -7230,16 +7210,14 @@ index 0000000000..e202592828
 +  }
 +  // An output out of order, or one lost, cannot be muxed.
 +  if (metadata.timestamp != oldest.sent_timestamp) {
-+    Fail(media::EncoderStatus(
-+        media::EncoderStatus::Codes::kEncoderFailedEncode,
-+        "output out of order"));
++    Fail(media::EncoderStatus(media::EncoderStatus::Codes::kEncoderFailedEncode,
++                              "output out of order"));
 +    return;
 +  }
 +  if (metadata.payload_size_bytes >
 +      buffers_[static_cast<size_t>(id)].mapping.size()) {
-+    Fail(media::EncoderStatus(
-+        media::EncoderStatus::Codes::kInvalidOutputBuffer,
-+        "output larger than its buffer"));
++    Fail(media::EncoderStatus(media::EncoderStatus::Codes::kInvalidOutputBuffer,
++                              "output larger than its buffer"));
 +    return;
 +  }
 +  media::VideoEncoderOutput output;
@@ -7412,8 +7390,7 @@ index 0000000000..e202592828
 +                                                                size_t size) {
 +  // A copy: the encoder writes the buffer again as soon as it has it back.
 +  return base::HeapArray<uint8_t>::CopiedFrom(
-+      buffers_[static_cast<size_t>(id)].mapping.GetMemoryAsSpan<uint8_t>(
-+          size));
++      buffers_[static_cast<size_t>(id)].mapping.GetMemoryAsSpan<uint8_t>(size));
 +}
 +
 +bool AgentVideoHardwareEncoder::ParseOutput(base::span<const uint8_t> data,
@@ -7509,10 +7486,10 @@ index 0000000000..e202592828
 +#endif  // BUILDFLAG(ENABLE_OPENH264) && BUILDFLAG(USE_PROPRIETARY_CODECS)
 diff --git a/content/services/agent_video_encoding_service/agent_video_hardware_encoder.h b/content/services/agent_video_encoding_service/agent_video_hardware_encoder.h
 new file mode 100644
-index 0000000000..e1acc40c1a
+index 0000000000..2f11b6f630
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/agent_video_hardware_encoder.h
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,231 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -7658,8 +7635,7 @@ index 0000000000..e1acc40c1a
 +  void SendTestFrame();
 +  // Checks one test output; sends the next test frame, or answers Initialize
 +  // after the last.
-+  void OnTestOutput(int32_t id,
-+                    const media::BitstreamBufferMetadata& metadata);
++  void OnTestOutput(int32_t id, const media::BitstreamBufferMetadata& metadata);
 +  void OnStartTimeout();
 +  void OnOutputTimeout();
 +  // (Re)starts the stall watchdog for the oldest frame in flight.
@@ -7747,10 +7723,10 @@ index 0000000000..e1acc40c1a
 +#endif  // CONTENT_SERVICES_AGENT_VIDEO_ENCODING_SERVICE_AGENT_VIDEO_HARDWARE_ENCODER_H_
 diff --git a/content/services/agent_video_encoding_service/public/mojom/BUILD.gn b/content/services/agent_video_encoding_service/public/mojom/BUILD.gn
 new file mode 100644
-index 0000000000..19f05b7139
+index 0000000000..e8be333c24
 --- /dev/null
 +++ b/content/services/agent_video_encoding_service/public/mojom/BUILD.gn
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,15 @@
 +# Copyright 2026 The browser Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -7761,6 +7737,7 @@ index 0000000000..19f05b7139
 +  sources = [ "agent_video_encoding_service.mojom" ]
 +  deps = [
 +    "//media/mojo/mojom",
++    "//media/mojo/mojom:video_encode",
 +    "//mojo/public/mojom/base",
 +    "//sandbox/policy/mojom",
 +  ]
@@ -7921,10 +7898,10 @@ index 0000000000..10c7f5c187
 +  Stop();
 +};
 diff --git a/content/utility/BUILD.gn b/content/utility/BUILD.gn
-index 61df6e8ee9..c39194cdd7 100644
+index b1d418e84f..d49470a353 100644
 --- a/content/utility/BUILD.gn
 +++ b/content/utility/BUILD.gn
-@@ -46,6 +46,8 @@ source_set("utility") {
+@@ -45,6 +45,8 @@ source_set("utility") {
      "//content/public/common:common_sources",
      "//content/public/common:content_descriptor_keys",
      "//content/public/utility:utility_sources",
@@ -7934,10 +7911,10 @@ index 61df6e8ee9..c39194cdd7 100644
      "//content/services/resource_broker",
      "//content/utility/on_device_model:on_device_model_sandbox_init",
 diff --git a/content/utility/services.cc b/content/utility/services.cc
-index 02374bbad1..679717594a 100644
+index e51384c460..be478b3d0e 100644
 --- a/content/utility/services.cc
 +++ b/content/utility/services.cc
-@@ -19,6 +19,8 @@
+@@ -20,6 +20,8 @@
  #include "content/public/common/content_switches.h"
  #include "content/public/utility/content_utility_client.h"
  #include "content/public/utility/utility_thread.h"
@@ -7946,7 +7923,7 @@ index 02374bbad1..679717594a 100644
  #include "content/services/devtools_media_encoding_service/devtools_media_encoding_service_impl.h"
  #include "content/services/devtools_media_encoding_service/public/mojom/devtools_media_encoding_service.mojom.h"
  #include "content/services/resource_broker/public/mojom/resource_broker.mojom.h"
-@@ -208,6 +210,14 @@ auto RunDevToolsMediaEncodingService(
+@@ -205,6 +207,14 @@ auto RunDevToolsMediaEncodingService(
    return std::make_unique<DevToolsMediaEncodingServiceImpl>(std::move(receiver));
  }
  
@@ -7961,7 +7938,7 @@ index 02374bbad1..679717594a 100644
  auto RunAudio(mojo::PendingReceiver<audio::mojom::AudioService> receiver) {
  #if BUILDFLAG(IS_MAC)
    // Don't connect to launch services when running sandboxed
-@@ -414,6 +424,8 @@ void RegisterIOThreadServices(mojo::ServiceFactory& services) {
+@@ -406,6 +416,8 @@ void RegisterIOThreadServices(mojo::ServiceFactory& services) {
  
  void RegisterMainThreadServices(mojo::ServiceFactory& services) {
    services.Add(RunDevToolsMediaEncodingService);
@@ -8094,7 +8071,7 @@ index cb62dac7a6..3819db9dc8 100644
    // Denotes that the most recent socket error has been logged. Used to avoid
    // log spam.
 diff --git a/services/viz/privileged/mojom/compositing/frame_sink_manager.mojom b/services/viz/privileged/mojom/compositing/frame_sink_manager.mojom
-index a360316b8f..6e0631546d 100644
+index bab4d6a157..dd4f53420f 100644
 --- a/services/viz/privileged/mojom/compositing/frame_sink_manager.mojom
 +++ b/services/viz/privileged/mojom/compositing/frame_sink_manager.mojom
 @@ -249,6 +249,15 @@ interface FrameSinkManager {
@@ -8114,10 +8091,10 @@ index a360316b8f..6e0631546d 100644
    // CompositorFrameSink. `transition_token` identifies the navigation for which
    // the resources were cached.
 diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
-index 4e9878c48f..38b70a6536 100644
+index 3ece669965..f3ff73e868 100644
 --- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
 +++ b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.cc
-@@ -67,6 +67,8 @@ StructTraits<viz::mojom::CompositorFrameMetadataDataView,
+@@ -62,6 +62,8 @@ StructTraits<viz::mojom::CompositorFrameMetadataDataView,
    out->min_page_scale_factor = data.min_page_scale_factor();
    out->is_mobile_optimized = data.is_mobile_optimized();
    out->is_software = data.is_software();
@@ -8127,10 +8104,10 @@ index 4e9878c48f..38b70a6536 100644
    out->view_transition_deadline_in_frames =
        data.view_transition_deadline_in_frames();
 diff --git a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
-index 82dc5aae2a..444df575f8 100644
+index a847c2f780..1e7dba6a0c 100644
 --- a/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
 +++ b/services/viz/public/cpp/compositing/compositor_frame_metadata_mojom_traits.h
-@@ -213,6 +213,12 @@ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
+@@ -207,6 +207,12 @@ struct StructTraits<viz::mojom::CompositorFrameMetadataDataView,
      return metadata.is_software;
    }
  
@@ -8144,10 +8121,10 @@ index 82dc5aae2a..444df575f8 100644
        const viz::CompositorFrameMetadata& metadata) {
      return metadata.frame_interval_inputs;
 diff --git a/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom b/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
-index 68a3bca78a..bc147e4543 100644
+index 36b85b5ee1..88ca0a751a 100644
 --- a/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
 +++ b/services/viz/public/mojom/compositing/compositor_frame_metadata.mojom
-@@ -99,6 +99,10 @@ struct CompositorFrameMetadata {
+@@ -97,6 +97,10 @@ struct CompositorFrameMetadata {
    // TransferableResource::is_software for details.
    bool is_software;
  
@@ -8159,10 +8136,10 @@ index 68a3bca78a..bc147e4543 100644
    array<OffsetTagValue> offset_tag_values;
  
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
-index e2367fc7ca..70bdfd6472 100644
+index 19f2e8bf67..d2ee817cf2 100644
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@ -261,6 +261,7 @@
+@@ -264,6 +264,7 @@
  #include "third_party/blink/renderer/core/page/scrolling/root_scroller_controller.h"
  #include "third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.h"
  #include "third_party/blink/renderer/core/page/spatial_navigation.h"
@@ -8170,7 +8147,7 @@ index e2367fc7ca..70bdfd6472 100644
  #include "third_party/blink/renderer/core/paint/object_paint_invalidator.h"
  #include "third_party/blink/renderer/core/paint/paint_layer.h"
  #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
-@@ -8599,6 +8600,13 @@ void Element::Focus(const FocusParams& params) {
+@@ -8777,6 +8778,13 @@ void Element::Focus(const FocusParams& params) {
                                    ? DisplayLockActivationReason::kScriptFocus
                                    : DisplayLockActivationReason::kUserFocus);
  
@@ -8185,7 +8162,7 @@ index e2367fc7ca..70bdfd6472 100644
            this, GetDocument().GetFrame(), params_to_use)) {
      return;
 diff --git a/third_party/blink/renderer/core/editing/caret_display_item_client.cc b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
-index ab3441ab23..af75101a7c 100644
+index 0b7e5bd524..0912b2ac43 100644
 --- a/third_party/blink/renderer/core/editing/caret_display_item_client.cc
 +++ b/third_party/blink/renderer/core/editing/caret_display_item_client.cc
 @@ -34,6 +34,8 @@
@@ -8257,7 +8234,7 @@ index 6ed44f282a..ee17f90a31 100644
    bool needs_paint_invalidation_ = false;
    bool is_in_canvas_subtree_ = false;
 diff --git a/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc b/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc
-index 0fde934f03..f4e69b0da6 100644
+index b3dee24a66..ecff2d2d5c 100644
 --- a/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc
 +++ b/third_party/blink/renderer/core/editing/commands/composite_edit_command.cc
 @@ -93,6 +93,7 @@
@@ -8284,7 +8261,7 @@ index 0fde934f03..f4e69b0da6 100644
                                         undo_step.EndingRootEditableElement());
    LocalFrame* const frame = GetDocument().GetFrame();
 diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
-index 52c020a454..22b98cacea 100644
+index 7343fa232d..60b8766f2c 100644
 --- a/third_party/blink/renderer/core/frame/local_frame_view.cc
 +++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
 @@ -43,6 +43,7 @@
@@ -8295,7 +8272,7 @@ index 52c020a454..22b98cacea 100644
  #include "cc/layers/picture_layer.h"
  #include "cc/tiles/frame_viewer_instrumentation.h"
  #include "cc/trees/layer_tree_host.h"
-@@ -153,6 +154,7 @@
+@@ -156,6 +157,7 @@
  #include "third_party/blink/renderer/core/page/scrolling/top_document_root_scroller_controller.h"
  #include "third_party/blink/renderer/core/page/spatial_navigation_controller.h"
  #include "third_party/blink/renderer/core/page/validation_message_client.h"
@@ -8303,7 +8280,7 @@ index 52c020a454..22b98cacea 100644
  #include "third_party/blink/renderer/core/paint/cull_rect_updater.h"
  #include "third_party/blink/renderer/core/paint/frame_painter.h"
  #include "third_party/blink/renderer/core/paint/paint_info.h"
-@@ -2981,8 +2983,12 @@ bool LocalFrameView::RunPrePaintLifecyclePhase(
+@@ -3074,8 +3076,12 @@ bool LocalFrameView::RunPrePaintLifecyclePhase(
      DocumentLifecycle::LifecycleState target_state) {
    TRACE_EVENT0("blink,benchmark", "LocalFrameView::RunPrePaintLifecyclePhase");
  
@@ -8317,7 +8294,7 @@ index 52c020a454..22b98cacea 100644
          frame_view.Lifecycle().AdvanceTo(DocumentLifecycle::kInPrePaint);
  
          // Propagate dirty bits in the frame into the parent frame so that
-@@ -3069,6 +3075,9 @@ void LocalFrameView::RunPaintLifecyclePhase(PaintBenchmarkMode benchmark_mode) {
+@@ -3162,6 +3168,9 @@ void LocalFrameView::RunPaintLifecyclePhase(PaintBenchmarkMode benchmark_mode) {
                           paint_artifact_compositor_->NeedsUpdate() ==
                               PaintArtifactCompositor::UpdateType::kFull;
      PushPaintArtifactToCompositor(paint_controller.has_value());
@@ -8327,7 +8304,7 @@ index 52c020a454..22b98cacea 100644
    }
  
    size_t total_animations_count = 0;
-@@ -3252,8 +3261,19 @@ void LocalFrameView::PaintTree(
+@@ -3345,8 +3354,19 @@ void LocalFrameView::PaintTree(
        UpdatePaintDebugInfoEnabled() && PaintDebugInfoEnabled();
  
    paint_frame_count_++;
@@ -8348,7 +8325,7 @@ index 52c020a454..22b98cacea 100644
          frame_view.MarkFirstEligibleToPaint();
          frame_view.Lifecycle().AdvanceTo(DocumentLifecycle::kInPaint);
          // Propagate child frame PaintLayer NeedsRepaint flag into the owner
-@@ -3318,6 +3338,20 @@ void LocalFrameView::PaintTree(
+@@ -3411,6 +3431,20 @@ void LocalFrameView::PaintTree(
      paint_controller->CommitNewDisplayItems();
  
      needs_clear_repaint_flags = true;
@@ -8369,7 +8346,7 @@ index 52c020a454..22b98cacea 100644
      if (paint_artifact_compositor_) {
        paint_artifact_compositor_->SetNeedsUpdateAfterRepaint(
            previous_artifact,
-@@ -3353,6 +3387,65 @@ const cc::Layer* LocalFrameView::RootCcLayer() const {
+@@ -3446,6 +3480,64 @@ const cc::Layer* LocalFrameView::RootCcLayer() const {
    return const_cast<LocalFrameView*>(this)->RootCcLayer();
  }
  
@@ -8408,8 +8385,7 @@ index 52c020a454..22b98cacea 100644
 +    // EmbeddedContentPainter), so every view of the local root is asked.
 +    const auto blocks = [&stamp](LocalFrameView& view) {
 +      const Document* document = view.GetFrame().GetDocument();
-+      if (document &&
-+          AgentRedaction::RunsViewTransitionFromBefore(*document)) {
++      if (document && AgentRedaction::RunsViewTransitionFromBefore(*document)) {
 +        stamp = 0;
 +      }
 +    };
@@ -8436,10 +8412,10 @@ index 52c020a454..22b98cacea 100644
    TRACE_EVENT0("blink", "LocalFrameView::pushPaintArtifactToCompositor");
    if (!frame_->GetSettings()->GetAcceleratedCompositingEnabled()) {
 diff --git a/third_party/blink/renderer/core/frame/local_frame_view.h b/third_party/blink/renderer/core/frame/local_frame_view.h
-index e225f3214c..668fd72bc2 100644
+index 91ae4ab72d..20322bc268 100644
 --- a/third_party/blink/renderer/core/frame/local_frame_view.h
 +++ b/third_party/blink/renderer/core/frame/local_frame_view.h
-@@ -1047,6 +1047,9 @@ class CORE_EXPORT LocalFrameView final
+@@ -1079,6 +1079,9 @@ class CORE_EXPORT LocalFrameView final
    void PerformPostLayoutTasks(bool view_size_changed);
  
    void PaintTree(PaintBenchmarkMode, std::optional<PaintController>&);
@@ -8449,7 +8425,7 @@ index e225f3214c..668fd72bc2 100644
    void PushPaintArtifactToCompositor(bool repainted);
  
    void ClearLayoutSubtreeRootsAndMarkContainingBlocks();
-@@ -1328,6 +1331,23 @@ class CORE_EXPORT LocalFrameView final
+@@ -1367,6 +1370,23 @@ class CORE_EXPORT LocalFrameView final
    // From the beginning of the document, how many frames have painted.
    size_t paint_frame_count_;
  
@@ -8503,10 +8479,10 @@ index 6d86e2c502..b813b51271 100644
    // - not to be a modifier event
    // https://crbug.com/709765
 diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/renderer/core/page/page.cc
-index 2f5e050eb9..0aee0927c9 100644
+index b85152c9ca..07f7c49e1c 100644
 --- a/third_party/blink/renderer/core/page/page.cc
 +++ b/third_party/blink/renderer/core/page/page.cc
-@@ -576,6 +576,27 @@ void Page::PlatformColorsChanged() {
+@@ -573,6 +573,27 @@ void Page::PlatformColorsChanged() {
    }
  }
  
@@ -8535,7 +8511,7 @@ index 2f5e050eb9..0aee0927c9 100644
    for (const Page* page : AllPages())
      for (Frame* frame = page->MainFrame(); frame;
 diff --git a/third_party/blink/renderer/core/page/page.h b/third_party/blink/renderer/core/page/page.h
-index f08c4c0d73..3fbdb735f7 100644
+index 08c7d9475f..da023b4f44 100644
 --- a/third_party/blink/renderer/core/page/page.h
 +++ b/third_party/blink/renderer/core/page/page.h
 @@ -28,6 +28,7 @@
@@ -8635,7 +8611,7 @@ index 0000000000..bc08acfdce
 +#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_AGENT_REDACTION_AGENT_FIELD_RULES_H_
 diff --git a/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction.cc b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction.cc
 new file mode 100644
-index 0000000000..96bf5e825e
+index 0000000000..5b7f029b54
 --- /dev/null
 +++ b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction.cc
 @@ -0,0 +1,114 @@
@@ -8706,18 +8682,18 @@ index 0000000000..96bf5e825e
 +  // what was painted after this point. A transition running now shows what
 +  // it captured before: remember it, so its local root stamps 0 meanwhile.
 +  // Disarmed (0), nothing is stamped, so nothing is remembered.
-+  Page::InvalidatePaintOfAllPages([&transitions,
-+                                   generation](Document& document) {
-+    if (!generation) {
-+      return;
-+    }
-+    ViewTransitionUtils::ForEachTransition(
-+        document, [&transitions](ViewTransition& transition) {
-+          if (!transition.IsDone()) {
-+            transitions.insert(&transition);
-+          }
-+        });
-+  });
++  Page::InvalidatePaintOfAllPages(
++      [&transitions, generation](Document& document) {
++        if (!generation) {
++          return;
++        }
++        ViewTransitionUtils::ForEachTransition(
++            document, [&transitions](ViewTransition& transition) {
++              if (!transition.IsDone()) {
++                transitions.insert(&transition);
++              }
++            });
++      });
 +}
 +
 +// static
@@ -8820,10 +8796,10 @@ index 0000000000..d0a177ef17
 +#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_AGENT_REDACTION_AGENT_REDACTION_H_
 diff --git a/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_marks.cc b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_marks.cc
 new file mode 100644
-index 0000000000..1741a5648c
+index 0000000000..9369c8b680
 --- /dev/null
 +++ b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_marks.cc
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,193 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -8990,8 +8966,7 @@ index 0000000000..1741a5648c
 +    return;
 +  }
 +  auto it = edits.find(&element.GetDocument());
-+  if (it == edits.end() ||
-+      base::TimeTicks::Now() - it->value > kSpreadWindow) {
++  if (it == edits.end() || base::TimeTicks::Now() - it->value > kSpreadWindow) {
 +    return;
 +  }
 +  // Only an element keys can go into: a text control, or one inside an
@@ -9125,7 +9100,7 @@ index 0000000000..e9c50bd5de
 +#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_AGENT_REDACTION_AGENT_REDACTION_MARKS_H_
 diff --git a/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_painter.cc b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_painter.cc
 new file mode 100644
-index 0000000000..d420de33de
+index 0000000000..57b158f395
 --- /dev/null
 +++ b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_painter.cc
 @@ -0,0 +1,117 @@
@@ -9168,7 +9143,7 @@ index 0000000000..d420de33de
 +                            const TextFragmentPaintInfo& fragment_paint_info,
 +                            const gfx::Rect& visual_rect) {
 +  // What a canvas shows is canvas content, and a page can read it back.
-+  if (paint_info.IsPrivacyPreserving()) {
++  if (paint_info.IsReadBackAllowedRendering()) {
 +    return false;
 +  }
 +  const FragmentItem& item = *cursor.CurrentItem();
@@ -9213,7 +9188,7 @@ index 0000000000..d420de33de
 +                              const PhysicalRect& rect,
 +                              const gfx::Rect& visual_rect,
 +                              bool in_contents_space) {
-+  if (paint_info.IsPrivacyPreserving()) {
++  if (paint_info.IsReadBackAllowedRendering()) {
 +    return;
 +  }
 +  const auto* element =
@@ -9248,7 +9223,7 @@ index 0000000000..d420de33de
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_painter.h b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_painter.h
 new file mode 100644
-index 0000000000..6e8e55b8d6
+index 0000000000..1456c87b33
 --- /dev/null
 +++ b/third_party/blink/renderer/core/paint/agent_redaction/agent_redaction_painter.h
 @@ -0,0 +1,70 @@
@@ -9279,8 +9254,8 @@ index 0000000000..6e8e55b8d6
 +// nothing in it is drawn. These two paint it.
 +//
 +// Neither paints for a canvas's children painted for drawElementImage
-+// (PaintInfo::IsPrivacyPreserving()): a page can read a canvas back, and a
-+// black field there would tell it that this browser hides fields; what a
++// (PaintInfo::IsReadBackAllowedRendering()): a page can read a canvas back, and
++// a black field there would tell it that this browser hides fields; what a
 +// canvas shows is canvas content.
 +
 +// The text item at `cursor`: when its text is hidden
@@ -9323,10 +9298,10 @@ index 0000000000..6e8e55b8d6
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_PAINT_AGENT_REDACTION_AGENT_REDACTION_PAINTER_H_
 diff --git a/third_party/blink/renderer/core/paint/box_fragment_painter.cc b/third_party/blink/renderer/core/paint/box_fragment_painter.cc
-index 54be9b0513..88f14ccc6b 100644
+index f47adbb0d2..e071e7df0c 100644
 --- a/third_party/blink/renderer/core/paint/box_fragment_painter.cc
 +++ b/third_party/blink/renderer/core/paint/box_fragment_painter.cc
-@@ -37,6 +37,8 @@
+@@ -40,6 +40,8 @@
  #include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
  #include "third_party/blink/renderer/core/overscroll/overscroll_area_tracker.h"
  #include "third_party/blink/renderer/core/page/page.h"
@@ -9335,7 +9310,7 @@ index 54be9b0513..88f14ccc6b 100644
  #include "third_party/blink/renderer/core/paint/border_shape_utils.h"
  #include "third_party/blink/renderer/core/paint/box_background_paint_context.h"
  #include "third_party/blink/renderer/core/paint/box_decoration_data.h"
-@@ -1441,6 +1443,26 @@ void BoxFragmentPainter::PaintBoxDecorationBackground(
+@@ -1591,6 +1593,26 @@ void BoxFragmentPainter::PaintBoxDecorationBackground(
                          contents_paint_state);
    }
  
@@ -9351,19 +9326,19 @@ index 54be9b0513..88f14ccc6b 100644
 +  if (AgentRedaction::IsArmed() &&
 +      !(paint_info.IsPaintingBackgroundInContentsSpace() &&
 +        paint_info.ShouldSkipBackground())) [[unlikely]] {
-+    PaintAgentRedactionCover(
-+        box_fragment_,
-+        contents_paint_state ? contents_paint_state->GetPaintInfo()
-+                             : paint_info,
-+        *background_client, paint_rect, visual_rect,
-+        paint_info.IsPaintingBackgroundInContentsSpace());
++    PaintAgentRedactionCover(box_fragment_,
++                             contents_paint_state
++                                 ? contents_paint_state->GetPaintInfo()
++                                 : paint_info,
++                             *background_client, paint_rect, visual_rect,
++                             paint_info.IsPaintingBackgroundInContentsSpace());
 +  }
 +
    if (ShouldRecordHitTestData(paint_info)) {
      ObjectPainter(layout_object)
          .RecordHitTestData(paint_info, ToPixelSnappedRect(paint_rect),
 diff --git a/third_party/blink/renderer/core/paint/build.gni b/third_party/blink/renderer/core/paint/build.gni
-index 7d20de7a2e..dcf3e80a2b 100644
+index dd8dcb9a3b..4e7ecd2342 100644
 --- a/third_party/blink/renderer/core/paint/build.gni
 +++ b/third_party/blink/renderer/core/paint/build.gni
 @@ -3,6 +3,16 @@
@@ -9384,7 +9359,7 @@ index 7d20de7a2e..dcf3e80a2b 100644
    "background_image_geometry.h",
    "block_paint_invalidator.cc",
 diff --git a/third_party/blink/renderer/core/paint/text_fragment_painter.cc b/third_party/blink/renderer/core/paint/text_fragment_painter.cc
-index 3f932722c8..07ef55f61e 100644
+index 3cfacc281b..25fd3cb26c 100644
 --- a/third_party/blink/renderer/core/paint/text_fragment_painter.cc
 +++ b/third_party/blink/renderer/core/paint/text_fragment_painter.cc
 @@ -21,6 +21,8 @@
@@ -9416,7 +9391,7 @@ index 3f932722c8..07ef55f61e 100644
      PaintSymbol(layout_object, style, physical_box.size, paint_info,
                  physical_box.offset);
 diff --git a/third_party/blink/renderer/platform/graphics/canvas_resource_dispatcher.cc b/third_party/blink/renderer/platform/graphics/canvas_resource_dispatcher.cc
-index ae0b424490..7c501c2133 100644
+index 3133509f4e..f029e120bd 100644
 --- a/third_party/blink/renderer/platform/graphics/canvas_resource_dispatcher.cc
 +++ b/third_party/blink/renderer/platform/graphics/canvas_resource_dispatcher.cc
 @@ -10,6 +10,7 @@
@@ -9467,10 +9442,10 @@ index fe4a5a871d..dc5b83c42b 100644
      kCapsLockIndicator,
      kCaret,
 diff --git a/third_party/blink/renderer/platform/graphics/video_frame_submitter.cc b/third_party/blink/renderer/platform/graphics/video_frame_submitter.cc
-index 56f7bfc9a0..e41f3fca8f 100644
+index 6d0152472e..1b539190f7 100644
 --- a/third_party/blink/renderer/platform/graphics/video_frame_submitter.cc
 +++ b/third_party/blink/renderer/platform/graphics/video_frame_submitter.cc
-@@ -975,6 +975,9 @@ viz::CompositorFrame VideoFrameSubmitter::CreateCompositorFrame(
+@@ -978,6 +978,9 @@ viz::CompositorFrame VideoFrameSubmitter::CreateCompositorFrame(
    // throttling.  This is for picture in picture, which can be throttled if the
    // opener window is minimized without this.
    compositor_frame.metadata.may_throttle_if_undrawn_frames = force_submit_;

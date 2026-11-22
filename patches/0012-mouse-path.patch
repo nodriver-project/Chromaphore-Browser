@@ -1,7 +1,7 @@
-From 989141ef1ef3d22351f2feb4ac691e649ab49861 Mon Sep 17 00:00:00 2001
+From fa3c3efb22f3067ad926238bd891006933760a85 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:30 -0500
-Subject: [PATCH 12/61] mouse-path
+Date: Sun, 22 Nov 2026 13:06:58 -0500
+Subject: [PATCH 12/62] mouse-path
 
 Synthetic human mouse-path gesture + route observer.
 ---
@@ -20,10 +20,10 @@ Synthetic human mouse-path gesture + route observer.
  create mode 100644 content/common/input/synthetic_mouse_path_gesture_params.h
 
 diff --git a/components/input/render_widget_host_input_event_router.cc b/components/input/render_widget_host_input_event_router.cc
-index 4f4887a27c..a6558089dc 100644
+index c8e5f07465..21ed264ab3 100644
 --- a/components/input/render_widget_host_input_event_router.cc
 +++ b/components/input/render_widget_host_input_event_router.cc
-@@ -666,12 +666,27 @@ void RenderWidgetHostInputEventRouter::RouteMouseEvent(
+@@ -675,12 +675,27 @@ void RenderWidgetHostInputEventRouter::RouteMouseEvent(
      RenderWidgetHostViewInput* root_view,
      const blink::WebMouseEvent* event,
      const ui::LatencyInfo& latency) {
@@ -52,7 +52,7 @@ index 4f4887a27c..a6558089dc 100644
      RenderWidgetHostViewInput* root_view,
      RenderWidgetHostViewInput* target,
 diff --git a/components/input/render_widget_host_input_event_router.h b/components/input/render_widget_host_input_event_router.h
-index 46683f5ac7..122363301f 100644
+index a7d8d96d06..109537b3cc 100644
 --- a/components/input/render_widget_host_input_event_router.h
 +++ b/components/input/render_widget_host_input_event_router.h
 @@ -16,6 +16,8 @@
@@ -83,7 +83,7 @@ index 46683f5ac7..122363301f 100644
    explicit RenderWidgetHostInputEventRouter(viz::HitTestDataProvider* provider,
                                              Delegate* delegate);
  
-@@ -547,6 +561,9 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
+@@ -555,6 +569,9 @@ class COMPONENT_EXPORT(INPUT) RenderWidgetHostInputEventRouter final
    // impact performance due to the IPC overhead.
    bool ended_delegated_ink_trail_ = false;
  
@@ -94,10 +94,10 @@ index 46683f5ac7..122363301f 100644
        this};
    friend class content::RenderWidgetHostInputEventRouterTest;
 diff --git a/content/common/BUILD.gn b/content/common/BUILD.gn
-index 986ccc4601..d0455b0014 100644
+index 3339832ee0..0be3019de5 100644
 --- a/content/common/BUILD.gn
 +++ b/content/common/BUILD.gn
-@@ -106,6 +106,10 @@ source_set("common") {
+@@ -105,6 +105,10 @@ source_set("common") {
      "input/synthetic_gesture_target.h",
      "input/synthetic_mouse_driver.cc",
      "input/synthetic_mouse_driver.h",

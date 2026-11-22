@@ -1,7 +1,7 @@
-From 25bace7ece723f417f59fcf8000f8eb080d63edb Mon Sep 17 00:00:00 2001
+From 71363f94801d5239038392b8d89b683ba521996b Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:13:54 -0500
-Subject: [PATCH 23/61] software-playready
+Date: Sun, 22 Nov 2026 13:08:30 -0500
+Subject: [PATCH 24/62] software-playready
 
 Software-secure PlayReady (SL2000) through the OS Media Foundation CDM for
 allow-listed origins (primevideo.com and amazon.com by default;
@@ -14,17 +14,17 @@ In a Linux build presenting Windows, PlayReady's probes are answered as Windows 
  chrome/common/media/cdm_registration.cc       |  13 +++
  components/cdm/common/BUILD.gn                |   3 +-
  components/cdm/renderer/BUILD.gn              |  12 ++
- .../cdm/renderer/key_system_support_update.cc |  81 +++++++++++---
+ .../cdm/renderer/key_system_support_update.cc |  84 ++++++++++----
  .../cdm/renderer/playready_key_system_info.cc |  58 +++++++---
  .../cdm/renderer/playready_key_system_info.h  |   7 ++
- content/browser/media/cdm_registry_impl.cc    | 103 ++++++++++++++++++
+ content/browser/media/cdm_registry_impl.cc    | 107 ++++++++++++++++++
  content/browser/media/cdm_registry_impl.h     |  21 ++++
- .../browser/media/key_system_support_impl.cc  |  22 ++++
+ .../browser/media/key_system_support_impl.cc  |  25 ++++
  .../browser/media/media_interface_proxy.cc    |  21 +++-
  .../media/media_permission_dispatcher.cc      |  36 ++++++
  media/cdm/win/media_foundation_cdm_util.cc    |  13 ++-
- .../mojo/services/media_foundation_service.cc |  37 +++++--
- 13 files changed, 377 insertions(+), 50 deletions(-)
+ .../mojo/services/media_foundation_service.cc |  37 ++++--
+ 13 files changed, 385 insertions(+), 52 deletions(-)
 
 diff --git a/chrome/common/media/cdm_registration.cc b/chrome/common/media/cdm_registration.cc
 index 60a79ace42..c36f818612 100644
@@ -86,7 +86,7 @@ index fbe2ec2264..228acb9674 100644
 +  }
  }
 diff --git a/components/cdm/renderer/key_system_support_update.cc b/components/cdm/renderer/key_system_support_update.cc
-index b100fbaa19..655fb4a84b 100644
+index e7e33885e0..07253a5a2a 100644
 --- a/components/cdm/renderer/key_system_support_update.cc
 +++ b/components/cdm/renderer/key_system_support_update.cc
 @@ -48,6 +48,13 @@
@@ -149,7 +149,13 @@ index b100fbaa19..655fb4a84b 100644
 +    }
 +  } else {
      DVLOG(2) << __func__ << ": Hardware secure PlayReady NOT supported";
--    return;
++  }
++
++  // browser: supported when either kind of codec is.
++  if (codecs == media::EME_CODEC_NONE &&
++      hw_secure_codecs == media::EME_CODEC_NONE) {
++    DVLOG(2) << __func__ << ": PlayReady NOT supported";
+     return;
    }
  
 -  const auto& hw_secure_capability =
@@ -163,14 +169,10 @@ index b100fbaa19..655fb4a84b 100644
 -          CdmSessionType::kTemporary)) {
 -    DVLOG(1) << "Temporary sessions must be supported for hardware secure "
 -                "PlayReady";
-+  // browser: supported when either kind of codec is.
-+  if (codecs == media::EME_CODEC_NONE &&
-+      hw_secure_codecs == media::EME_CODEC_NONE) {
-+    DVLOG(2) << __func__ << ": PlayReady NOT supported";
-     return;
-   }
+-    return;
+-  }
 -  DVLOG(2) << __func__ << ": Hardware secure PlayReady supported";
- 
+-
 -  key_systems->emplace_back(new PlayReadyKeySystemInfo(
 -      hw_secure_codecs, hw_secure_encryption_schemes));
 +  // browser: both codec sets go to the key system.
@@ -180,7 +182,7 @@ index b100fbaa19..655fb4a84b 100644
  }
  #endif  // BUILDFLAG(ENABLE_PLAYREADY)
  
-@@ -583,6 +613,21 @@ void OnKeySystemSupportUpdated(
+@@ -589,6 +619,20 @@ void OnKeySystemSupportUpdated(
  #endif  // BUILDFLAG(IS_ANDROID)
    }
  
@@ -193,24 +195,24 @@ index b100fbaa19..655fb4a84b 100644
 +  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
 +          ::switches::kUseChromiumDefaults)) {
 +    key_systems.emplace_back(new PlayReadyKeySystemInfo(
-+        media::EME_CODEC_NONE, {},
-+        media::EME_CODEC_AVC1 | media::EME_CODEC_AAC,
++        media::EME_CODEC_NONE, {}, media::EME_CODEC_AVC1 | media::EME_CODEC_AAC,
 +        {media::EncryptionScheme::kCenc, media::EncryptionScheme::kCbcs}));
 +  }
 +#endif  // BUILDFLAG(IS_LINUX)
 +
-   cb.Run(std::move(key_systems));
+   cb.Run(std::move(key_systems), std::move(pending_key_systems));
  }
  
 diff --git a/components/cdm/renderer/playready_key_system_info.cc b/components/cdm/renderer/playready_key_system_info.cc
-index 4a81fe43b6..08507ec207 100644
+index 4a81fe43b6..85711929c9 100644
 --- a/components/cdm/renderer/playready_key_system_info.cc
 +++ b/components/cdm/renderer/playready_key_system_info.cc
-@@ -7,9 +7,12 @@
+@@ -6,10 +6,13 @@
+ 
  #include "base/logging.h"
  #include "base/trace_event/trace_event.h"
- #include "components/cdm/common/buildflags.h"
 +#include "build/build_config.h"
+ #include "components/cdm/common/buildflags.h"
  #include "components/cdm/common/playready_cdm_common.h"
  
 -#if !BUILDFLAG(ENABLE_PLAYREADY)
@@ -342,7 +344,7 @@ index 3cf3dba4fd..13242fdbda 100644
    const base::flat_set<media::EncryptionScheme> hw_secure_encryption_schemes_;
  };
 diff --git a/content/browser/media/cdm_registry_impl.cc b/content/browser/media/cdm_registry_impl.cc
-index 1bc9b09556..8cfbf721c4 100644
+index 8025a8a0bd..9f6415b036 100644
 --- a/content/browser/media/cdm_registry_impl.cc
 +++ b/content/browser/media/cdm_registry_impl.cc
 @@ -13,10 +13,17 @@
@@ -363,7 +365,7 @@ index 1bc9b09556..8cfbf721c4 100644
  #include "content/public/common/cdm_info.h"
  #include "content/public/common/content_client.h"
  #include "content/public/common/content_switches.h"
-@@ -357,6 +364,33 @@ std::unique_ptr<CdmInfo> CdmRegistryImpl::GetCdmInfo(
+@@ -354,6 +361,37 @@ std::unique_ptr<CdmInfo> CdmRegistryImpl::GetCdmInfo(
    return nullptr;
  }
  
@@ -390,17 +392,21 @@ index 1bc9b09556..8cfbf721c4 100644
 +
 +void CdmRegistryImpl::OnWindowsProbeTimeElapsed() {
 +  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-+  FinalizeKeySystemCapabilities();
++  // A wait that something else has ended already was answered then.
++  if (!waiting_as_windows_probes_) {
++    return;
++  }
++  AttemptToFinalizeKeySystemCapabilities();
 +}
 +#endif  // BUILDFLAG(IS_LINUX)
 +
  base::CallbackListSubscription CdmRegistryImpl::ObserveKeySystemCapabilities(
      bool allow_hw_secure_capability_check,
      KeySystemCapabilitiesUpdateCB cb) {
-@@ -372,10 +406,29 @@ base::CallbackListSubscription CdmRegistryImpl::ObserveKeySystemCapabilities(
-     key_system_capabilities_.reset();
-     pending_lazy_initializations_.clear();
-     weak_ptr_factory_.InvalidateWeakPtrs();
+@@ -367,10 +405,29 @@ base::CallbackListSubscription CdmRegistryImpl::ObserveKeySystemCapabilities(
+   // are kept, and their results are broadcast when they complete.
+   if (allow_hw_secure_capability_check && !allow_hw_secure_capability_check_) {
+     allow_hw_secure_capability_check_ = true;
 +#if BUILDFLAG(IS_LINUX)
 +    // Where Windows starts its Media Foundation queries.
 +    if (WaitsAsWindowsProbes()) {
@@ -413,7 +419,7 @@ index 1bc9b09556..8cfbf721c4 100644
 +      return subscription;
 +    }
 +#endif
-     FinalizeKeySystemCapabilities();
+     AttemptToFinalizeKeySystemCapabilities();
      return subscription;
    }
  
@@ -424,21 +430,21 @@ index 1bc9b09556..8cfbf721c4 100644
 +  }
 +#endif
 +
-   if (!pending_lazy_initializations_.empty()) {
-     // Lazy initializing some key systems. All callbacks will be notified when
-     // that's finished.
-@@ -480,6 +533,10 @@ void CdmRegistryImpl::FinalizeKeySystemCapabilities() {
+   if (key_system_capabilities_.has_value()) {
+     cb.Run(key_system_capabilities_.value());
+     return subscription;
+@@ -486,6 +543,10 @@ media::CdmCapabilityOrStatus CdmRegistryImpl::GetCapabilityOrStatus(
+ void CdmRegistryImpl::AttemptToFinalizeKeySystemCapabilities() {
    DVLOG(2) << __func__;
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-   CHECK(!key_system_capabilities_.has_value(), base::NotFatalUntil::M160);
 +#if BUILDFLAG(IS_LINUX)
-+  // Finalizing for any reason ends the wait (its task is cancelled below).
++  // Finalizing for any reason ends the wait.
 +  waiting_as_windows_probes_ = false;
 +#endif
  
-   // Abort existing pending LazyInitializeHardwareSecureCapability() operations
-   // to avoid updating the observer twice.
-@@ -551,6 +608,41 @@ void CdmRegistryImpl::AttemptToFinalizeKeySystemCapability(
+   // Reset cached `key_system_capabilities_` to avoid notifying new observers
+   // with the old capabilities and then update them again with new ones.
+@@ -570,6 +631,41 @@ void CdmRegistryImpl::AttemptToFinalizeKeySystemCapability(
            weak_ptr_factory_.GetWeakPtr(), key_system, robustness)));
  }
  
@@ -480,7 +486,7 @@ index 1bc9b09556..8cfbf721c4 100644
  // TODO(xhwang): Find a way to register this as callbacks so we don't have to
  // hardcode platform-specific logic here.
  void CdmRegistryImpl::LazyInitializeCapability(
-@@ -576,6 +668,17 @@ void CdmRegistryImpl::LazyInitializeCapability(
+@@ -595,6 +691,17 @@ void CdmRegistryImpl::LazyInitializeCapability(
          key_system, cdm_info->type, cdm_info->path,
          /*is_hw_secure=*/true, std::move(cdm_capability_cb));
    } else {
@@ -499,7 +505,7 @@ index 1bc9b09556..8cfbf721c4 100644
      std::move(cdm_capability_cb)
          .Run(base::unexpected(media::CdmCapabilityQueryStatus::kUnknown));
 diff --git a/content/browser/media/cdm_registry_impl.h b/content/browser/media/cdm_registry_impl.h
-index 27ead4c8ff..2fdd9c205a 100644
+index 927e5cee87..d76c092427 100644
 --- a/content/browser/media/cdm_registry_impl.h
 +++ b/content/browser/media/cdm_registry_impl.h
 @@ -21,6 +21,7 @@
@@ -526,10 +532,10 @@ index 27ead4c8ff..2fdd9c205a 100644
 +  // origin that is not opaque.
 +  static bool IsSoftwarePlayReadyAllowedForOrigin(const url::Origin& origin);
 +
-   // Observes key system capabilities updates. The updated capabilities are
-   // guaranteed to be finalized. The `cb` is always called on the original
-   // thread this function was called on. If `allow_hw_secure_capability_check`
-@@ -169,6 +182,14 @@ class CONTENT_EXPORT CdmRegistryImpl : public CdmRegistry,
+   // Observes key system capabilities updates. Capabilities still being lazily
+   // initialized are reported with CdmCapabilityQueryStatus::kPending, and `cb`
+   // is called again once they are finalized. The `cb` is always called on the
+@@ -171,6 +184,14 @@ class CONTENT_EXPORT CdmRegistryImpl : public CdmRegistry,
    // Whether HW secure capability checking is allowed.
    bool allow_hw_secure_capability_check_ = false;
  
@@ -545,7 +551,7 @@ index 27ead4c8ff..2fdd9c205a 100644
  
    base::WeakPtrFactory<CdmRegistryImpl> weak_ptr_factory_{this};
 diff --git a/content/browser/media/key_system_support_impl.cc b/content/browser/media/key_system_support_impl.cc
-index 1f0f711ac4..8472243429 100644
+index 1b8b03b276..e91c7353d6 100644
 --- a/content/browser/media/key_system_support_impl.cc
 +++ b/content/browser/media/key_system_support_impl.cc
 @@ -5,6 +5,7 @@
@@ -556,7 +562,7 @@ index 1f0f711ac4..8472243429 100644
  #include "content/browser/permissions/permission_util.h"
  #include "content/browser/web_contents/web_contents_impl.h"
  #include "content/public/browser/browser_context.h"
-@@ -236,6 +237,27 @@ void KeySystemSupportImpl::OnKeySystemCapabilitiesUpdated(
+@@ -229,6 +230,30 @@ void KeySystemSupportImpl::OnKeySystemCapabilitiesUpdated(
    CHECK(IsValidKeySystemCapabilities(key_system_capabilities),
          base::NotFatalUntil::M160);
  
@@ -573,7 +579,10 @@ index 1f0f711ac4..8472243429 100644
 +      }
 +      it->second.sw_cdm_capability_or_status = base::unexpected(
 +          media::CdmCapabilityQueryStatus::kNoSupportedVideoCodec);
-+      if (it->second.hw_cdm_capability_or_status.has_value()) {
++      // A hardware secure query still in progress keeps its entry, so that
++      // the renderer waits for the result as it does in stock Chrome.
++      if (it->second.hw_cdm_capability_or_status.has_value() ||
++          it->second.IsPending()) {
 +        ++it;
 +      } else {
 +        it = key_system_capabilities.erase(it);
@@ -585,10 +594,10 @@ index 1f0f711ac4..8472243429 100644
        key_system_capabilities_.value() == key_system_capabilities) {
      DVLOG(1) << __func__ << ": Updated with the same key system capabilities";
 diff --git a/content/browser/media/media_interface_proxy.cc b/content/browser/media/media_interface_proxy.cc
-index a5e155fcd8..271bf186e7 100644
+index 985e260a0b..651a890980 100644
 --- a/content/browser/media/media_interface_proxy.cc
 +++ b/content/browser/media/media_interface_proxy.cc
-@@ -564,8 +564,22 @@ void MediaInterfaceProxy::CreateCdm(const media::CdmConfig& cdm_config,
+@@ -582,8 +582,22 @@ void MediaInterfaceProxy::CreateCdm(const media::CdmConfig& cdm_config,
        return;
      }
  
@@ -612,7 +621,7 @@ index a5e155fcd8..271bf186e7 100644
      if (cdm_info) {
        // The MediaFoundation CDM path has no off-the-record dimension:
        // CdmDocumentServiceImpl::GetMediaFoundationCdmData reads the REGULAR
-@@ -752,7 +766,10 @@ bool MediaInterfaceProxy::ShouldUseMediaFoundationServiceForCdm(
+@@ -770,7 +784,10 @@ bool MediaInterfaceProxy::ShouldUseMediaFoundationServiceForCdm(
    // TODO(xhwang): Refine this after we populate support info during EME
    // requestMediaKeySystemAccess() query, e.g. to check the `key_system` in
    // `cdm_config`.
@@ -625,15 +634,17 @@ index a5e155fcd8..271bf186e7 100644
  #endif  // BUILDFLAG(IS_WIN)
  
 diff --git a/content/renderer/media/media_permission_dispatcher.cc b/content/renderer/media/media_permission_dispatcher.cc
-index 8fc3bd386d..00a1649391 100644
+index 46933bbd5b..623e40f503 100644
 --- a/content/renderer/media/media_permission_dispatcher.cc
 +++ b/content/renderer/media/media_permission_dispatcher.cc
-@@ -11,10 +11,15 @@
+@@ -11,12 +11,17 @@
  #include "base/notreached.h"
  #include "base/task/bind_post_task.h"
  #include "base/task/single_thread_task_runner.h"
 +#include "build/build_config.h"
+ #include "content/renderer/render_frame_impl.h"
  #include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
+ #include "third_party/blink/public/platform/task_type.h"
  #include "third_party/blink/public/web/web_local_frame.h"
  #include "url/gurl.h"
  
@@ -644,7 +655,7 @@ index 8fc3bd386d..00a1649391 100644
  namespace {
  
  using Type = media::MediaPermission::Type;
-@@ -39,6 +44,21 @@ blink::mojom::PermissionDescriptorPtr MediaPermissionTypeToPermissionDescriptor(
+@@ -41,6 +46,21 @@ blink::mojom::PermissionDescriptorPtr MediaPermissionTypeToPermissionDescriptor(
    return descriptor;
  }
  
@@ -666,7 +677,7 @@ index 8fc3bd386d..00a1649391 100644
  }  // namespace
  
  namespace content {
-@@ -79,6 +99,14 @@ void MediaPermissionDispatcher::HasPermission(
+@@ -84,6 +104,14 @@ void MediaPermissionDispatcher::HasPermission(
  
    DCHECK(task_runner_->RunsTasksInCurrentSequence());
  
@@ -681,7 +692,7 @@ index 8fc3bd386d..00a1649391 100644
    uint32_t request_id = RegisterCallback(std::move(permission_status_cb));
    DVLOG(2) << __func__ << ": request ID " << request_id;
  
-@@ -102,6 +130,14 @@ void MediaPermissionDispatcher::RequestPermission(
+@@ -107,6 +135,14 @@ void MediaPermissionDispatcher::RequestPermission(
  
    DCHECK(task_runner_->RunsTasksInCurrentSequence());
  
@@ -789,10 +800,10 @@ index 40323c5dee..5fc9f56869 100644
 +  // browser: fill the slot matching the requested robustness; the other one
 +  // stays empty.
 +  CdmCapabilityOrStatus sw_cdm_capability_or_status =
-+      base::unexpected(CdmCapabilityQueryStatus::kNoSupportedVideoCodec);
-+  CdmCapabilityOrStatus hw_cdm_capability_or_status =
        base::unexpected(CdmCapabilityQueryStatus::kNoSupportedVideoCodec);
 -  auto hw_cdm_capability_or_status = GetCdmCapability(
++  CdmCapabilityOrStatus hw_cdm_capability_or_status =
++      base::unexpected(CdmCapabilityQueryStatus::kNoSupportedVideoCodec);
 +  CdmCapabilityOrStatus queried_capability_or_status = GetCdmCapability(
        cdm_factory, key_system, is_hw_secure,
        base::BindRepeating(&IsTypeSupported, mf_type_support, key_system));

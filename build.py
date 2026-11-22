@@ -13,28 +13,33 @@ Steps, in order:
   2. Fetch and unpack the toolchain downloads (LLVM, Rust, ...).
   3. Apply the curated ungoogled-chromium patches, the build fixes and this
      project's patch series from patches/.
-  4. Write out/Default/args.gn, bootstrap gn, build bindgen, run ninja.
+  4. Write out/Default/args.gn, bootstrap gn, build bindgen and Crubit's
+     cc_bindings_from_rs, run ninja.
 
 Re-running the script after step 3 finished skips straight to the build; use
---clean to start over. The Widevine CDM is not in this repository: pass
---widevine-dir to bundle a CDM you obtained yourself; without it the browser
-builds with Widevine disabled. V8's build runs libclang through its Python
-bindings: install them first with `python -m pip install clang==21.1.7`.
+--clean to start over. A run that stops in step 2 or 3 leaves a partly
+prepared tree, which a second run does not repair: start over with --clean.
+The Widevine CDM is not in this repository: pass --widevine-dir to bundle a
+CDM you obtained yourself; without it the browser builds with Widevine
+disabled. V8's build runs libclang through its Python bindings: install them
+first with `python -m pip install clang==21.1.7`.
 """
 
 import argparse
 import ctypes
 import importlib.util
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 from pathlib import Path
 
 UC_WINDOWS_REPO = 'https://github.com/ungoogled-software/ungoogled-chromium-windows.git'
-UC_WINDOWS_TAG = '156.0.8078.47-1.1'
-CHROMIUM_VERSION = '156.0.8078.47'
+UC_WINDOWS_TAG = '158.0.8127.36-1.1'
+CHROMIUM_VERSION = '158.0.8127.36'
 
 ROOT_DIR = Path(__file__).resolve().parent
 PATCHES_DIR = ROOT_DIR / 'patches'
@@ -52,6 +57,9 @@ PATCH_BIN_RELPATH = Path('third_party/git/usr/bin/patch.exe')
 CHROMIUM_BUILD_FIXES = ['fix-build-refs.patch', 'fix-js-optimizer-pref-redef.patch']
 # Downloads Chromium needs that ungoogled-chromium-windows' downloads.ini lacks.
 EXTRA_DOWNLOADS = PATCHES_DIR / 'build-fixes' / 'downloads-extra.ini'
+# Downloads this script unpacks itself, their links as copies (see
+# unpack_tar_links_as_copies), instead of leaving them to the upstream unpack.
+OWN_UNPACK = ('chromium-bidi-node-modules',)
 
 WIDEVINE_FILES = [
     Path('LICENSE'),
@@ -86,7 +94,7 @@ def get_vcvars_path(name='64'):
     return vcvars
 
 
-def run_build_process(*args, cwd):
+def run_build_process(*args, cwd, env=None):
     """Runs a command inside a cmd.exe with the Visual Studio variables set."""
     cmd_input = ['call "%s" >nul' % get_vcvars_path(),
                  'set DEPOT_TOOLS_WIN_TOOLCHAIN=0',
@@ -94,7 +102,7 @@ def run_build_process(*args, cwd):
                  'exit\n']
     log('$ ' + ' '.join(str(a) for a in args))
     subprocess.run(('cmd.exe', '/k'), input='\n'.join(cmd_input), check=True,
-                   encoding='utf-8', cwd=cwd)
+                   encoding='utf-8', cwd=cwd, env=env)
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +125,9 @@ def clone_infrastructure():
 def import_ungoogled_utils():
     sys.path.insert(0, str(UC_DIR / 'utils'))
     import downloads  # pylint: disable=import-outside-toplevel
-    import patches  # pylint: disable=import-outside-toplevel
-    from _common import USE_REGISTRY, ExtractorEnum, get_logger  # pylint: disable=import-outside-toplevel
+    from _common import ExtractorEnum, get_logger  # pylint: disable=import-outside-toplevel
     sys.path.pop(0)
-    return downloads, patches, USE_REGISTRY, ExtractorEnum, get_logger
+    return downloads, ExtractorEnum, get_logger
 
 
 def checkout_chromium():
@@ -134,6 +141,49 @@ def checkout_chromium():
 # ---------------------------------------------------------------------------
 # Step 2: downloads
 # ---------------------------------------------------------------------------
+
+def unpack_tar_links_as_copies(archive_path, output_dir):
+    """Unpacks a tar archive that holds links, each link to a file of the
+    archive becoming a copy of that file. Returns (files, copies, links left
+    out).
+
+    Windows lets only an elevated shell create a symbolic link. In any other,
+    7-Zip, which the upstream unpack uses for tar, stops at the first one ("A
+    required privilege is not held by the client"). Of the downloads only the
+    chromium-bidi modules hold links: npm's .bin shims, which the build passes
+    with as copies. A link whose target is no file of the archive is left out
+    and named in the log.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(str(archive_path), 'r:*') as archive:
+        members = archive.getmembers()
+        plain = [member for member in members if not (member.issym() or member.islnk())]
+        archive.extractall(str(output_dir), members=plain, filter='data')
+    pending = [member for member in members if member.issym() or member.islnk()]
+    copies = 0
+    while pending:
+        waiting = []
+        for member in pending:
+            name = posixpath.normpath(member.name)
+            if member.issym():
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
+            else:
+                target = posixpath.normpath(member.linkname)
+            inside = not (posixpath.isabs(target) or target == '..' or target.startswith('../'))
+            if inside and (output_dir / target).is_file():
+                (output_dir / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(output_dir / target), str(output_dir / name))
+                copies += 1
+            else:
+                waiting.append(member)
+        if len(waiting) == len(pending):   # no link of this round had its target: none will
+            break
+        pending = waiting                  # a link to a link: its target exists now
+    for member in pending:
+        log('link left out of {}: {} -> {}'.format(output_dir, member.name, member.linkname))
+    return sum(1 for member in plain if member.isfile()), copies, len(pending)
+
 
 def fetch_downloads(args, downloads, ExtractorEnum, get_logger):
     DOWNLOADS_CACHE.mkdir(parents=True, exist_ok=True)
@@ -163,7 +213,15 @@ def fetch_downloads(args, downloads, ExtractorEnum, get_logger):
             shutil.rmtree(target)
             target.mkdir()
     log('Unpacking downloads')
-    downloads.unpack_downloads(download_info, DOWNLOADS_CACHE, None, SOURCE_TREE, extractors)
+    own_unpack = [name for name in OWN_UNPACK if name in download_info]
+    downloads.unpack_downloads(download_info, DOWNLOADS_CACHE,
+                               [name for name in download_info if name not in own_unpack],
+                               SOURCE_TREE, extractors)
+    for name in own_unpack:
+        properties = download_info[name]
+        files, copies, left_out = unpack_tar_links_as_copies(
+            DOWNLOADS_CACHE / properties.download_filename, SOURCE_TREE / Path(properties.output_path))
+        log('Unpacked {}: {} files, {} links as copies, {} links left out'.format(name, files, copies, left_out))
 
 
 # ---------------------------------------------------------------------------
@@ -175,16 +233,34 @@ def series(path):
             if line.strip() and not line.startswith('#')]
 
 
-def apply_patches(patches, get_logger):
+def apply_with_patch(patch_paths, patch_bin):
+    """Applies patches in order with GNU patch, each only if all of its hunks
+    fit: a dry run first, then the real apply. -f never asks and never takes a
+    hunk for one already applied. The first patch whose dry run fails stops
+    the script with the tree unchanged by it."""
+    missing = [str(p) for p in patch_paths if not p.is_file()]
+    if missing:
+        raise RuntimeError('patch file(s) missing: ' + ', '.join(missing))
+    for number, patch_path in enumerate(patch_paths, 1):
+        cmd = [str(patch_bin), '-p1', '-f', '--no-backup-if-mismatch', '-d', str(SOURCE_TREE), '-i', str(patch_path)]
+        dry_run = subprocess.run(cmd + ['--dry-run'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, universal_newlines=True, errors='replace', check=False)
+        if dry_run.returncode != 0:
+            raise RuntimeError('{} ({}/{}) does not apply; the tree is unchanged by it:\n{}'
+                               .format(patch_path, number, len(patch_paths), dry_run.stdout))
+        log('* {} ({}/{})'.format(patch_path.name, number, len(patch_paths)))
+        subprocess.run(cmd, stdin=subprocess.DEVNULL, check=True)
+
+
+def apply_patches():
     patch_bin = SOURCE_TREE / PATCH_BIN_RELPATH
 
     log('Applying the curated ungoogled-chromium patches')
     curated = [PATCHES_DIR / 'ungoogled' / name for name in series(PATCHES_DIR / 'ungoogled' / 'series')]
-    patches.apply_patches(curated, SOURCE_TREE, patch_bin_path=patch_bin)
+    apply_with_patch(curated, patch_bin)
 
     log('Applying the build fixes')
-    patches.apply_patches([PATCHES_DIR / 'build-fixes' / name for name in CHROMIUM_BUILD_FIXES],
-                          SOURCE_TREE, patch_bin_path=patch_bin)
+    apply_with_patch([PATCHES_DIR / 'build-fixes' / name for name in CHROMIUM_BUILD_FIXES], patch_bin)
 
     log('Applying the browser patch series')
     ours = sorted(PATCHES_DIR.glob('0*.patch'))
@@ -244,6 +320,10 @@ def install_rust_toolchain():
                     shutil.copytree(cp_src, cp_dst, dirs_exist_ok=True)
                 else:
                     shutil.copy2(cp_src, cp_dst)
+    # rustc-dev: the compiler's own crates for the x64 host, which Crubit's
+    # cc_bindings_from_rs is built against.
+    for cp_src in (SOURCE_TREE / 'third_party' / 'rust-toolchain-x64-dev').glob('*/lib/*'):
+        shutil.copytree(cp_src, dst / 'lib' / cp_src.name, dirs_exist_ok=True)
     with open(flag_file, 'w', encoding='utf-8') as f:
         subprocess.run([str(src64 / 'rustc' / 'bin' / 'rustc.exe'), '--version'], stdout=f, check=True)
 
@@ -278,15 +358,57 @@ def write_args_gn(widevine, bindings_dir):
     (out_dir / 'args.gn').write_text(text, encoding='utf-8', newline='\n')
 
 
+def put_gn_for_tools():
+    """Copies the bootstrapped gn to buildtools/win, where V8's metagen (a
+    ninja action that runs `gn desc`) looks for one. Chromium's own checkout
+    has a gn there from CIPD; this tree has none, and metagen then asks for a
+    gn on PATH, which finds out\\Default\\gn.exe only in a shell where Windows
+    still searches the current directory."""
+    built = SOURCE_TREE / 'out' / 'Default' / 'gn.exe'
+    wanted = SOURCE_TREE / 'buildtools' / 'win' / 'gn.exe'
+    if wanted.is_file() and wanted.read_bytes() == built.read_bytes():
+        return
+    wanted.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, wanted)
+
+
+def build_crubit():
+    """Builds Crubit's cc_bindings_from_rs (rust_crubit_root in args.gn) with
+    the downloaded Rust toolchain, as ungoogled-chromium-windows does."""
+    crubit_root = SOURCE_TREE / 'third_party' / 'rust-toolchain' / 'crubit'
+    crubit_exe = crubit_root / 'bin' / 'cc_bindings_from_rs.exe'
+    if crubit_exe.exists():
+        return
+    rust_bin = SOURCE_TREE / 'third_party' / 'rust-toolchain' / 'bin'
+    target_dir = SOURCE_TREE / 'out' / 'crubit'
+    env = dict(os.environ)
+    env['RUSTC'] = str(rust_bin / 'rustc.exe')
+    env['CARGO_HOME'] = str(target_dir / 'cargo_home')
+    # The C runtime linked statically, as in rustc.exe: no VCRUNTIME140.dll needed.
+    env['RUSTFLAGS'] = '-Ctarget-feature=+crt-static'
+    run_build_process(rust_bin / 'cargo.exe', 'build', '--release', '--locked',
+                      '-p', 'cc_bindings_from_rs', '--bin', 'cc_bindings_from_rs',
+                      '--manifest-path', crubit_root / 'lib' / 'third_party' / 'crubit' / 'Cargo.toml',
+                      '--target-dir', target_dir, cwd=SOURCE_TREE, env=env)
+    crubit_exe.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(target_dir / 'release' / 'cc_bindings_from_rs.exe', crubit_exe)
+    # Windows has no rpath: rustc_driver-*.dll and what it needs go beside the exe.
+    for dll in rust_bin.glob('*.dll'):
+        shutil.copy2(dll, crubit_exe.parent / dll.name)
+    subprocess.run([str(crubit_exe), '--help'], stdout=subprocess.DEVNULL, check=True)
+
+
 def build(args, bindings_dir):
     install_rust_toolchain()
     write_args_gn(args.widevine_dir is not None, bindings_dir)
     if not (SOURCE_TREE / 'out' / 'Default' / 'gn.exe').exists():
         run_build_process(sys.executable, 'tools\\gn\\bootstrap\\bootstrap.py',
                           '-o', 'out\\Default\\gn.exe', '--skip-generate-buildfiles', cwd=SOURCE_TREE)
+    put_gn_for_tools()
     run_build_process('out\\Default\\gn.exe', 'gen', 'out\\Default', '--fail-on-unused-args', cwd=SOURCE_TREE)
     if not (SOURCE_TREE / 'third_party' / 'rust-toolchain' / 'bin' / 'bindgen.exe').exists():
         run_build_process(sys.executable, 'tools\\rust\\build_bindgen.py', '--skip-test', cwd=SOURCE_TREE)
+    build_crubit()
     ninja = ['third_party\\ninja\\ninja.exe']
     if args.thread_count is not None:
         ninja += ['-j', str(args.thread_count)]
@@ -326,14 +448,14 @@ def main():
     bindings_dir = libclang_bindings_dir()
 
     clone_infrastructure()
-    downloads, patches, _, ExtractorEnum, get_logger = import_ungoogled_utils()
+    downloads, ExtractorEnum, get_logger = import_ungoogled_utils()
 
     if PATCHED_STAMP.exists():
         log('Source tree is already prepared; building (use --clean to start over)')
     else:
         checkout_chromium()
         fetch_downloads(args, downloads, ExtractorEnum, get_logger)
-        apply_patches(patches, get_logger)
+        apply_patches()
         PATCHED_STAMP.write_text(UC_WINDOWS_TAG + '\n', encoding='utf-8')
     if args.widevine_dir is not None:
         overlay_widevine(args.widevine_dir)

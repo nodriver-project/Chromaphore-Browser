@@ -1,7 +1,7 @@
-From 3856e473ee48f5e55041d70044d9b257769dc3cb Mon Sep 17 00:00:00 2001
+From ab352c04aa4ff8490ad36fd3d28185b4e989737a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:05 -0500
-Subject: [PATCH 04/61] gesture-plumbing
+Date: Sun, 22 Nov 2026 13:06:31 -0500
+Subject: [PATCH 04/62] gesture-plumbing
 
 Synthetic-gesture overload that resolves its completion callback once
 events are dispatched, skipping the renderer input-processed round-trip.
@@ -13,10 +13,10 @@ events are dispatched, skipping the renderer input-processed round-trip.
  4 files changed, 62 insertions(+), 1 deletion(-)
 
 diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
-index a5b440dabf..2919b16e23 100644
+index 95831751f7..0be5a7e14d 100644
 --- a/content/browser/renderer_host/render_widget_host_impl.cc
 +++ b/content/browser/renderer_host/render_widget_host_impl.cc
-@@ -1999,6 +1999,17 @@ void RenderWidgetHostImpl::QueueSyntheticGestureCompleteImmediately(
+@@ -1994,6 +1994,17 @@ void RenderWidgetHostImpl::QueueSyntheticGestureCompleteImmediately(
    }
  }
  
@@ -34,7 +34,7 @@ index a5b440dabf..2919b16e23 100644
  void RenderWidgetHostImpl::EnsureReadyForSyntheticGestures(
      base::OnceClosure on_ready) {
    CreateSyntheticGestureControllerIfNecessary();
-@@ -3237,9 +3248,14 @@ void RenderWidgetHostImpl::StartDragging(
+@@ -3235,9 +3246,14 @@ void RenderWidgetHostImpl::StartDragging(
  
    if (frame_tree_) {
      bool intercepted = false;
@@ -51,7 +51,7 @@ index a5b440dabf..2919b16e23 100644
        return;
      }
 diff --git a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
-index 47e44b2628..af35712799 100644
+index 3be54d19c2..7e2178ef07 100644
 --- a/content/browser/renderer_host/render_widget_host_impl.h
 +++ b/content/browser/renderer_host/render_widget_host_impl.h
 @@ -662,6 +662,11 @@ class CONTENT_EXPORT RenderWidgetHostImpl

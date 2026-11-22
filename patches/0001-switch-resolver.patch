@@ -1,23 +1,23 @@
-From f1463d43fb32bcf7225c4ec2ebb9c7d02e3a01b2 Mon Sep 17 00:00:00 2001
+From 37de77d89c283b03548d15595b53cf8f0cde3d0a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:01 -0500
-Subject: [PATCH 01/61] switch-resolver
+Date: Sun, 22 Nov 2026 13:06:27 -0500
+Subject: [PATCH 01/62] switch-resolver
 
 browser switch resolver + component scaffolding and switches-dep plumbing.
 
-Riders: the fdlibm dependency and movement-persona sources in components/browser/BUILD.gn; the renderer switch forwarding in render_process_host_impl.cc; refresh-rate, private-clipboard, cancel-print-preview, cancel-payment-request, movement-persona, linux-widevine and timer-uptime switch declarations; chrome/browser/BUILD.gn carries stable-version's dependency.
+Riders: the fdlibm dependency and movement-persona sources in components/browser/BUILD.gn; the renderer switch forwarding in render_process_host_impl.cc; refresh-rate, private-clipboard, cancel-print-preview, cancel-payment-request, movement-persona, linux-widevine, timer-uptime and canvas-text-record switch declarations; chrome/browser/BUILD.gn carries stable-version's dependency.
 ---
  chrome/browser/BUILD.gn                       |   1 +
  components/browser/BUILD.gn                   |  27 ++++
- components/browser/browser_switches.cc        |  85 ++++++++++
- components/browser/browser_switches.h         |  43 +++++
+ components/browser/browser_switches.cc        |  92 +++++++++++
+ components/browser/browser_switches.h         |  44 +++++
  components/browser/switch_resolver.cc         | 122 ++++++++++++++
  components/browser/switch_resolver.h          | 150 ++++++++++++++++++
- .../renderer_host/render_process_host_impl.cc |   6 +
+ .../renderer_host/render_process_host_impl.cc |   8 +
  content/public/browser/BUILD.gn               |   2 +
  third_party/blink/common/BUILD.gn             |   1 +
  third_party/blink/renderer/core/BUILD.gn      |   1 +
- 10 files changed, 438 insertions(+)
+ 10 files changed, 448 insertions(+)
  create mode 100644 components/browser/BUILD.gn
  create mode 100644 components/browser/browser_switches.cc
  create mode 100644 components/browser/browser_switches.h
@@ -25,17 +25,17 @@ Riders: the fdlibm dependency and movement-persona sources in components/browser
  create mode 100644 components/browser/switch_resolver.h
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index a7a2110360..c88e20480b 100644
+index 0710a50807..f86d48b8d8 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2392,6 +2392,7 @@ source_set("browser") {
+@@ -2666,6 +2666,7 @@ source_set("browser") {
      "//chrome/browser/visited_url_ranking:impl",
      "//chrome/browser/vr",
      "//chrome/browser/vr:impl",
 +    "//components/browser:browser_switches",
-     "//components/certificate_transparency",
-     "//components/certificate_transparency:proto",
-     "//components/collaboration/internal",
+     "//chrome/browser/webapps",
+     "//chrome/browser/webapps:impl",
+     "//chrome/browser/webapps/installable",
 diff --git a/components/browser/BUILD.gn b/components/browser/BUILD.gn
 new file mode 100644
 index 0000000000..5ef5e52b97
@@ -71,10 +71,10 @@ index 0000000000..5ef5e52b97
 +}
 diff --git a/components/browser/browser_switches.cc b/components/browser/browser_switches.cc
 new file mode 100644
-index 0000000000..9551afbc92
+index 0000000000..5e7c483499
 --- /dev/null
 +++ b/components/browser/browser_switches.cc
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,92 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -159,13 +159,20 @@ index 0000000000..9551afbc92
 +// AbortError.
 +const char kCancelPaymentRequest[] = "cancel-payment-request";
 +
++// Presence-only, forwarded to every renderer. The 2D contexts of <canvas>
++// elements keep a record of the text and fills they draw, which
++// Page.agentCanvasText reads. Without it nothing records, and
++// Page.agentCanvasText answers that recording is off. Off by default: the
++// record costs a page's draws time.
++const char kEnableCanvasTextRecord[] = "enable-canvas-text-record";
++
 +}  // namespace switches
 diff --git a/components/browser/browser_switches.h b/components/browser/browser_switches.h
 new file mode 100644
-index 0000000000..de3312e7b9
+index 0000000000..62f86d42d9
 --- /dev/null
 +++ b/components/browser/browser_switches.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -203,6 +210,7 @@ index 0000000000..de3312e7b9
 +COMPONENT_EXPORT(BROWSER) extern const char kMovementPersonaSeed[];
 +COMPONENT_EXPORT(BROWSER) extern const char kCancelPrintPreview[];
 +COMPONENT_EXPORT(BROWSER) extern const char kCancelPaymentRequest[];
++COMPONENT_EXPORT(BROWSER) extern const char kEnableCanvasTextRecord[];
 +// dismiss-permission-prompts is in components/permissions/switches.h, beside
 +// the stock deny-permission-prompts it replaces.
 +
@@ -494,7 +502,7 @@ index 0000000000..436507ae3c
 +
 +#endif  // COMPONENTS_BROWSER_SWITCH_RESOLVER_H_
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index 22bf8ff115..f899f273b4 100644
+index 232d1c239d..ece69736c8 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
 @@ -73,6 +73,7 @@
@@ -505,7 +513,7 @@ index 22bf8ff115..f899f273b4 100644
  #include "components/embedder_support/switches.h"
  #include "components/input/features.h"
  #include "components/input/utils.h"
-@@ -3928,6 +3929,11 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+@@ -3963,6 +3964,13 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
        switches::kEnableWebGLDraftExtensions,
        switches::kEnableWebGPUDeveloperFeatures,
        switches::kFileUrlPathAlias,
@@ -514,11 +522,13 @@ index 22bf8ff115..f899f273b4 100644
 +      switches::kFingerprintBrandVersion,
 +      switches::kFingerprintBrandVersionLong,
 +      switches::kUseChromiumDefaults,
++      // browser: the canvas text record's on switch (Page.agentCanvasText).
++      switches::kEnableCanvasTextRecord,
        switches::kForceDeviceScaleFactor,
        switches::kForceDisplayColorProfile,
        switches::kForceHighContrast,
 diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
-index 790d665707..754771c43c 100644
+index 12b5c5e209..faf204d3f2 100644
 --- a/content/public/browser/BUILD.gn
 +++ b/content/public/browser/BUILD.gn
 @@ -29,6 +29,7 @@ source_set("browser_sources") {
@@ -529,7 +539,7 @@ index 790d665707..754771c43c 100644
      "allow_service_worker_result.cc",
      "allow_service_worker_result.h",
      "anchor_element_preconnect_delegate.h",
-@@ -631,6 +632,7 @@ source_set("browser_sources") {
+@@ -630,6 +631,7 @@ source_set("browser_sources") {
    ]
    deps = [
      "//cc",
@@ -538,22 +548,22 @@ index 790d665707..754771c43c 100644
      "//components/language_detection/content/browser",
      "//components/language_detection/content/common",
 diff --git a/third_party/blink/common/BUILD.gn b/third_party/blink/common/BUILD.gn
-index 8e635b0da3..8ee96d888f 100644
+index 14ec735277..0e561e798b 100644
 --- a/third_party/blink/common/BUILD.gn
 +++ b/third_party/blink/common/BUILD.gn
-@@ -307,6 +307,7 @@ source_set("common") {
+@@ -308,6 +308,7 @@ source_set("common") {
      "//base",
      "//build:android_buildflags",
      "//build:chromecast_buildflags",
 +    "//components/browser:browser_switches",
+     "//media",
      "//media/capture:capture_base",
      "//media/capture/mojom:video_capture_mojom_support",
-     "//mojo/public/cpp/system",
 diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
-index 056bd22809..41f972c9c3 100644
+index a96e9c9df2..62de8fa194 100644
 --- a/third_party/blink/renderer/core/BUILD.gn
 +++ b/third_party/blink/renderer/core/BUILD.gn
-@@ -408,6 +408,7 @@ component("core") {
+@@ -411,6 +411,7 @@ component("core") {
      ":make_deprecation_info",
      ":xml_ffi",
      "//base",

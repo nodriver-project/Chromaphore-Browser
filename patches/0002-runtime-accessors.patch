@@ -1,7 +1,7 @@
-From 4d6437f548324b3741026fcaa00e8bb372cfab84 Mon Sep 17 00:00:00 2001
+From c7413149369ad49e38c7abb1b70fdbaf793b3383 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:02 -0500
-Subject: [PATCH 02/61] runtime-accessors
+Date: Sun, 22 Nov 2026 13:06:28 -0500
+Subject: [PATCH 02/62] runtime-accessors
 
 browser runtime accessors.
 

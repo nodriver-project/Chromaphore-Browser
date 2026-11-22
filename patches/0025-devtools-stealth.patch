@@ -1,24 +1,43 @@
-From a1fd1326fc9685dfbeaefc7c352c458ef3d1c5a3 Mon Sep 17 00:00:00 2001
+From 14d9a26625ed39ab0b1631df191f0bde795b7b89 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:13:54 -0500
-Subject: [PATCH 24/61] devtools-stealth
+Date: Sun, 22 Nov 2026 13:08:31 -0500
+Subject: [PATCH 25/62] devtools-stealth
 
 Suppress the "controlled by automated test software" infobar, whose
 ~30 px innerHeight delta is detectable from JavaScript.
 ---
- .../chrome_devtools_manager_delegate.cc         | 17 ++++-------------
- 1 file changed, 4 insertions(+), 13 deletions(-)
+ .../chrome_devtools_manager_delegate.cc       | 36 +++----------------
+ 1 file changed, 4 insertions(+), 32 deletions(-)
 
 diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
-index 37a83372ce..7d547eb0f4 100644
+index 8dabdfbd31..4d883e49c1 100644
 --- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
 +++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
-@@ -548,19 +548,10 @@ void ChromeDevToolsManagerDelegate::AcceptDebugging(AcceptCallback callback) {
+@@ -559,38 +559,10 @@ void ChromeDevToolsManagerDelegate::AcceptDebugging(AcceptCallback callback) {
    DevToolsConnectionDialog::Show(last_active, std::move(wrapped_callback));
  }
  
 -void ChromeDevToolsManagerDelegate::SetActiveWebSocketConnections(
 -    size_t count) {
+-  if (infobars::IsInfoBarMigrated(
+-          infobars::InfoBarDelegate::
+-              DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE)) {
+-    auto* browser_infobar_manager =
+-        infobars::BrowserInfoBarManager::From(g_browser_process);
+-    CHECK(browser_infobar_manager);
+-
+-    if (count == 0) {
+-      browser_infobar_manager->Hide(
+-          infobars::InfoBarDelegate::
+-              DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE);
+-    } else {
+-      browser_infobar_manager->ShowGlobally(
+-          infobars::InfoBarDelegate::
+-              DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE);
+-    }
+-    return;
+-  }
+-
 -  if (count == 0 && infobar_) {
 -    // We need to reset the pointer to the infobar before closing it because
 -    // closing the infobar deletes it.

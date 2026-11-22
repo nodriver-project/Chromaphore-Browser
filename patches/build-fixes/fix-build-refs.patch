@@ -1,12 +1,13 @@
-# v153 fix-build-refs: drop build-graph references to targets/files absent from
-# our unpruned / small-checkout v153 source, so `gn gen` can load the graph.
-# Re-derived for v153: both refs are still absent and still referenced -- they
-# are the ones upstream's fix-building-with-prunned-binaries.patch removes, which
-# we skip. Only line numbers moved (chrome/test/BUILD.gn 4925 -> 4857,
-# chrome/BUILD.gn 932 -> 1044); both contexts byte-identical to v152.
+# fix-build-refs: drop build-graph references to targets/files absent from
+# our unpruned / small-checkout source, so `gn gen` can load the graph. They
+# are the ones upstream's fix-building-with-prunned-binaries.patch removes,
+# which we skip. Applied when `gn gen` says "Unable to load .../BUILD.gn".
+# Regenerated against 158.0.8127.36 on 2026-11-22 (the v158 cycle's lead
+# session): the same three lines as since v152; only positions moved
+# (chrome/test/BUILD.gn 4857 -> 2335, chrome/BUILD.gn 1044 -> 1052).
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn
-@@ -4857,7 +4857,6 @@
+@@ -2335,7 +2335,6 @@
        data_deps += [
          "//chrome/test:load_library_perf_tests",
          "//components/tracing:tracing_perftests",
@@ -16,7 +17,7 @@
        ]
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
-@@ -1044,8 +1044,6 @@
+@@ -1052,8 +1052,6 @@
  
    bundle_data("chrome_framework_resources") {
      sources = [

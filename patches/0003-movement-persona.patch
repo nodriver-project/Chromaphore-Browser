@@ -1,12 +1,12 @@
-From d096e053a67a3551ad1d636a554c6c088ffd2101 Mon Sep 17 00:00:00 2001
+From 20bc0d84390c87bf9a99b260a9bce6817d430519 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:04 -0500
-Subject: [PATCH 03/61] movement-persona
+Date: Sun, 22 Nov 2026 13:06:29 -0500
+Subject: [PATCH 03/62] movement-persona
 
 The pointer's human-movement persona: a bit-exact port of the launcher's
 persona generator (31 fields drawn from java.util.Random(seed), approach
-hesitation, tremor harmonics) plus the hand's kinematics. Shared by the
-Input domain's humanized actions and by Browser.getFingerprint.
+hesitation, tremor harmonics) plus the hand's kinematics. Used by the
+Input domain's humanized actions.
 ---
  components/browser/java_random.cc      | 102 +++++++++++++
  components/browser/java_random.h       |  59 +++++++

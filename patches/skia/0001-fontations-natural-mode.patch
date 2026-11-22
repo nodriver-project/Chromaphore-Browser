@@ -1,4 +1,4 @@
-From f2676883e27fc0a2693f08e23026165ccbaf16d7 Mon Sep 17 00:00:00 2001
+From a158346ab63342b04423722184169d9d9f19fbf4 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
 Date: Wed, 4 Nov 2026 19:18:43 -0500
 Subject: [PATCH] fontations-natural-mode
@@ -42,7 +42,7 @@ index dc01f5e..3f126b2 100644
 +
  #endif
 diff --git a/src/ports/SkTypeface_fontations.cpp b/src/ports/SkTypeface_fontations.cpp
-index e6350ec..e21d481 100644
+index e0a0489..fda6498 100644
 --- a/src/ports/SkTypeface_fontations.cpp
 +++ b/src/ports/SkTypeface_fontations.cpp
 @@ -17,17 +17,69 @@
@@ -132,7 +132,7 @@ index e6350ec..e21d481 100644
          // See below for the exception for SkFontHinting::kSlight.
          bool forceAutoHinting = SkToBool(fRec.fFlags & kForceAutohinting_Flag);
          AutoHinting autoHintingControl = forceAutoHinting ? AutoHinting::ForceForGlyfAndCff
-@@ -456,6 +518,66 @@ public:
+@@ -467,6 +529,66 @@ public:
                  }
              }
          }
@@ -199,7 +199,7 @@ index e6350ec..e21d481 100644
      }
  
      std::optional<SkScalar> getContourHeightForLetter(SkUnichar letter) {
-@@ -802,6 +924,10 @@ protected:
+@@ -813,6 +935,10 @@ protected:
      void generateImage(const SkGlyph& glyph, void* imageBuffer) override {
          ScalerContextBits::value_type format = glyph.extraBits();
          if (format == ScalerContextBits::PATH) {
@@ -210,7 +210,7 @@ index e6350ec..e21d481 100644
              this->generateImageFromPath(glyph, imageBuffer);
          } else if (format == ScalerContextBits::COLRv1 || format == ScalerContextBits::COLRv0) {
              SkASSERT(glyph.maskFormat() == SkMask::kARGB32_Format);
-@@ -974,6 +1100,9 @@ private:
+@@ -985,6 +1111,9 @@ private:
      const fontations_ffi::BridgeMappingIndex& fMappingIndex;
      const SkSpan<const SkColor> fPalette;
      rust::Box<fontations_ffi::BridgeHintingInstance> fHintingInstance;

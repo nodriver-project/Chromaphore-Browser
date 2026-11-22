@@ -1,7 +1,7 @@
-From a735dc7c4367c0c3b7b5e5373d75b9519c69f9b6 Mon Sep 17 00:00:00 2001
+From 00da771b7672bfd2d14e4fb3ddda6647aed9250a Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:43 -0500
-Subject: [PATCH 15/61] frame-stream
+Date: Sun, 22 Nov 2026 13:07:16 -0500
+Subject: [PATCH 16/62] frame-stream
 
 Page.startFrameStream, updateFrameStream and stopFrameStream: uncompressed
 frames of the page written to named shared memory, one event signalled per
@@ -10,18 +10,18 @@ file in the shared-memory directory and the event a FIFO beside it that
 receives a byte per frame. The handler wiring rides in agent-snapshot
 (page_handler.*, Page.pdl).
 ---
- .../browser/devtools/devtools_frame_stream.cc | 373 ++++++++++++++++++
+ .../browser/devtools/devtools_frame_stream.cc | 374 ++++++++++++++++++
  .../browser/devtools/devtools_frame_stream.h  | 154 ++++++++
- 2 files changed, 527 insertions(+)
+ 2 files changed, 528 insertions(+)
  create mode 100644 content/browser/devtools/devtools_frame_stream.cc
  create mode 100644 content/browser/devtools/devtools_frame_stream.h
 
 diff --git a/content/browser/devtools/devtools_frame_stream.cc b/content/browser/devtools/devtools_frame_stream.cc
 new file mode 100644
-index 0000000000..816b4a1c9d
+index 0000000000..069197c7a1
 --- /dev/null
 +++ b/content/browser/devtools/devtools_frame_stream.cc
-@@ -0,0 +1,373 @@
+@@ -0,0 +1,374 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -112,11 +112,12 @@ index 0000000000..816b4a1c9d
 +  const uint64_t slot_bytes = static_cast<uint64_t>(slot_size_.width()) *
 +                              static_cast<uint64_t>(slot_size_.height()) *
 +                              kBytesPerPixel;
-+  const uint64_t total = kHeaderSize + slot_bytes * kSlotCount;
-+  if (slot_bytes == 0 ||
-+      total > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
++  // Tested before the slots are multiplied out, which could wrap.
++  const uint64_t limit = static_cast<uint64_t>(std::numeric_limits<int>::max());
++  if (slot_bytes == 0 || slot_bytes > (limit - kHeaderSize) / kSlotCount) {
 +    return "The page is too large to stream.";
 +  }
++  const uint64_t total = kHeaderSize + slot_bytes * kSlotCount;
 +
 +  // Named unguessably: the section is the viewer's to open, nobody else's.
 +  std::array<uint8_t, 16> nonce;
@@ -178,8 +179,8 @@ index 0000000000..816b4a1c9d
 +    Release();
 +    return "Could not create the frame section.";
 +  }
-+  void* view = mmap(nullptr, static_cast<size_t>(total),
-+                    PROT_READ | PROT_WRITE, MAP_SHARED, section_fd_.get(), 0);
++  void* view = mmap(nullptr, static_cast<size_t>(total), PROT_READ | PROT_WRITE,
++                    MAP_SHARED, section_fd_.get(), 0);
 +  if (view == MAP_FAILED) {
 +    Release();
 +    return "Could not map the frame section.";
@@ -195,8 +196,8 @@ index 0000000000..816b4a1c9d
 +    return "Could not create the frame event.";
 +  }
 +  // Opened for reading too, so a write never fails for want of a reader.
-+  event_fd_.reset(HANDLE_EINTR(
-+      open(event_name_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++  event_fd_.reset(
++      HANDLE_EINTR(open(event_name_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
 +  if (!event_fd_.is_valid()) {
 +    unlink(event_name_.c_str());
 +    Release();

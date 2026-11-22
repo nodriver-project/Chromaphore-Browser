@@ -1,24 +1,24 @@
-From 505ac25d8fc1f293a153b7d0f31a536145f73762 Mon Sep 17 00:00:00 2001
+From d4fcf0b0f68538ccffc2318bcb1948d29aed97f5 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:42 -0500
-Subject: [PATCH 14/61] agent-snapshot
+Date: Sun, 22 Nov 2026 13:07:11 -0500
+Subject: [PATCH 14/62] agent-snapshot
 
 CDP Page.captureAgentSnapshot / Page.resolveAgentNode: cross-frame
 interactive-element perception with root-viewport geometry, plus the
 blink agent_snapshot collector module. Also carries the cursor-overlay
 wiring in page_handler.cc/.h.
 
-Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader interaction-origin hooks), id space, deltas, layers, live regions, hit check, frozen-frame redaction (holdForSecrets, agentFinishCapture), agentNavigateToHistoryEntry; page_handler.* and Page.pdl also carry the frame-stream commands and the Input action-outcome types; and video-recording's Page.agentMarkSecretField, which marks an element as holding a secret for a redacted recording: its handler in page_handler.*, the command in Page.pdl and on Blink's Page exclude list (inspector_protocol_config.json), and MarkSecretField and MarkFocusedField in agent_snapshot_collector.mojom and agent_snapshot_collector_impl.*. agent_card_fields.cc now calls the card field rule in core/paint/agent_redaction/agent_field_rules, which redacted recordings share, and GetCdpCursorOverlay leaves out the overlay a video recording makes that does not draw on the window.
+Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader interaction-origin hooks), id space, deltas, layers, live regions, hit check, frozen-frame redaction (holdForSecrets, agentFinishCapture), agentNavigateToHistoryEntry; page_handler.* and Page.pdl also carry the frame-stream commands and the Input action-outcome types; and video-recording's Page.agentMarkSecretField, which marks an element as holding a secret for a redacted recording: its handler in page_handler.*, the command in Page.pdl and on Blink's Page exclude list (inspector_protocol_config.json), and MarkSecretField and MarkFocusedField in agent_snapshot_collector.mojom and agent_snapshot_collector_impl.*. agent_card_fields.cc now calls the card field rule in core/paint/agent_redaction/agent_field_rules, which redacted recordings share, and GetCdpCursorOverlay leaves out the overlay a video recording makes that does not draw on the window. And canvas-text-record's Page.agentCanvasText: its handler in page_handler.*, the command and its types in Page.pdl and on Blink's Page exclude list, and the read in agent_snapshot_collector.mojom and agent_snapshot_collector_impl.*.
 ---
  .../devtools/protocol/agent_id_space.cc       |  1062 ++
  .../devtools/protocol/agent_id_space.h        |   409 +
- .../browser/devtools/protocol/page_handler.cc |  5910 ++++++-
- .../browser/devtools/protocol/page_handler.h  |   295 +
+ .../browser/devtools/protocol/page_handler.cc |  6280 +++++++-
+ .../browser/devtools/protocol/page_handler.h  |   309 +
  .../browser/devtools/protocol/settle_join.cc  |  1321 ++
  .../browser/devtools/protocol/settle_join.h   |   402 +
- .../public/devtools_protocol/domains/Page.pdl |  1185 ++
+ .../public/devtools_protocol/domains/Page.pdl |  1353 ++
  third_party/blink/public/mojom/BUILD.gn       |     3 +
- .../agent_snapshot_collector.mojom            |  1479 ++
+ .../agent_snapshot_collector.mojom            |  1566 ++
  .../core/frame/web_frame_widget_impl.cc       |    35 +
  .../core/frame/web_frame_widget_impl.h        |    13 +
  .../inspector/inspector_protocol_config.json  |     2 +-
@@ -35,14 +35,14 @@ Riders: the settle (agentSettleArm/agentSettle, AgentSettleWatcher, loader inter
  .../agent_snapshot/agent_live_regions.h       |   122 +
  .../agent_snapshot/agent_settle_watcher.cc    |  2489 +++
  .../agent_snapshot/agent_settle_watcher.h     |   528 +
- .../agent_snapshot_collector_impl.cc          | 12926 ++++++++++++++++
- .../agent_snapshot_collector_impl.h           |   352 +
+ .../agent_snapshot_collector_impl.cc          | 13200 ++++++++++++++++
+ .../agent_snapshot_collector_impl.h           |   366 +
  .../renderer/modules/modules_initializer.cc   |    10 +
  .../platform/loader/fetch/fetch_context.h     |     7 +
  .../platform/loader/fetch/resource_fetcher.cc |    71 +
  .../platform/loader/fetch/resource_fetcher.h  |    32 +
  .../platform/loader/fetch/resource_loader.h   |    20 +
- 32 files changed, 30324 insertions(+), 21 deletions(-)
+ 32 files changed, 31270 insertions(+), 2 deletions(-)
  create mode 100644 content/browser/devtools/protocol/agent_id_space.cc
  create mode 100644 content/browser/devtools/protocol/agent_id_space.h
  create mode 100644 content/browser/devtools/protocol/settle_join.cc
@@ -1545,10 +1545,10 @@ index 0000000000..c3a406ac95
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_AGENT_ID_SPACE_H_
 diff --git a/content/browser/devtools/protocol/page_handler.cc b/content/browser/devtools/protocol/page_handler.cc
-index c750e9a4e2..5505ea327d 100644
+index d9a6aaa5e3..0fe3d36801 100644
 --- a/content/browser/devtools/protocol/page_handler.cc
 +++ b/content/browser/devtools/protocol/page_handler.cc
-@@ -5,23 +5,35 @@
+@@ -5,23 +5,36 @@
  #include "content/browser/devtools/protocol/page_handler.h"
  
  #include <algorithm>
@@ -1565,6 +1565,7 @@ index c750e9a4e2..5505ea327d 100644
  
 +#include "base/barrier_closure.h"
  #include "base/check_op.h"
++#include "base/command_line.h"
 +#include "base/containers/flat_map.h"
 +#include "base/containers/flat_set.h"
  #include "base/functional/bind.h"
@@ -1584,13 +1585,14 @@ index c750e9a4e2..5505ea327d 100644
  #include "base/strings/to_string.h"
  #include "base/strings/utf_string_conversions.h"
  #include "base/task/sequenced_task_runner.h"
-@@ -30,24 +42,37 @@
+@@ -30,24 +43,39 @@
  #include "base/threading/thread_restrictions.h"
  #include "base/timer/timer.h"
  #include "base/trace_event/trace_event.h"
 +#include "cc/paint/paint_flags.h"
 +#include "cc/paint/skia_paint_canvas.h"
  #include "components/back_forward_cache/disabled_reason_id.h"
++#include "components/browser/browser_switches.h"
 +#include "components/viz/common/frame_sinks/copy_output_result.h"
  #include "content/browser/back_forward_cache/back_forward_cache_can_store_document_result.h"
  #include "content/browser/back_forward_cache/back_forward_cache_disable.h"
@@ -1616,13 +1618,14 @@ index c750e9a4e2..5505ea327d 100644
  #include "content/browser/renderer_host/navigation_entry_impl.h"
  #include "content/browser/renderer_host/navigation_request.h"
  #include "content/browser/renderer_host/navigator.h"
++#include "content/browser/renderer_host/page_impl.h"
  #include "content/browser/renderer_host/render_frame_host_impl.h"
 +#include "content/browser/renderer_host/render_frame_proxy_host.h"
 +#include "content/browser/renderer_host/render_widget_host_delegate.h"
  #include "content/browser/renderer_host/render_widget_host_view_base.h"
  #include "content/browser/web_contents/web_contents_impl.h"
  #include "content/browser/web_contents/web_contents_view.h"
-@@ -55,18 +80,30 @@
+@@ -55,18 +83,31 @@
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/file_select_listener.h"
  #include "content/public/browser/navigation_controller.h"
@@ -1648,12 +1651,13 @@ index c750e9a4e2..5505ea327d 100644
 +#include "third_party/blink/public/common/input/web_input_event.h"
 +#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
  #include "third_party/blink/public/common/manifest/manifest_util.h"
++#include "third_party/blink/public/common/page/page_zoom.h"
 +#include "third_party/blink/public/common/tokens/tokens.h"
 +#include "third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom.h"
  #include "third_party/blink/public/mojom/back_forward_cache_not_restored_reasons.mojom.h"
  #include "third_party/blink/public/mojom/content_extraction/ai_page_content.mojom.h"
  #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom.h"
-@@ -75,14 +112,22 @@
+@@ -75,14 +116,22 @@
  #include "third_party/skia/include/core/SkBitmap.h"
  #include "third_party/skia/include/core/SkColor.h"
  #include "ui/base/page_transition_types.h"
@@ -1676,8 +1680,8 @@ index c750e9a4e2..5505ea327d 100644
  #include "ui/snapshot/snapshot.h"
  
  #if BUILDFLAG(IS_ANDROID)
-@@ -131,6 +176,259 @@ std::optional<std::vector<uint8_t>> EncodeBitmapAsWebp(int quality,
-   return gfx::WebpCodec::Encode(bitmap, quality);
+@@ -132,6 +181,259 @@ std::optional<std::vector<uint8_t>> EncodeBitmapAsWebp(int quality,
+   return gfx::WebpCodec::Encode(bitmap, quality, method);
  }
  
 +// browser: mark rendering for Page.captureAgentSnapshot. The browser draws
@@ -1936,7 +1940,7 @@ index c750e9a4e2..5505ea327d 100644
  std::variant<protocol::Response, BitmapEncoder>
  GetEncoder(const std::string& format, int quality, bool optimize_for_speed) {
    if (quality < 0 || quality > 100) {
-@@ -488,6 +786,306 @@ std::string GetFrameStartedNavigatingNavigationTypeString(
+@@ -508,6 +810,306 @@ std::string GetFrameStartedNavigatingNavigationTypeString(
        NOTREACHED();
    }
  }
@@ -2243,7 +2247,7 @@ index c750e9a4e2..5505ea327d 100644
  }  // namespace
  
  struct PageHandler::PendingScreenshotRequest {
-@@ -507,6 +1105,544 @@ struct PageHandler::PendingScreenshotRequest {
+@@ -527,6 +1129,569 @@ struct PageHandler::PendingScreenshotRequest {
    gfx::Size requested_image_size;
  };
  
@@ -2761,6 +2765,31 @@ index c750e9a4e2..5505ea327d 100644
 +  ~AgentAnnouncementsRequest() = default;
 +};
 +
++// browser: a Page.agentCanvasText call: the local roots asked, each with its
++// reply, and the remotes kept until every reply or the deadline.
++struct PageHandler::AgentCanvasTextRequest
++    : public base::RefCounted<PageHandler::AgentCanvasTextRequest> {
++  struct Frame {
++    base::WeakPtr<RenderFrameHostImpl> rfh;
++    std::string frame_id;
++    bool answered = false;
++    blink::mojom::AgentCanvasTextReplyPtr reply;
++  };
++
++  AgentCanvasTextRequest() = default;
++
++  std::unique_ptr<AgentCanvasTextCallback> callback;
++  GlobalRenderFrameHostId root_id;
++  blink::DocumentToken root_document;
++  bool in_view = false;
++  std::vector<Frame> frames;
++  std::vector<mojo::Remote<blink::mojom::AgentSnapshotCollector>> collectors;
++
++ private:
++  friend class base::RefCounted<PageHandler::AgentCanvasTextRequest>;
++  ~AgentCanvasTextRequest() = default;
++};
++
 +// browser: a capture whose image waits for Page.agentFinishCapture: the
 +// full-resolution copy with what is blacked whatever matches -- cut to the
 +// clip when one was asked for -- its marks in DIPs, and what the matcher may
@@ -2788,7 +2817,7 @@ index c750e9a4e2..5505ea327d 100644
  PageHandler::PageHandler(
      DevToolsIOContext* io_context,
      EmulationHandler* emulation_handler,
-@@ -585,6 +1721,11 @@ void PageHandler::SetRenderer(int process_host_id,
+@@ -605,6 +1770,11 @@ void PageHandler::SetRenderer(int process_host_id,
    if (frame_host) {
      video_consumer_->SetFrameSinkId(
          frame_host->GetRenderWidgetHost()->GetFrameSinkId());
@@ -2800,7 +2829,7 @@ index c750e9a4e2..5505ea327d 100644
    }
  }
  
-@@ -732,6 +1873,11 @@ Response PageHandler::Disable() {
+@@ -756,6 +1926,11 @@ Response PageHandler::Disable() {
    }
    pending_downloads_.clear();
    navigate_callbacks_.clear();
@@ -2812,7 +2841,7 @@ index c750e9a4e2..5505ea327d 100644
    SetPrerenderingAllowed(true);
  
    return Response::FallThrough();
-@@ -840,6 +1986,8 @@ void PageHandler::Reload(std::optional<bool> bypassCache,
+@@ -864,6 +2039,8 @@ void PageHandler::Reload(std::optional<bool> bypassCache,
                           std::optional<std::string> script_to_evaluate_on_load,
                           std::optional<std::string> loader_id,
                           std::unique_ptr<ReloadCallback> callback) {
@@ -2821,7 +2850,7 @@ index c750e9a4e2..5505ea327d 100644
    Response response = AssureTopLevelActiveFrame();
    if (response.IsError()) {
      callback->sendFailure(response);
-@@ -994,6 +2142,8 @@ void PageHandler::Navigate(const std::string& url,
+@@ -1018,6 +2195,8 @@ void PageHandler::Navigate(const std::string& url,
                             std::optional<std::string> frame_id,
                             std::optional<std::string> referrer_policy,
                             std::unique_ptr<NavigateCallback> callback) {
@@ -2830,7 +2859,7 @@ index c750e9a4e2..5505ea327d 100644
    GURL gurl(url);
    if (!gurl.is_valid()) {
      callback->sendFailure(
-@@ -1324,6 +2474,8 @@ Response PageHandler::GetNavigationHistory(
+@@ -1309,6 +2488,8 @@ Response PageHandler::GetNavigationHistory(
  }
  
  Response PageHandler::NavigateToHistoryEntry(int entry_id) {
@@ -2839,7 +2868,7 @@ index c750e9a4e2..5505ea327d 100644
    Response response = AssureTopLevelActiveFrame();
    if (response.IsError()) {
      return response;
-@@ -1348,6 +2500,56 @@ Response PageHandler::NavigateToHistoryEntry(int entry_id) {
+@@ -1333,6 +2514,56 @@ Response PageHandler::NavigateToHistoryEntry(int entry_id) {
    return Response::InvalidParams("No entry with passed id");
  }
  
@@ -2896,7 +2925,7 @@ index c750e9a4e2..5505ea327d 100644
  static bool ReturnTrue(NavigationEntry* entry) {
    return true;
  }
-@@ -1697,6 +2899,12 @@ Response PageHandler::StartScreencast(std::optional<std::string> format,
+@@ -1682,6 +2913,12 @@ Response PageHandler::StartScreencast(std::optional<std::string> format,
      video_consumer_->SetMinAndMaxFrameSize(snapshot_size, snapshot_size);
    }
  
@@ -2909,7 +2938,7 @@ index c750e9a4e2..5505ea327d 100644
    video_consumer_->StartCapture();
  
    return Response::Success();
-@@ -1769,6 +2977,8 @@ void PageHandler::OnMediaRecorderFlushed() {
+@@ -1754,6 +2991,8 @@ void PageHandler::OnMediaRecorderFlushed() {
  
  Response PageHandler::StopScreencast() {
    screencast_encoder_.Reset();
@@ -2918,7 +2947,7 @@ index c750e9a4e2..5505ea327d 100644
    last_frame_metadata_.reset();
    last_frame_ = SkBitmap();
    if (video_consumer_) {
-@@ -1781,10 +2991,95 @@ Response PageHandler::ScreencastFrameAck(int session_id) {
+@@ -1766,10 +3005,95 @@ Response PageHandler::ScreencastFrameAck(int session_id) {
    if (session_id == session_id_) {
      --frames_in_flight_;
      MaybeSendLastScreencastFrame();
@@ -2926,10 +2955,10 @@ index c750e9a4e2..5505ea327d 100644
 +    if (screencast_cursor_owed_) {
 +      video_consumer_->RequestRefreshFrame();
 +    }
-+  }
-+  return Response::Success();
-+}
-+
+   }
+   return Response::Success();
+ }
+ 
 +// browser: Page.startFrameStream. The stream belongs to this session, so a
 +// viewer that attaches its own session to stream through cannot be stopped by
 +// the automation's Page.disable, and is cleaned up when it detaches.
@@ -2954,7 +2983,7 @@ index c750e9a4e2..5505ea327d 100644
 +  Response response = AssureTopLevelActiveFrame();
 +  if (response.IsError()) {
 +    return response;
-   }
++  }
 +  RenderWidgetHostImpl* widget_host = host_->GetRenderWidgetHost();
 +  if (!widget_host) {
 +    return Response::InternalError();
@@ -2998,9 +3027,9 @@ index c750e9a4e2..5505ea327d 100644
 +
 +Response PageHandler::StopFrameStream() {
 +  frame_stream_.reset();
-   return Response::Success();
- }
- 
++  return Response::Success();
++}
++
 +// browser: the page's size in physical pixels, for the frame stream.
 +gfx::Size PageHandler::FrameStreamSurfaceSize() {
 +  if (!host_) {
@@ -3014,7 +3043,7 @@ index c750e9a4e2..5505ea327d 100644
  Response PageHandler::HandleJavaScriptDialog(
      bool accept,
      std::optional<std::string> prompt_text) {
-@@ -1837,6 +3132,34 @@ Response PageHandler::BringToFront() {
+@@ -1822,6 +3146,34 @@ Response PageHandler::BringToFront() {
    return Response::Success();
  }
  
@@ -3049,7 +3078,7 @@ index c750e9a4e2..5505ea327d 100644
  Response PageHandler::SetDownloadBehavior(
      const std::string& behavior,
      std::optional<std::string> download_path) {
-@@ -1893,6 +3216,11 @@ void PageHandler::OnFrameFromVideoConsumer(
+@@ -1878,6 +3230,11 @@ void PageHandler::OnFrameFromVideoConsumer(
    }
  
    if (++frame_counter_ % capture_every_nth_frame_) {
@@ -3061,7 +3090,7 @@ index c750e9a4e2..5505ea327d 100644
      return;
    }
  
-@@ -1966,6 +3294,20 @@ void PageHandler::SendScreencastFrame(
+@@ -1951,6 +3308,20 @@ void PageHandler::SendScreencastFrame(
      std::unique_ptr<Page::ScreencastFrameMetadata> page_metadata,
      const SkBitmap& bitmap) {
    frames_in_flight_++;
@@ -3082,7 +3111,7 @@ index c750e9a4e2..5505ea327d 100644
    base::ThreadPool::PostTaskAndReplyWithResult(
        FROM_HERE, {base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
        base::BindOnce(
-@@ -1973,11 +3315,29 @@ void PageHandler::SendScreencastFrame(
+@@ -1958,11 +3329,29 @@ void PageHandler::SendScreencastFrame(
               BitmapEncoder encoder) -> std::optional<std::vector<uint8_t>> {
              return encoder.Run(bitmap);
            },
@@ -3113,42 +3142,28 @@ index c750e9a4e2..5505ea327d 100644
  void PageHandler::ScreencastFrameEncoded(
      std::unique_ptr<Page::ScreencastFrameMetadata> page_metadata,
      std::optional<std::vector<uint8_t>> data) {
-@@ -2034,36 +3394,4546 @@ void PageHandler::ScreenshotCaptured(
-   request->callback->sendSuccess(Binary());
+@@ -2022,6 +3411,4879 @@ void PageHandler::ScreenshotCaptured(
+       Response::ServerError("Unable to encode screenshot"));
  }
  
--Response PageHandler::StopLoading() {
--  ResponseOrWebContents result = GetWebContentsForTopLevelActiveFrame();
 +namespace {
- 
--  if (std::holds_alternative<Response>(result)) {
--    return std::get<Response>(result);
++
 +blink::mojom::AgentOffscreenMode AgentOffscreenModeFromString(
 +    const std::optional<std::string>& mode) {
 +  if (mode == Page::CaptureAgentSnapshot::OffscreenModeEnum::None) {
 +    return blink::mojom::AgentOffscreenMode::kNone;
-   }
++  }
 +  if (mode == Page::CaptureAgentSnapshot::OffscreenModeEnum::Full) {
 +    return blink::mojom::AgentOffscreenMode::kFull;
 +  }
 +  return blink::mojom::AgentOffscreenMode::kSummary;
 +}
- 
--  WebContentsImpl* web_contents = std::get<WebContentsImpl*>(result);
--  web_contents->Stop();
--  return Response::Success();
++
 +void SendAgentNodeNotFound(Page::Backend::ResolveAgentNodeCallback& callback) {
 +  callback.sendSuccess(/*found=*/false, std::nullopt, std::nullopt,
 +                       std::nullopt, std::nullopt, std::nullopt, std::nullopt);
- }
- 
--Response PageHandler::SetWebLifecycleState(const std::string& state) {
--  // Inactive pages(e.g., a prerendered or back-forward cached page) should not
--  // affect the state.
--  ResponseOrWebContents result = GetWebContentsForTopLevelActiveFrame();
--  if (std::holds_alternative<Response>(result)) {
--    return std::get<Response>(result);
--  }
++}
++
 +// browser: a local root that shows under this share of the view gives
 +// the page no layer, nor names one (the renderer's own gate, kLayerFrameShare):
 +// the capture, the report and the id check agree on the stack.
@@ -3166,12 +3181,7 @@ index c750e9a4e2..5505ea327d 100644
 +  raw_ptr<const blink::mojom::AgentFrameSnapshot> snapshot = nullptr;
 +  bool shows = true;
 +};
- 
--  WebContentsImpl* web_contents = std::get<WebContentsImpl*>(result);
--  if (state == Page::SetWebLifecycleState::StateEnum::Frozen) {
--    // TODO(fmeawad): Instead of forcing a visibility change, only allow
--    // freezing a page if it was already hidden.
--    web_contents->WasHidden();
++
 +// browser: the page's stack, bottom to top.
 +struct PageLayers {
 +  struct Entry {
@@ -6636,6 +6646,385 @@ index c750e9a4e2..5505ea327d 100644
 +                        std::move(changes.reworded));
 +}
 +
++// browser: Page.agentCanvasText's runs and characters (UTF-16 units) in all,
++// past either runsCut; and its fills, past it fillsCut.
++constexpr int kAgentCanvasMaxRuns = 50000;
++constexpr int kAgentCanvasMaxChars = 500000;
++constexpr int kAgentCanvasMaxFills = 50000;
++
++// browser: the UTF-16 units of UTF-8 text, as the renderer counts a run's
++// characters: one per code point, two for one past U+FFFF (a lead byte of
++// four).
++static size_t AgentUtf16Length(const std::string& utf8) {
++  size_t units = 0;
++  for (unsigned char c : utf8) {
++    if ((c & 0xC0) != 0x80) {
++      units += c >= 0xF0 ? 2 : 1;
++    }
++  }
++  return units;
++}
++
++// As InputHandler::ScaleFactor() takes it for the page's session, whose host
++// is the page's main frame: the browser zoom, the frame's CSS zoom (1 for
++// the main frame) and the pinch zoom.
++float PageHandler::AgentInputScale() const {
++  WebContentsImpl* contents =
++      host_ ? WebContentsImpl::FromRenderFrameHostImpl(host_) : nullptr;
++  if (!contents) {
++    return 1;
++  }
++  RenderWidgetHostImpl* widget_host =
++      host_->GetRenderWidgetHost()
++          ? host_->GetRenderWidgetHost()
++          : contents->GetPrimaryMainFrame()->GetRenderWidgetHost();
++  float scale =
++      blink::ZoomLevelToZoomFactor(contents->GetPendingZoomLevel(widget_host));
++  if (RenderWidgetHostImpl* own = host_->GetRenderWidgetHost()) {
++    if (RenderWidgetHostViewBase* view = own->GetView()) {
++      scale *= view->GetCSSZoomFactor();
++    }
++  }
++  scale *= contents->GetPrimaryPage().GetPageScaleFactor();
++  return scale > 0 ? scale : 1;
++}
++
++void PageHandler::AgentCanvasText(
++    std::optional<int> backend_node_id,
++    std::optional<std::string> frame_id,
++    std::optional<bool> in_view,
++    std::unique_ptr<AgentCanvasTextCallback> callback) {
++  if (!host_) {
++    callback->sendFailure(Response::InternalError());
++    return;
++  }
++  if (!CanExecuteGlobalCommands(this, callback)) {
++    return;
++  }
++  // Off unless the browser runs with the on switch: say so, never answer
++  // canvases with nothing on them.
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          switches::kEnableCanvasTextRecord)) {
++    callback->sendFailure(Response::ServerError(
++        "canvas text recording is off: start the browser with "
++        "--enable-canvas-text-record"));
++    return;
++  }
++  if (backend_node_id.has_value() != frame_id.has_value()) {
++    callback->sendFailure(Response::InvalidParams(
++        "backendNodeId and frameId are given together or not at all"));
++    return;
++  }
++  RenderFrameHostImpl* root = host_->frame_tree_node()->current_frame_host();
++  auto request = base::MakeRefCounted<AgentCanvasTextRequest>();
++  request->callback = std::move(callback);
++  request->root_id = root->GetGlobalId();
++  request->root_document = root->GetDocumentToken();
++  request->in_view = in_view.value_or(false);
++  // Every live local root; each renderer walks its same-process frames
++  // itself (perception invariant 1).
++  for (RenderFrameHostImpl* rfh : LiveLocalRoots(root)) {
++    std::string token = rfh->GetDevToolsFrameToken().ToString();
++    if (frame_id && token != *frame_id) {
++      continue;
++    }
++    AgentCanvasTextRequest::Frame frame;
++    frame.rfh = rfh->GetWeakPtr();
++    frame.frame_id = std::move(token);
++    request->frames.push_back(std::move(frame));
++  }
++  if (frame_id && request->frames.empty()) {
++    request->callback->sendFailure(Response::InvalidParams(
++        "frameId names no live local root of this page"));
++    return;
++  }
++  if (request->frames.empty()) {
++    OnAgentCanvasTextRead(std::move(request));
++    return;
++  }
++  base::RepeatingClosure barrier =
++      base::BarrierClosure(request->frames.size(),
++                           base::BindOnce(&PageHandler::OnAgentCanvasTextRead,
++                                          weak_factory_.GetWeakPtr(), request));
++  for (size_t i = 0; i < request->frames.size(); ++i) {
++    RenderFrameHostImpl* rfh = request->frames[i].rfh.get();
++    service_manager::InterfaceProvider* remotes =
++        rfh ? rfh->GetRemoteInterfaces() : nullptr;
++    if (!remotes) {
++      barrier.Run();
++      continue;
++    }
++    mojo::Remote<blink::mojom::AgentSnapshotCollector> collector;
++    remotes->GetInterface(collector.BindNewPipeAndPassReceiver());
++    // A dropped pipe still advances the barrier, unanswered.
++    collector->CanvasText(
++        backend_node_id.value_or(0), request->in_view, kAgentCanvasMaxRuns,
++        kAgentCanvasMaxChars, kAgentCanvasMaxFills,
++        mojo::WrapCallbackWithDropHandler(
++            base::BindOnce(
++                [](scoped_refptr<AgentCanvasTextRequest> request, size_t i,
++                   base::RepeatingClosure barrier,
++                   blink::mojom::AgentCanvasTextReplyPtr reply) {
++                  AgentCanvasTextRequest::Frame& frame = request->frames[i];
++                  frame.answered = true;
++                  frame.reply = std::move(reply);
++                  barrier.Run();
++                },
++                request, i, barrier),
++            barrier));
++    request->collectors.push_back(std::move(collector));
++  }
++  // A local root that misses the snapshot's deadline is left out, and named.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&PageHandler::OnAgentCanvasTextRead,
++                     weak_factory_.GetWeakPtr(), request),
++      kAgentCollectWait);
++}
++
++void PageHandler::OnAgentCanvasTextRead(
++    scoped_refptr<AgentCanvasTextRequest> request) {
++  if (!request->callback) {
++    return;
++  }
++  std::unique_ptr<AgentCanvasTextCallback> callback =
++      std::move(request->callback);
++  // The replies still out are dropped once this is answered.
++  std::vector<mojo::Remote<blink::mojom::AgentSnapshotCollector>> collectors =
++      std::move(request->collectors);
++  RenderFrameHostImpl* root = RenderFrameHostImpl::FromID(request->root_id);
++  if (!root || !host_ || root != host_ ||
++      root->frame_tree_node()->current_frame_host() != root ||
++      root->GetDocumentToken() != request->root_document) {
++    callback->sendFailure(
++        Response::ServerError("the page changed document during the read"));
++    return;
++  }
++  auto* root_view = static_cast<RenderWidgetHostViewBase*>(root->GetView());
++  if (!root_view) {
++    callback->sendFailure(Response::InternalError());
++    return;
++  }
++  const gfx::RectF root_viewport(
++      gfx::SizeF(root_view->GetVisibleViewportSize()));
++  // Root DIPs to Input.moveTo's space.
++  const float scale = AgentInputScale();
++  const auto point = [scale](const gfx::PointF& root_dips) {
++    return Page::AgentCanvasPoint::Create()
++        .SetX(root_dips.x() / scale)
++        .SetY(root_dips.y() / scale)
++        .Build();
++  };
++  const auto points = [&](const std::vector<gfx::PointF>& root_dips) {
++    auto out = std::make_unique<protocol::Array<Page::AgentCanvasPoint>>();
++    for (const gfx::PointF& p : root_dips) {
++      out->emplace_back(point(p));
++    }
++    return out;
++  };
++  const auto bounds_of = [](const std::vector<gfx::PointF>& corners) {
++    gfx::RectF bounds(corners.empty() ? gfx::PointF() : corners[0],
++                      gfx::SizeF());
++    for (const gfx::PointF& p : corners) {
++      bounds.UnionEvenIfEmpty(gfx::RectF(p, gfx::SizeF()));
++    }
++    return bounds;
++  };
++
++  auto canvases = std::make_unique<protocol::Array<Page::AgentCanvas>>();
++  auto left_out = std::make_unique<protocol::Array<std::string>>();
++  int runs_cut = 0;
++  int runs_total = 0;
++  int chars_total = 0;
++  int fills_cut = 0;
++  int fills_total = 0;
++  // Edges included, so a run of no width that shows counts.
++  const auto meets = [](const gfx::RectF& b, const gfx::RectF& s) {
++    return !s.IsEmpty() && b.x() <= s.right() && s.x() <= b.right() &&
++           b.y() <= s.bottom() && s.y() <= b.bottom();
++  };
++  for (AgentCanvasTextRequest::Frame& frame : request->frames) {
++    RenderFrameHostImpl* rfh = frame.rfh.get();
++    RenderWidgetHostViewBase* view =
++        rfh && rfh->IsRenderFrameLive() ? rfh->GetView() : nullptr;
++    if (!frame.answered || !frame.reply || !view) {
++      left_out->push_back(frame.frame_id);
++      continue;
++    }
++    // What the page shows of this local root, and, for a frame of another
++    // process the page shows nothing of, its place by the frames' rects (the
++    // compositor may have no transform for it), as the snapshot places it.
++    gfx::RectF frame_shown = ShownPartInRoot(*rfh);
++    frame_shown.Intersect(root_viewport);
++    std::optional<gfx::Vector2dF> by_rects;
++    if (frame_shown.IsEmpty() && !rfh->is_main_frame()) {
++      RenderFrameHostImpl* parent = rfh->GetParent();
++      while (parent && !parent->is_local_root()) {
++        parent = parent->GetParent();
++      }
++      if (parent && !parent->is_main_frame() &&
++          ShownPartInRoot(*parent).IsEmpty()) {
++        by_rects = OffsetByRects(*rfh, nullptr);
++        if (!by_rects) {
++          left_out->push_back(frame.frame_id);
++          continue;
++        }
++      }
++    }
++    // Each point on its own, never by bounding box: a rotated frame keeps
++    // its runs' shapes.
++    const auto to_root = [&](const gfx::PointF& local) {
++      return by_rects ? local + *by_rects
++                      : view->TransformPointToRootCoordSpaceF(local);
++    };
++    const auto quad_to_root = [&](const std::vector<gfx::PointF>& local) {
++      std::vector<gfx::PointF> out;
++      out.reserve(local.size());
++      for (const gfx::PointF& p : local) {
++        out.push_back(to_root(p));
++      }
++      return out;
++    };
++    // A renderer's counts: none is negative, and the sums stay in range.
++    runs_cut = base::ClampAdd(runs_cut, std::max(0, frame.reply->runs_cut));
++    fills_cut = base::ClampAdd(fills_cut, std::max(0, frame.reply->fills_cut));
++    for (const blink::mojom::AgentCanvasPtr& canvas : frame.reply->canvases) {
++      gfx::RectF shown;
++      std::vector<gfx::PointF> canvas_quad;
++      if (canvas->has_box && canvas->quad.size() == 4) {
++        canvas_quad = quad_to_root(canvas->quad);
++        if (!canvas->shown.IsEmpty()) {
++          const gfx::RectF& part = canvas->shown;
++          shown = bounds_of(
++              quad_to_root({part.origin(), part.top_right(),
++                            part.bottom_right(), part.bottom_left()}));
++          shown.Intersect(frame_shown);
++        }
++      }
++      // The runs and fills answered: with in_view, those that meet the shown
++      // part; within the answer's caps, each canvas's newest (the renderer
++      // sends them oldest first), characters counted in UTF-16 units as the
++      // renderer counts them.
++      std::vector<std::vector<gfx::PointF>> run_quads(canvas->runs.size());
++      for (size_t i = canvas->runs.size(); i > 0; --i) {
++        const blink::mojom::AgentCanvasRunPtr& run = canvas->runs[i - 1];
++        if (run->quad.size() != 4) {
++          continue;
++        }
++        std::vector<gfx::PointF> quad = quad_to_root(run->quad);
++        if (request->in_view && !meets(bounds_of(quad), shown)) {
++          continue;
++        }
++        const int length = static_cast<int>(AgentUtf16Length(run->text));
++        if (runs_total >= kAgentCanvasMaxRuns ||
++            chars_total + length > kAgentCanvasMaxChars) {
++          ++runs_cut;
++          continue;
++        }
++        ++runs_total;
++        chars_total += length;
++        run_quads[i - 1] = std::move(quad);
++      }
++      std::vector<std::vector<gfx::PointF>> fill_quads(canvas->fills.size());
++      for (size_t i = canvas->fills.size(); i > 0; --i) {
++        const blink::mojom::AgentCanvasFillPtr& fill = canvas->fills[i - 1];
++        if (fill->quad.size() != 4) {
++          continue;
++        }
++        std::vector<gfx::PointF> quad = quad_to_root(fill->quad);
++        if (request->in_view && !meets(bounds_of(quad), shown)) {
++          continue;
++        }
++        if (fills_total >= kAgentCanvasMaxFills) {
++          ++fills_cut;
++          continue;
++        }
++        ++fills_total;
++        fill_quads[i - 1] = std::move(quad);
++      }
++      auto runs = std::make_unique<protocol::Array<Page::AgentCanvasRun>>();
++      for (size_t i = 0; i < canvas->runs.size(); ++i) {
++        if (run_quads[i].empty()) {
++          continue;  // left out above
++        }
++        const blink::mojom::AgentCanvasRunPtr& run = canvas->runs[i];
++        const std::vector<gfx::PointF>& quad = run_quads[i];
++        auto advances = std::make_unique<protocol::Array<double>>(
++            run->advances.begin(), run->advances.end());
++        std::unique_ptr<Page::AgentCanvasRun> out =
++            Page::AgentCanvasRun::Create()
++                .SetText(run->text)
++                .SetFont(run->font)
++                .SetColor(run->color)
++                .SetAlpha(run->alpha)
++                .SetStroke(run->stroke)
++                .SetDirection(run->rtl ? "rtl" : "ltr")
++                .SetBidi(run->bidi)
++                .SetBaseline(Page::AgentCanvasBaseline::Create()
++                                 .SetStart(point(to_root(run->start)))
++                                 .SetEnd(point(to_root(run->end)))
++                                 .Build())
++                .SetWidth(run->width)
++                .SetAdvances(std::move(advances))
++                .SetQuad(points(quad))
++                .SetExact(run->inexact.empty())
++                .Build();
++        if (!run->inexact.empty()) {
++          out->SetInexact(run->inexact);
++        }
++        runs->emplace_back(std::move(out));
++      }
++      auto fills = std::make_unique<protocol::Array<Page::AgentCanvasFill>>();
++      for (size_t i = 0; i < canvas->fills.size(); ++i) {
++        if (fill_quads[i].empty()) {
++          continue;  // left out above
++        }
++        const blink::mojom::AgentCanvasFillPtr& fill = canvas->fills[i];
++        const std::vector<gfx::PointF>& quad = fill_quads[i];
++        std::unique_ptr<Page::AgentCanvasFill> out =
++            Page::AgentCanvasFill::Create()
++                .SetQuad(points(quad))
++                .SetColor(fill->color)
++                .SetAlpha(fill->alpha)
++                .SetExact(fill->inexact.empty())
++                .Build();
++        if (!fill->inexact.empty()) {
++          out->SetInexact(fill->inexact);
++        }
++        fills->emplace_back(std::move(out));
++      }
++      std::unique_ptr<Page::AgentCanvas> entry =
++          Page::AgentCanvas::Create()
++              .SetBackendNodeId(canvas->node_id)
++              .SetFrameId(canvas->frame_id)
++              .SetLocalRootFrameId(frame.frame_id)
++              .SetContext(canvas->context)
++              .SetExact(canvas->exact)
++              .SetTruncated(canvas->truncated)
++              .SetRuns(std::move(runs))
++              .SetFills(std::move(fills))
++              .Build();
++      if (canvas->recorded) {
++        entry->SetRecordBytes(static_cast<double>(canvas->record_bytes));
++        entry->SetRecordPeakBytes(
++            static_cast<double>(canvas->record_peak_bytes));
++      }
++      if (canvas->has_box && canvas_quad.size() == 4) {
++        entry->SetQuad(points(canvas_quad));
++        entry->SetShownRect(Page::AgentCanvasRect::Create()
++                                .SetX(shown.x() / scale)
++                                .SetY(shown.y() / scale)
++                                .SetWidth(shown.width() / scale)
++                                .SetHeight(shown.height() / scale)
++                                .Build());
++      }
++      canvases->emplace_back(std::move(entry));
++    }
++  }
++  callback->sendSuccess(std::move(canvases), std::move(left_out), runs_cut,
++                        fills_cut);
++}
++
 +// browser: a call answered from the page, once: by its reply, which
 +// carries this through each step, or, when none has come within
 +// kAgentCollectWait, by the deadline, after which a reply finds no
@@ -7630,30 +8019,13 @@ index c750e9a4e2..5505ea327d 100644
 +  return report;
 +}
 +
-+Response PageHandler::StopLoading() {
-+  ResponseOrWebContents result = GetWebContentsForTopLevelActiveFrame();
-+
-+  if (std::holds_alternative<Response>(result)) {
-+    return std::get<Response>(result);
-+  }
-+
-+  WebContentsImpl* web_contents = std::get<WebContentsImpl*>(result);
-+  web_contents->Stop();
-+  return Response::Success();
-+}
-+
-+Response PageHandler::SetWebLifecycleState(const std::string& state) {
-+  // Inactive pages(e.g., a prerendered or back-forward cached page) should not
-+  // affect the state.
-+  ResponseOrWebContents result = GetWebContentsForTopLevelActiveFrame();
-+  if (std::holds_alternative<Response>(result)) {
-+    return std::get<Response>(result);
-+  }
-+
-+  WebContentsImpl* web_contents = std::get<WebContentsImpl*>(result);
-+  if (state == Page::SetWebLifecycleState::StateEnum::Frozen) {
-+    // TODO(fmeawad): Instead of forcing a visibility change, only allow
-+    // freezing a page if it was already hidden.
+ Response PageHandler::StopLoading() {
+   ResponseOrWebContents result = GetWebContentsForTopLevelActiveFrame();
+ 
+@@ -2046,12 +8308,28 @@ Response PageHandler::SetWebLifecycleState(const std::string& state) {
+   if (state == Page::SetWebLifecycleState::StateEnum::Frozen) {
+     // TODO(fmeawad): Instead of forcing a visibility change, only allow
+     // freezing a page if it was already hidden.
 +    //
 +    // browser: the forced hide is remembered, because nothing else undoes it.
 +    // A headed window's native view reports the page visible again at its
@@ -7661,7 +8033,7 @@ index c750e9a4e2..5505ea327d 100644
 +    // stay hidden after `active`: no BeginFrames, no rAF, timers throttled,
 +    // and nothing drawn until a capture forced a frame.
 +    hidden_to_freeze_ = web_contents->GetVisibility() == Visibility::VISIBLE;
-+    web_contents->WasHidden();
+     web_contents->WasHidden();
      web_contents->SetPageFrozen(true);
 +    page_frozen_ = true;
      return Response::Success();
@@ -7680,7 +8052,7 @@ index c750e9a4e2..5505ea327d 100644
    }
    return Response::ServerError("Unidentified lifecycle state");
 diff --git a/content/browser/devtools/protocol/page_handler.h b/content/browser/devtools/protocol/page_handler.h
-index 26067a3b45..93efd89e20 100644
+index 5f35af09a8..337c2919b4 100644
 --- a/content/browser/devtools/protocol/page_handler.h
 +++ b/content/browser/devtools/protocol/page_handler.h
 @@ -13,7 +13,11 @@
@@ -7750,7 +8122,7 @@ index 26067a3b45..93efd89e20 100644
    Response ResetNavigationHistory() override;
  
    void CaptureScreenshot(
-@@ -158,6 +179,68 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -158,6 +179,75 @@ class PageHandler : public DevToolsDomainHandler,
        std::optional<bool> capture_beyond_viewport,
        std::optional<bool> optimize_for_speed,
        std::unique_ptr<CaptureScreenshotCallback> callback) override;
@@ -7816,10 +8188,17 @@ index 26067a3b45..93efd89e20 100644
 +                   std::optional<bool> report,
 +                   std::optional<bool> controls,
 +                   std::unique_ptr<AgentSettleCallback> callback) override;
++  // browser: the text and fills the page's 2D canvases show; see
++  // Page.pdl.
++  void AgentCanvasText(
++      std::optional<int> backend_node_id,
++      std::optional<std::string> frame_id,
++      std::optional<bool> in_view,
++      std::unique_ptr<AgentCanvasTextCallback> callback) override;
    void CaptureSnapshot(
        std::optional<std::string> format,
        std::unique_ptr<CaptureSnapshotCallback> callback) override;
-@@ -178,6 +261,20 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -178,6 +268,20 @@ class PageHandler : public DevToolsDomainHandler,
    void OnMediaRecorderFlushed();
    Response StopScreencast() override;
    Response ScreencastFrameAck(int session_id) override;
@@ -7840,7 +8219,7 @@ index 26067a3b45..93efd89e20 100644
  
    Response HandleJavaScriptDialog(
        bool accept,
-@@ -231,6 +328,180 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -228,6 +332,187 @@ class PageHandler : public DevToolsDomainHandler,
   private:
    struct PendingScreenshotRequest;
  
@@ -7858,6 +8237,13 @@ index 26067a3b45..93efd89e20 100644
 +                             bool nodes);
 +  void OnAgentAnnouncementsRead(
 +      scoped_refptr<AgentAnnouncementsRequest> request);
++  // browser: Page.agentCanvasText, answered once every local root asked
++  // has replied or kAgentCollectWait has passed.
++  struct AgentCanvasTextRequest;
++  void OnAgentCanvasTextRead(scoped_refptr<AgentCanvasTextRequest> request);
++  // browser: the scale Input.moveTo's points are taken at (its
++  // ScaleFactor(): browser zoom, the frame's CSS zoom, pinch).
++  float AgentInputScale() const;
 +  // browser: Page.agentReport: its parts asked (once more after a
 +  // closing layer's animation), then answered.
 +  struct AgentReportRequest;
@@ -8021,7 +8407,7 @@ index 26067a3b45..93efd89e20 100644
    using BitmapEncoder =
        base::RepeatingCallback<std::optional<std::vector<uint8_t>>(
            const SkBitmap& bitmap)>;
-@@ -248,6 +519,10 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -245,6 +530,10 @@ class PageHandler : public DevToolsDomainHandler,
    void SendScreencastFrame(
        std::unique_ptr<Page::ScreencastFrameMetadata> metadata,
        const SkBitmap& bitmap);
@@ -8032,7 +8418,7 @@ index 26067a3b45..93efd89e20 100644
    void ScreencastFrameEncoded(
        std::unique_ptr<Page::ScreencastFrameMetadata> metadata,
        std::optional<std::vector<uint8_t>> data);
-@@ -298,7 +573,21 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -295,7 +584,21 @@ class PageHandler : public DevToolsDomainHandler,
    // and provides PageHandler with these frames via OnFrameFromVideoConsumer.
    // This is only used if Viz is enabled and if OS is not Android.
    std::unique_ptr<DevToolsVideoConsumer> video_consumer_;
@@ -8054,7 +8440,7 @@ index 26067a3b45..93efd89e20 100644
  
    // The last surface size used to determine if frames with new sizes need
    // to be requested. This changes due to window resizing.
-@@ -332,6 +621,12 @@ class PageHandler : public DevToolsDomainHandler,
+@@ -329,6 +632,12 @@ class PageHandler : public DevToolsDomainHandler,
        std::optional<bool> include_command_line_api,
        std::string* identifier);
  
@@ -9803,10 +10189,10 @@ index 0000000000..0846999d13
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_PROTOCOL_SETTLE_JOIN_H_
 diff --git a/third_party/blink/public/devtools_protocol/domains/Page.pdl b/third_party/blink/public/devtools_protocol/domains/Page.pdl
-index 20b5db99c3..767f7ebc81 100644
+index 536ffb67b5..486626a4c2 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Page.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Page.pdl
-@@ -605,6 +605,1168 @@ domain Page
+@@ -602,6 +602,1336 @@ domain Page
        # Base64-encoded image data.
        binary data
  
@@ -10637,6 +11023,174 @@ index 20b5db99c3..767f7ebc81 100644
 +      # otherwise. Names the session that can resolve backendNodeId.
 +      optional FrameId localRootFrameId
 +
++  # browser: a point in the space Input.moveTo's x and y take: the page's
++  # root view in DIPs, divided by the browser zoom, the embedding frame's CSS
++  # zoom and the pinch zoom. A point agentCanvasText answers can be passed to
++  # Input.moveTo as it is.
++  experimental type AgentCanvasPoint extends object
++    properties
++      number x
++      number y
++
++  # browser: a rectangle in AgentCanvasPoint's space.
++  experimental type AgentCanvasRect extends object
++    properties
++      number x
++      number y
++      number width
++      number height
++
++  # browser: a run's baseline, from its left end to its right end. Left is
++  # the text's own left (before the canvas transform), whatever the
++  # direction: under a half turn it is on the screen's right.
++  experimental type AgentCanvasBaseline extends object
++    properties
++      AgentCanvasPoint start
++      AgentCanvasPoint end
++
++  # browser: a text draw a 2D canvas still shows (agentCanvasText).
++  experimental type AgentCanvasRun extends object
++    properties
++      # The string drawn (for fillTextCluster and strokeTextCluster, the
++      # drawn substring), format characters included. A cluster draw is
++      # shaped at read time as that substring alone, so one of a joining
++      # script (Arabic, say) or with kerning across its edges may read
++      # fontChanged.
++      string text
++      # The font the draw used (for a cluster draw, the cluster's font),
++      # written from its description as the font getter writes one: style,
++      # weight, small-caps, computed size and families.
++      string font
++      # The style as fillStyle or strokeStyle would give it now, or
++      # gradient, pattern.
++      string color
++      # globalAlpha at the draw.
++      number alpha
++      # strokeText or strokeTextCluster.
++      boolean stroke
++      # ltr or rtl, as resolved for the draw.
++      string direction
++      # The run holds more than one direction.
++      boolean bidi
++      AgentCanvasBaseline baseline
++      # The advance width, in the text's own units (after letterSpacing,
++      # wordSpacing, kerning and the maxWidth squeeze).
++      number width
++      # For every UTF-16 boundary from 0 to the text's length, the distance
++      # from the left end to that boundary's caret position, in the units of
++      # width; code units inside one cluster share a distance. For ltr text
++      # advances[0] is 0, for rtl text it is width. The point of boundary i
++      # is start + (end - start) * advances[i] / width; with width 0, start.
++      array of number advances
++      # The run's box (left end to right end along the baseline, the font's
++      # ascent above it to its descent below): left-top, right-top,
++      # right-bottom, left-bottom. A run of no width (marks only) has every
++      # boundary at start.
++      array of AgentCanvasPoint quad
++      boolean exact
++      # Why not exact, until the run is removed or drawn again:
++      # partlyCovered: a clear or an opaque fill covered part of its middle
++      # half (of what lies on the canvas).
++      # notFollowed: an operation the record does not follow crossed its
++      # middle half -- a path fill or wide stroke, strokeRect, an image,
++      # putImageData, a focus ring, anything drawn in a layer (a layer's end
++      # counts its whole clip, as a filter given to beginLayer may spread
++      # its draws anywhere in it), a draw under a shadow or a filter (a
++      # filter set but not yet used counts), another composite mode, a
++      # gradient or pattern fillRect. A straight stroke along an axis up to
++      # 3 px wide (an underline, a squiggle, a rule) counts only where it
++      # crosses the middle half, by the whole pixels it touches.
++      # fontChanged: the run shapes wider or narrower now than when drawn, or
++      # its font changed (a web font loaded, a FontFace came or went) before
++      # its first read; its advances are then the current shaping's, scaled
++      # to its width (spread evenly over it when nothing could be shaped),
++      # so every boundary's point stays in its box. Reading never starts a
++      # font load: a run whose font has not drawn since the page's fonts last
++      # changed (a web font came, went or loaded), or whose font's list holds
++      # a web font not loaded, is shaped with system fonts only, and reads
++      # fontChanged unless it used none of the page's web fonts.
++      optional string inexact
++
++  # browser: a fillRect a 2D canvas still shows (agentCanvasText), opaque
++  # ones included.
++  experimental type AgentCanvasFill extends object
++    properties
++      array of AgentCanvasPoint quad
++      string color
++      number alpha
++      boolean exact
++      # partlyCovered or notFollowed, as a run's, judged on the whole fill;
++      # a straight stroke up to 3 px wide (an underline drawn over a
++      # selection) never makes a fill inexact.
++      optional string inexact
++
++  # browser: a <canvas> element and what its 2D context still shows.
++  experimental type AgentCanvas extends object
++    properties
++      DOM.BackendNodeId backendNodeId
++      # Its own frame.
++      FrameId frameId
++      # Its local root, for agentHitCheck, Input.revealElement and this
++      # command's backendNodeId and frameId.
++      FrameId localRootFrameId
++      # 2d, webgl, webgpu, bitmaprenderer, offscreen (control transferred
++      # to an OffscreenCanvas) or none: a string, as "2d" is no identifier.
++      # Only 2d canvases carry runs and fills.
++      string context
++      # Its content box, as a run's quad; absent with no layout box.
++      optional array of AgentCanvasPoint quad
++      # The part of it inside the viewport and every clipping ancestor;
++      # absent with no layout box, empty when none of it shows. Whether
++      # something else covers a point is agentHitCheck's to say.
++      optional AgentCanvasRect shownRect
++      # Every run and fill answered exact, and the canvas not truncated.
++      boolean exact
++      # The record's caps cut what this canvas shows, until it is emptied
++      # (reset, a resize, or a cover of the whole canvas): past 20,000 runs,
++      # 20,000 fills, 1,000,000 characters or 256 large items (one spanning
++      # more than 16 cells of 128 by 32 px) showing at once the oldest
++      # went; and a single draw of more than 4,096 characters is not kept
++      # (what it draws is not followed).
++      boolean truncated
++      # A 2d canvas's record: its own memory in bytes (an estimate from its
++      # stores' capacities), now and at its highest.
++      optional number recordBytes
++      optional number recordPeakBytes
++      array of AgentCanvasRun runs
++      array of AgentCanvasFill fills
++
++  # browser: the text and filled rectangles the page's 2D canvases still
++  # show, in every frame of the page (frames of other processes included),
++  # read between the page's tasks, the page unaware. Recorded from the draw
++  # calls (fillText, strokeText, the cluster draws, fillRect, clearRect) and
++  # resolved by the clip, redraws of the same run, covering clears and
++  # opaque fills; what the record cannot follow makes what it crosses
++  # inexact rather than wrong. Text and fills drawn under a shadow, a filter,
++  # a composite mode other than source-over and copy, or inside a layer are
++  # not runs or fills: they are operations not followed. Recording is off
++  # unless the browser runs with --enable-canvas-text-record; without it
++  # this fails, saying so.
++  experimental command agentCanvasText
++    parameters
++      # One canvas, with frameId: the localRootFrameId that names it (as
++      # resolveAgentNode gives it). Both or neither.
++      optional DOM.BackendNodeId backendNodeId
++      optional FrameId frameId
++      # Only the runs and fills whose quads meet their canvas's shownRect,
++      # chosen before the caps. Defaults to false.
++      optional boolean inView
++    returns
++      array of AgentCanvas canvases
++      # Local roots that did not answer in time, or whose place in the page
++      # could not be found; their canvases are left out.
++      array of FrameId framesLeftOut
++      # Runs left out past the answer's caps: 50,000 runs and 500,000
++      # characters (UTF-16 units) in all, each canvas's newest kept.
++      integer runsCut
++      # Fills left out past the answer's cap: 50,000 fills in all, each
++      # canvas's newest kept.
++      integer fillsCut
++
 +  # One thing an input action led to (Input.moveTo, scrollBy,
 +  # dispatchMousePath, dispatchKeystrokes, dispatchKeyChord, dispatchPaste,
 +  # performDrag, selectOptions, fillDateTime, pickColor, chooseFiles).
@@ -10975,7 +11529,7 @@ index 20b5db99c3..767f7ebc81 100644
    # Returns a snapshot of the page as a string. For MHTML format, the serialization includes
    # iframes, shadow DOM, external resources, and element-inline styles.
    experimental command captureSnapshot
-@@ -943,6 +2105,29 @@ domain Page
+@@ -950,6 +2280,29 @@ domain Page
        # Unique id of the entry to navigate to.
        integer entryId
  
@@ -11006,7 +11560,7 @@ index 20b5db99c3..767f7ebc81 100644
    command printToPDF
      parameters
 diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
-index bc43144f26..3ac8b248cc 100644
+index 043558bb98..c919cc0c8b 100644
 --- a/third_party/blink/public/mojom/BUILD.gn
 +++ b/third_party/blink/public/mojom/BUILD.gn
 @@ -57,6 +57,8 @@ mojom("mojom_platform") {
@@ -11016,9 +11570,9 @@ index bc43144f26..3ac8b248cc 100644
 +    "agent_snapshot/agent_fetch.mojom",
 +    "agent_snapshot/agent_snapshot_collector.mojom",
      "ai/ai_common.mojom",
+     "ai/ai_decision_model.mojom",
      "ai/ai_language_model.mojom",
-     "ai/ai_manager.mojom",
-@@ -233,6 +235,7 @@ mojom("mojom_platform") {
+@@ -236,6 +238,7 @@ mojom("mojom_platform") {
      "reporting/reporting.mojom",
      "safe_url_pattern.mojom",
      "scheduler/web_scheduler_tracked_feature.mojom",
@@ -11028,10 +11582,10 @@ index bc43144f26..3ac8b248cc 100644
      "scroll/scroll_into_view_params.mojom",
 diff --git a/third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom b/third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom
 new file mode 100644
-index 0000000000..34e4632816
+index 0000000000..adba94aecc
 --- /dev/null
 +++ b/third_party/blink/public/mojom/agent_snapshot/agent_snapshot_collector.mojom
-@@ -0,0 +1,1479 @@
+@@ -0,0 +1,1566 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11047,6 +11601,7 @@ index 0000000000..34e4632816
 +module blink.mojom;
 +
 +import "mojo/public/mojom/base/time.mojom";
++import "ui/gfx/geometry/mojom/geometry.mojom";
 +
 +// How elements outside the frame's own layout viewport are reported.
 +enum AgentOffscreenMode {
@@ -12510,9 +13065,95 @@ index 0000000000..34e4632816
 +  // past `max_text_chars` is not returned. One freeze at a time.
 +  FreezeForCopy(int32 max_text_chars, pending_receiver<AgentFreezeHold> hold)
 +      => (AgentFreezeReply reply);
++
++  // browser: Page.agentCanvasText's read of this local root: every
++  // <canvas> element of it and of its same-process frames (open and closed
++  // shadow trees included), with what each 2D context still shows. A
++  // non-zero `node_id` (a DOMNodeId) narrows it to that canvas; `in_view` to
++  // the runs and fills that meet each canvas's shown part (filtered before
++  // the caps and before any shaping). At most `max_runs` runs of `max_chars`
++  // UTF-16 units in all, and `max_fills` fills, each canvas's newest kept,
++  // the rest counted in runs_cut and fills_cut. A task between the page's
++  // tasks: a redraw done in one task is never seen half done.
++  CanvasText(int32 node_id, bool in_view, int32 max_runs, int32 max_chars,
++             int32 max_fills)
++      => (AgentCanvasTextReply reply);
++};
++
++// browser: Page.agentCanvasText. Every point is in the local root's widget,
++// in DIPs, each mapped on its own from the canvas's pixels: through the
++// backing-size-to-box scale with object-fit, the padding and border, the CSS
++// transforms, and the frames between it and the local root.
++
++// A text draw still showing.
++struct AgentCanvasRun {
++  // The string drawn (a cluster draw's own part), format characters kept.
++  string text;
++  // The font the draw used, as the font getter writes it.
++  string font;
++  // The style's colour as fillStyle/strokeStyle would give it, or
++  // "gradient" or "pattern".
++  string color;
++  double alpha;
++  bool stroke;
++  bool rtl;
++  // More than one direction in the run.
++  bool bidi;
++  // The baseline's left and right ends, in the text's own sense of left.
++  gfx.mojom.PointF start;
++  gfx.mojom.PointF end;
++  // The run's box: left-top, right-top, right-bottom, left-bottom.
++  array<gfx.mojom.PointF> quad;
++  // The advance width, and per UTF-16 boundary (0 to the text's length) its
++  // distance from the left end, in the text's own units.
++  double width;
++  array<double> advances;
++  // Empty when exact; else partlyCovered, notFollowed or fontChanged.
++  string inexact;
++};
++
++// A fillRect still showing.
++struct AgentCanvasFill {
++  array<gfx.mojom.PointF> quad;
++  string color;
++  double alpha;
++  string inexact;
++};
++
++struct AgentCanvas {
++  int32 node_id;
++  // The DevTools token of the canvas's own frame.
++  string frame_id;
++  // 2d, webgl, webgpu, bitmaprenderer, offscreen (control transferred to an
++  // OffscreenCanvas) or none.
++  string context;
++  // Whether it has a layout box; then `quad`, its content box (four points
++  // as a run's), and `shown`, the part of its box inside the viewport and
++  // every clipping ancestor (empty when none shows).
++  bool has_box;
++  array<gfx.mojom.PointF> quad;
++  gfx.mojom.RectF shown;
++  // Every run and fill exact, and nothing cut by the record's caps.
++  bool exact;
++  bool truncated;
++  // False for a 2d canvas whose context keeps no record (its renderer runs
++  // without --enable-canvas-text-record).
++  bool recorded;
++  // The record's own memory, in bytes (an estimate from its stores'
++  // capacities), now and at its highest.
++  uint64 record_bytes;
++  uint64 record_peak_bytes;
++  array<AgentCanvasRun> runs;
++  array<AgentCanvasFill> fills;
++};
++
++struct AgentCanvasTextReply {
++  array<AgentCanvas> canvases;
++  int32 runs_cut;
++  int32 fills_cut;
 +};
 diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
-index dd94769995..b2611bce89 100644
+index eb087d3642..58822a0748 100644
 --- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
 +++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
 @@ -31,6 +31,7 @@
@@ -12531,7 +13172,7 @@ index dd94769995..b2611bce89 100644
  
  #if BUILDFLAG(IS_WIN)
  #include "components/stylus_handwriting/win/features.h"
-@@ -2308,6 +2310,39 @@ std::unique_ptr<cc::ScopedPauseRendering> WebFrameWidgetImpl::PauseRendering() {
+@@ -2318,6 +2320,39 @@ std::unique_ptr<cc::ScopedPauseRendering> WebFrameWidgetImpl::PauseRendering() {
    return widget_base_->LayerTreeHost()->PauseRendering();
  }
  
@@ -12572,10 +13213,10 @@ index dd94769995..b2611bce89 100644
  void WebFrameWidgetImpl::RequestMainFrameOnCompositorAnimation(
      cc::PropertyChangeForcesCommitCriteria criteria,
 diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.h b/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
-index abb1bf2fcb..7f45aeaae5 100644
+index c6985622ce..96a4876a30 100644
 --- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
 +++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
-@@ -656,6 +656,19 @@ class CORE_EXPORT WebFrameWidgetImpl
+@@ -657,6 +657,19 @@ class CORE_EXPORT WebFrameWidgetImpl
    // Pause all rendering (main and compositor thread) in the compositor.
    [[nodiscard]] std::unique_ptr<cc::ScopedPauseRendering> PauseRendering();
  
@@ -12596,7 +13237,7 @@ index abb1bf2fcb..7f45aeaae5 100644
    // compositing. This is is max texture size for GPU compositing and a browser
    // chosen limit in software mode.
 diff --git a/third_party/blink/renderer/core/inspector/inspector_protocol_config.json b/third_party/blink/renderer/core/inspector/inspector_protocol_config.json
-index 6886876630..4942b06d7a 100644
+index 6886876630..1a00da778d 100644
 --- a/third_party/blink/renderer/core/inspector/inspector_protocol_config.json
 +++ b/third_party/blink/renderer/core/inspector/inspector_protocol_config.json
 @@ -91,7 +91,7 @@
@@ -12604,15 +13245,15 @@ index 6886876630..4942b06d7a 100644
              {
                  "domain": "Page",
 -                "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
-+                "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "agentNavigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentMarkSecretField", "agentSettleArm", "agentSettle", "agentFinishCapture", "startFrameStream", "updateFrameStream", "stopFrameStream", "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
++                "exclude": ["getNavigationHistory", "navigateToHistoryEntry", "agentNavigateToHistoryEntry", "resetNavigationHistory", "captureScreenshot", "captureAgentSnapshot", "agentNodesAlive", "agentAnnouncements", "agentReport", "resolveAgentNode", "agentHitCheck", "agentMarkSecretField", "agentSettleArm", "agentSettle", "agentFinishCapture", "agentCanvasText", "startFrameStream", "updateFrameStream", "stopFrameStream", "startScreencast", "stopScreencast", "screencastFrameAck", "handleJavaScriptDialog", "setColorPickerEnabled",
                              "getAppManifest", "getAnnotatedPageContent", "setControlNavigations", "processNavigation", "printToPDF", "bringToFront", "setDownloadBehavior", "navigate", "crash", "close", "setWebLifecycleState", "captureSnapshot", "getInstallabilityErrors", "getManifestIcons", "getAppId", "getSubApps", "getSiblingSubApps", "setSPCTransactionMode", "setRPHRegistrationMode", "setPrerenderingAllowed", "startScreenRecording", "stopScreenRecording"],
                  "pass_associated_data": [
                      "addScriptToEvaluateOnNewDocument",
 diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
-index e2c5e2f39d..ed83fd52d5 100644
+index 17fce4d9e0..9aa353b58c 100644
 --- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
 +++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
-@@ -111,6 +111,7 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -109,6 +109,7 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
  #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
  #include "third_party/blink/renderer/core/timing/performance.h"
  #include "third_party/blink/renderer/core/timing/resource_timing_context.h"
@@ -12620,7 +13261,7 @@ index e2c5e2f39d..ed83fd52d5 100644
  #include "third_party/blink/renderer/core/timing/window_performance.h"
  #include "third_party/blink/renderer/core/url/url_search_params.h"
  #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
-@@ -133,6 +134,8 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
+@@ -131,6 +132,8 @@ BASE_FEATURE(kFastMemoryCacheWithDevTools, base::FEATURE_ENABLED_BY_DEFAULT);
  #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
  #include "third_party/blink/renderer/platform/network/network_utils.h"
  #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -12629,7 +13270,7 @@ index e2c5e2f39d..ed83fd52d5 100644
  #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
  #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
  #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
-@@ -502,6 +505,30 @@ void FrameFetchContext::FillInitiatorInfo(FetchInitiatorInfo& initiator_info) {
+@@ -500,6 +503,30 @@ void FrameFetchContext::FillInitiatorInfo(FetchInitiatorInfo& initiator_info) {
    initiator_info.initiator_url = document_->Url();
  }
  
@@ -12674,7 +13315,7 @@ index 914960471c..5f0ce5c5e5 100644
    void AddResourceTiming(mojom::blink::ResourceTimingInfoPtr,
                           const AtomicString& initiator_type) override;
 diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
-index 57908c79e9..c48a8d1a4c 100644
+index 9b0b898bde..f598e87572 100644
 --- a/third_party/blink/renderer/modules/BUILD.gn
 +++ b/third_party/blink/renderer/modules/BUILD.gn
 @@ -58,6 +58,7 @@ component("modules") {
@@ -12798,7 +13439,7 @@ index 0000000000..12352c57db
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_AGENT_SNAPSHOT_AGENT_CARD_FIELDS_H_
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_freeze.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_freeze.cc
 new file mode 100644
-index 0000000000..31af00263d
+index 0000000000..336660d55f
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_freeze.cc
 @@ -0,0 +1,757 @@
@@ -13331,8 +13972,8 @@ index 0000000000..31af00263d
 +    for (cursor.MoveTo(*text); cursor && !reply_->runs_cut;
 +         cursor.MoveToNextForSameLayoutObject()) {
 +      const InlineCursorPosition& at = cursor.Current();
-+      if (!at.IsText() || at.IsHiddenForPaint() || at.IsLayoutGeneratedText() ||
-+          at.IsLineBreak()) {
++      if (!at.IsText() || at.IsHiddenDueToLayout() ||
++          at.IsLayoutGeneratedText() || at.IsLineBreak()) {
 +        continue;
 +      }
 +      const StringView painted = cursor.CurrentText();
@@ -13462,7 +14103,7 @@ index 0000000000..31af00263d
 +                            const LayoutObject& object) {
 +  const LayoutObject* animated = nullptr;
 +  for (const LayoutObject* up = &above; up;) {
-+    if (up->StyleRef().HasCurrentTransformRelatedAnimation()) {
++    if (up->Style().HasCurrentTransformRelatedAnimation()) {
 +      animated = up;
 +    }
 +    up = up->IsLayoutView() ? OwnerOf(*up) : up->Parent();
@@ -13719,7 +14360,7 @@ index 0000000000..43de458840
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_AGENT_SNAPSHOT_AGENT_FREEZE_H_
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_live_regions.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_live_regions.cc
 new file mode 100644
-index 0000000000..f7d52f703d
+index 0000000000..3c1a2c4b78
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_live_regions.cc
 @@ -0,0 +1,646 @@
@@ -13959,8 +14600,8 @@ index 0000000000..f7d52f703d
 +  const LayoutObject* root_layout = root.GetLayoutObject();
 +  bool bottom_up = root_layout && !root.GetShadowRoot() && root.lastChild() &&
 +                   root_layout->IsFlexibleBox() &&
-+                   root_layout->StyleRef().ResolvedIsColumnFlexDirection() &&
-+                   root_layout->StyleRef().ResolvedIsReverseFlexDirection();
++                   root_layout->Style().ResolvedIsColumnFlexDirection() &&
++                   root_layout->Style().ResolvedIsReverseFlexDirection();
 +  for (const Node* child = bottom_up ? root.firstChild() : nullptr; child;
 +       child = child->nextSibling()) {
 +    const auto* loose = DynamicTo<Text>(child);
@@ -13991,7 +14632,7 @@ index 0000000000..f7d52f703d
 +      // box but says nothing. The walk goes on below a hidden element, whose
 +      // descendants may be visible again.
 +      if (const LayoutObject* layout = text->GetLayoutObject();
-+          layout && layout->StyleRef().Visibility() == EVisibility::kVisible) {
++          layout && layout->Style().Visibility() == EVisibility::kVisible) {
 +        const LayoutObject* block = layout->ContainingBlock();
 +        if (block != last_block) {
 +          space = true;
@@ -14080,7 +14721,7 @@ index 0000000000..f7d52f703d
 +  }
 +  const ComputedStyle* style = nullptr;
 +  if (const LayoutObject* layout = root.GetLayoutObject()) {
-+    style = &layout->StyleRef();
++    style = &layout->Style();
 +  } else if (root.HasDisplayContentsStyle() && HasRenderedChild(root)) {
 +    style = root.GetComputedStyle();
 +  }
@@ -14499,7 +15140,7 @@ index 0000000000..9f6f3a0864
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_AGENT_SNAPSHOT_AGENT_LIVE_REGIONS_H_
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_settle_watcher.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_settle_watcher.cc
 new file mode 100644
-index 0000000000..427ae4b577
+index 0000000000..c31cdedf16
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_settle_watcher.cc
 @@ -0,0 +1,2489 @@
@@ -14750,9 +15391,9 @@ index 0000000000..427ae4b577
 +  if (state == State::kBox) {
 +    return box;
 +  }
-+  const bool visible =
-+      box && layout->StyleRef().Visibility() == EVisibility::kVisible &&
-+      layout->StyleRef().Opacity() > 0;
++  const bool visible = box &&
++                       layout->Style().Visibility() == EVisibility::kVisible &&
++                       layout->Style().Opacity() > 0;
 +  return state == State::kHidden ? !visible : visible;
 +}
 +
@@ -14900,7 +15541,7 @@ index 0000000000..427ae4b577
 +          element.FastGetAttribute(html_names::kDraggableAttr), "true") ||
 +      element.HasEventListeners(event_type_names::kDragstart) ||
 +      element.tabIndex() >= 0;
-+  const ComputedStyle& style = layout.StyleRef();
++  const ComputedStyle& style = layout.Style();
 +  if (!interactive && style.Cursor() == ECursor::kPointer) {
 +    const Element* parent = element.ParentOrShadowHostElement();
 +    const ComputedStyle* parent_style =
@@ -16129,7 +16770,7 @@ index 0000000000..427ae4b577
 +              transparent = nullptr;
 +            }
 +            if (const LayoutObject* layout = element->GetLayoutObject()) {
-+              const ComputedStyle& style = layout->StyleRef();
++              const ComputedStyle& style = layout->Style();
 +              if (!transparent && style.Opacity() <= 0) {
 +                transparent = element;
 +              }
@@ -17528,10 +18169,10 @@ index 0000000000..55882a76e5
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_AGENT_SNAPSHOT_AGENT_SETTLE_WATCHER_H_
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.cc
 new file mode 100644
-index 0000000000..55e84c9231
+index 0000000000..ee5b7b36b3
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.cc
-@@ -0,0 +1,12926 @@
+@@ -0,0 +1,13200 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -17593,6 +18234,7 @@ index 0000000000..55e84c9231
 +#include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
 +#include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 +#include "third_party/blink/renderer/core/geometry/dom_rect.h"
++#include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 +#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 +#include "third_party/blink/renderer/core/html/forms/html_data_list_element.h"
 +#include "third_party/blink/renderer/core/html/forms/html_data_list_options_collection.h"
@@ -17623,6 +18265,7 @@ index 0000000000..55e84c9231
 +#include "third_party/blink/renderer/core/layout/layout_box.h"
 +#include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 +#include "third_party/blink/renderer/core/layout/layout_object.h"
++#include "third_party/blink/renderer/core/layout/layout_replaced.h"
 +#include "third_party/blink/renderer/core/layout/layout_view.h"
 +#include "third_party/blink/renderer/core/page/chrome_client.h"
 +#include "third_party/blink/renderer/core/page/focus_controller.h"
@@ -17642,7 +18285,10 @@ index 0000000000..55e84c9231
 +#include "third_party/blink/renderer/modules/agent_snapshot/agent_freeze.h"
 +#include "third_party/blink/renderer/modules/agent_snapshot/agent_live_regions.h"
 +#include "third_party/blink/renderer/modules/agent_snapshot/agent_settle_watcher.h"
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.h"
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h"
 +#include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
++#include "third_party/blink/renderer/platform/fonts/plain_text_painter.h"
 +#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 +#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 +#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
@@ -17667,6 +18313,7 @@ index 0000000000..55e84c9231
 +#include "ui/gfx/geometry/rect_f.h"
 +#include "ui/gfx/geometry/size.h"
 +#include "ui/gfx/geometry/size_f.h"
++#include "ui/gfx/geometry/transform.h"
 +#include "ui/gfx/geometry/vector2d_f.h"
 +
 +namespace blink {
@@ -17733,8 +18380,7 @@ index 0000000000..55e84c9231
 +
 +bool HasPointerCursor(Element* element) {
 +  const LayoutObject* layout_object = element->GetLayoutObject();
-+  return layout_object &&
-+         layout_object->StyleRef().Cursor() == ECursor::kPointer;
++  return layout_object && layout_object->Style().Cursor() == ECursor::kPointer;
 +}
 +
 +// Current value for form controls; empty for everything else. A password
@@ -18123,7 +18769,7 @@ index 0000000000..55e84c9231
 +  // field's caption, though it may stand just before one in the page.
 +  for (const LayoutObject* box = element->GetLayoutObject(); box;
 +       box = box->Container()) {
-+    if (box->StyleRef().GetPosition() == EPosition::kFixed) {
++    if (box->Style().GetPosition() == EPosition::kFixed) {
 +      return false;
 +    }
 +  }
@@ -18459,7 +19105,7 @@ index 0000000000..55e84c9231
 +  if (!layout_object) {
 +    return false;
 +  }
-+  const ECursor cursor = layout_object->StyleRef().Cursor();
++  const ECursor cursor = layout_object->Style().Cursor();
 +  return cursor == ECursor::kColResize || cursor == ECursor::kRowResize ||
 +         cursor == ECursor::kEwResize || cursor == ECursor::kNsResize;
 +}
@@ -18878,7 +19524,7 @@ index 0000000000..55e84c9231
 +    // through it.
 +    bool behind_modal = false;
 +    if (const LayoutObject* layout_object = element->GetLayoutObject()) {
-+      const ComputedStyle& style = layout_object->StyleRef();
++      const ComputedStyle& style = layout_object->Style();
 +      if (style.Visibility() != EVisibility::kVisible) {
 +        continue;
 +      }
@@ -20358,7 +21004,7 @@ index 0000000000..55e84c9231
 +bool IsPinned(const LayoutObject& object) {
 +  const auto* box = DynamicTo<LayoutBox>(object);
 +  return (box && box->IsFixedToView()) ||
-+         object.StyleRef().GetPosition() == EPosition::kSticky;
++         object.Style().GetPosition() == EPosition::kSticky;
 +}
 +
 +// browser: whether something fixed to the view or sticky lies on
@@ -20595,7 +21241,7 @@ index 0000000000..55e84c9231
 +// `holder` scrolls -- a table's sticky first column, once the table's wrapper
 +// is passed over for the window.
 +bool StuckInside(const LayoutObject& sticky, const LayoutBox& holder) {
-+  if (sticky.StyleRef().GetPosition() != EPosition::kSticky) {
++  if (sticky.Style().GetPosition() != EPosition::kSticky) {
 +    return false;
 +  }
 +  const LayoutBox* to = sticky.ContainingScrollContainer();
@@ -20653,7 +21299,7 @@ index 0000000000..55e84c9231
 +    if (Hittable(*o)) {
 +      part = o;
 +    }
-+    const EPosition position = o->StyleRef().GetPosition();
++    const EPosition position = o->Style().GetPosition();
 +    if ((position == EPosition::kFixed || position == EPosition::kSticky) &&
 +        !target.IsDescendantOf(o) && !StuckInside(*o, holder)) {
 +      over = true;
@@ -21092,7 +21738,7 @@ index 0000000000..55e84c9231
 +  const LayoutObject* hit_object = under->GetLayoutObject();
 +  if (pinned) {
 +    for (const LayoutObject* o = hit_object; o; o = o->Parent()) {
-+      const EPosition position = o->StyleRef().GetPosition();
++      const EPosition position = o->Style().GetPosition();
 +      if (position == EPosition::kFixed || position == EPosition::kSticky) {
 +        *pinned = true;
 +        break;
@@ -21111,8 +21757,8 @@ index 0000000000..55e84c9231
 +      return scroller.Get();
 +    }
 +    const EOverscrollBehavior stop =
-+        vertical ? scroller->StyleRef().OverscrollBehaviorY()
-+                 : scroller->StyleRef().OverscrollBehaviorX();
++        vertical ? scroller->Style().OverscrollBehaviorY()
++                 : scroller->Style().OverscrollBehaviorX();
 +    if (stop != EOverscrollBehavior::kAuto &&
 +        stop != EOverscrollBehavior::kChain) {
 +      return scroller.Get();
@@ -21190,7 +21836,7 @@ index 0000000000..55e84c9231
 +    if (!o->IsStickyPositioned()) {
 +      continue;
 +    }
-+    const ComputedStyle& style = o->StyleRef();
++    const ComputedStyle& style = o->Style();
 +    const bool held = vertical
 +                          ? !style.Top().IsAuto() || !style.Bottom().IsAuto()
 +                          : !style.Left().IsAuto() || !style.Right().IsAuto();
@@ -21562,7 +22208,7 @@ index 0000000000..55e84c9231
 +  band->right = CarryCanScroll(box, /*vertical=*/false, /*forward=*/true);
 +  band->wheel_blocked = WheelBlocked(box);
 +  if (PaintLayerScrollableArea* area = box.GetScrollableArea()) {
-+    const float zoom = box.StyleRef().EffectiveZoom();
++    const float zoom = box.Style().EffectiveZoom();
 +    band->scroll_x = area->GetScrollOffset().x() / zoom;
 +    band->scroll_y = area->GetScrollOffset().y() / zoom;
 +  }
@@ -21583,7 +22229,7 @@ index 0000000000..55e84c9231
 +// Whether a hit test can land on an object: pointer events not none (inert
 +// included) and visible.
 +bool Hittable(const LayoutObject& object) {
-+  const ComputedStyle& style = object.StyleRef();
++  const ComputedStyle& style = object.Style();
 +  return style.UsedPointerEvents() != EPointerEvents::kNone &&
 +         style.Visibility() == EVisibility::kVisible;
 +}
@@ -22975,7 +23621,7 @@ index 0000000000..55e84c9231
 +                 const Document& document,
 +                 const LocalFrame& root) {
 +  return box.IsFixedToView() ||
-+         (box.IsOutOfFlowPositioned() && box.StyleRef().EffectiveZIndex() > 0 &&
++         (box.IsOutOfFlowPositioned() && box.Style().EffectiveZIndex() > 0 &&
 +          LayerPlacedOnPage(box, document) &&
 +          LayerPageSized(LayerShownOf(element, root), root));
 +}
@@ -23094,8 +23740,7 @@ index 0000000000..55e84c9231
 +                         const HeapVector<Member<Element>>& groups,
 +                         const Vector<int>& hits) {
 +  const LayoutObject* veil_object = veil.GetLayoutObject();
-+  const int veil_z =
-+      veil_object ? veil_object->StyleRef().EffectiveZIndex() : 0;
++  const int veil_z = veil_object ? veil_object->Style().EffectiveZIndex() : 0;
 +  const gfx::RectF veil_shown = LayerShownOf(veil, root);
 +  Element* parent = FlatTreeTraversal::ParentElement(veil);
 +  if (!parent) {
@@ -23117,7 +23762,7 @@ index 0000000000..55e84c9231
 +    if (!object || !object->IsOutOfFlowPositioned()) {
 +      continue;
 +    }
-+    const int z = object->StyleRef().EffectiveZIndex();
++    const int z = object->Style().EffectiveZIndex();
 +    if (z < veil_z || (z == veil_z && !after)) {
 +      continue;
 +    }
@@ -23158,8 +23803,7 @@ index 0000000000..55e84c9231
 +// and a chat launcher high above both is no one's panel. Null when none.
 +Element* LayerVeilPanel(Element& veil, const LocalFrame& root) {
 +  const LayoutObject* veil_object = veil.GetLayoutObject();
-+  const int veil_z =
-+      veil_object ? veil_object->StyleRef().EffectiveZIndex() : 0;
++  const int veil_z = veil_object ? veil_object->Style().EffectiveZIndex() : 0;
 +  const gfx::RectF veil_shown = LayerShownOf(veil, root);
 +  Element* parent = FlatTreeTraversal::ParentElement(veil);
 +  if (!parent) {
@@ -23180,7 +23824,7 @@ index 0000000000..55e84c9231
 +    if (!object || !object->IsOutOfFlowPositioned()) {
 +      continue;
 +    }
-+    const int z = object->StyleRef().EffectiveZIndex();
++    const int z = object->Style().EffectiveZIndex();
 +    if (z < veil_z || (z == veil_z && !after) || (best && z >= best_z)) {
 +      continue;
 +    }
@@ -23370,7 +24014,7 @@ index 0000000000..55e84c9231
 +        const LayoutObject* object =
 +            element ? element->GetLayoutObject() : nullptr;
 +        if (!object || element == &on ||
-+            object->StyleRef().Visibility() != EVisibility::kVisible) {
++            object->Style().Visibility() != EVisibility::kVisible) {
 +          continue;
 +        }
 +        // Only parts showing 1 % of the viewport count (0x0 and
@@ -23385,7 +24029,7 @@ index 0000000000..55e84c9231
 +          continue;
 +        }
 +        ++tally.others;
-+        const bool inert = object->StyleRef().IsInert();
++        const bool inert = object->Style().IsInert();
 +        const bool shut =
 +            inert || AriaTrue(*element, html_names::kAriaHiddenAttr);
 +        if (!shut) {
@@ -23490,8 +24134,8 @@ index 0000000000..55e84c9231
 +    }
 +    const LayoutObject* object = entry->GetLayoutObject();
 +    const gfx::RectF shown =
-+        object && !object->StyleRef().IsInert() &&
-+                object->StyleRef().Visibility() == EVisibility::kVisible
++        object && !object->Style().IsInert() &&
++                object->Style().Visibility() == EVisibility::kVisible
 +            ? LayerShownOf(*entry, root)
 +            : gfx::RectF();
 +    if (shown.IsEmpty()) {
@@ -23570,7 +24214,7 @@ index 0000000000..55e84c9231
 +  if (!object || !view || !document) {
 +    return false;
 +  }
-+  const ComputedStyle& style = object->StyleRef();
++  const ComputedStyle& style = object->Style();
 +  if (style.Visibility() != EVisibility::kVisible || style.IsInert() ||
 +      style.UsedPointerEvents() == EPointerEvents::kNone) {
 +    return false;
@@ -24448,8 +25092,8 @@ index 0000000000..55e84c9231
 +  }
 +  const LayoutObject* la = ea.GetLayoutObject();
 +  const LayoutObject* lb = eb.GetLayoutObject();
-+  const int za = la ? la->StyleRef().EffectiveZIndex() : 0;
-+  const int zb = lb ? lb->StyleRef().EffectiveZIndex() : 0;
++  const int za = la ? la->Style().EffectiveZIndex() : 0;
++  const int zb = lb ? lb->Style().EffectiveZIndex() : 0;
 +  if (za != zb) {
 +    return za > zb;
 +  }
@@ -24933,7 +25577,7 @@ index 0000000000..55e84c9231
 +    }
 +    const LayoutObject* layout_object = element->GetLayoutObject();
 +    if (!layout_object ||
-+        layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
++        layout_object->Style().Visibility() != EVisibility::kVisible) {
 +      continue;
 +    }
 +    bool button = false;
@@ -26290,7 +26934,7 @@ index 0000000000..55e84c9231
 +    return false;
 +  }
 +  const WritingDirectionMode direction =
-+      parts.thumb->StyleRef().GetWritingDirection();
++      parts.thumb->Style().GetWritingDirection();
 +  parts.vertical = !direction.IsHorizontal();
 +  parts.flipped = direction.IsFlippedInlines();
 +  const PhysicalSize thumb_size = parts.thumb->StitchedSize();
@@ -26538,7 +27182,7 @@ index 0000000000..55e84c9231
 +  if (!area) {
 +    return false;
 +  }
-+  const float zoom = box->StyleRef().EffectiveZoom();
++  const float zoom = box->Style().EffectiveZoom();
 +  x = area->GetScrollOffset().x() / zoom;
 +  y = area->GetScrollOffset().y() / zoom;
 +  return true;
@@ -26585,7 +27229,7 @@ index 0000000000..55e84c9231
 +    return std::nullopt;
 +  }
 +  const bool vertical = axis == WheelAxis::kDown;
-+  const float zoom = box.StyleRef().EffectiveZoom();
++  const float zoom = box.Style().EffectiveZoom();
 +  const ScrollOffset offset = area->GetScrollOffset();
 +  const ScrollOffset low = area->MinimumScrollOffset();
 +  const ScrollOffset high = area->MaximumScrollOffset();
@@ -26671,7 +27315,7 @@ index 0000000000..55e84c9231
 +      if (!ShapeOf(*box, root, shape)) {
 +        continue;
 +      }
-+      const float zoom = box->StyleRef().EffectiveZoom();
++      const float zoom = box->Style().EffectiveZoom();
 +      const std::optional<WheelFigures> figures = GetWheelFigures(*box, axis);
 +      if (shape.visible.width() / zoom < kScrollerMinShownPx ||
 +          shape.visible.height() / zoom < kScrollerMinShownPx || !figures) {
@@ -26937,7 +27581,7 @@ index 0000000000..55e84c9231
 +          !ShapeOf(*box, root, shape)) {
 +        continue;
 +      }
-+      const float zoom = box->StyleRef().EffectiveZoom();
++      const float zoom = box->Style().EffectiveZoom();
 +      const Element* element = ScrollerElementOf(*box);
 +      if (shape.visible.width() / zoom < kScrollerMinShownPx ||
 +          shape.visible.height() / zoom < kScrollerMinShownPx ||
@@ -27129,6 +27773,7 @@ index 0000000000..55e84c9231
 +  visitor->Trace(watch_grab_holder_);
 +  visitor->Trace(settle_watcher_);
 +  visitor->Trace(freeze_);
++  visitor->Trace(canvas_text_painter_);
 +  Supplement<Document>::Trace(visitor);
 +  LocalFrameView::LifecycleNotificationObserver::Trace(visitor);
 +}
@@ -27641,8 +28286,7 @@ index 0000000000..55e84c9231
 +// browser: Page.agentMarkSecretField's answer for a mark AgentRedactionMarks
 +// took or refused.
 +String MarkOutcomeName(AgentRedactionMarks::Outcome outcome) {
-+  return outcome == AgentRedactionMarks::Outcome::kFrame ? "frame"
-+                                                          : "marked";
++  return outcome == AgentRedactionMarks::Outcome::kFrame ? "frame" : "marked";
 +}
 +
 +}  // namespace
@@ -27661,8 +28305,7 @@ index 0000000000..55e84c9231
 +    std::move(callback).Run("gone");
 +    return;
 +  }
-+  std::move(callback).Run(
-+      MarkOutcomeName(AgentRedactionMarks::Mark(*element)));
++  std::move(callback).Run(MarkOutcomeName(AgentRedactionMarks::Mark(*element)));
 +}
 +
 +// browser: Page.agentMarkSecretField with focused: the element the next key
@@ -27675,8 +28318,7 @@ index 0000000000..55e84c9231
 +    std::move(callback).Run("nothing");
 +    return;
 +  }
-+  std::move(callback).Run(
-+      MarkOutcomeName(AgentRedactionMarks::Mark(*element)));
++  std::move(callback).Run(MarkOutcomeName(AgentRedactionMarks::Mark(*element)));
 +}
 +
 +// browser: Input.selectOptions' reading of a <select> (the mojom says what).
@@ -28418,8 +29060,7 @@ index 0000000000..55e84c9231
 +  // Scroll offsets, in CSS px as scrollLeft and scrollTop give them.
 +  if (PaintLayerScrollableArea* window = view->LayoutViewport()) {
 +    const LayoutView* layout_view = root->ContentLayoutObject();
-+    const float zoom =
-+        layout_view ? layout_view->StyleRef().EffectiveZoom() : 1.f;
++    const float zoom = layout_view ? layout_view->Style().EffectiveZoom() : 1.f;
 +    reading->window_x = window->GetScrollOffset().x() / zoom;
 +    reading->window_y = window->GetScrollOffset().y() / zoom;
 +  }
@@ -28434,7 +29075,7 @@ index 0000000000..55e84c9231
 +                  !area->UserInputScrollable(kHorizontalScrollbar))) {
 +      continue;
 +    }
-+    const float zoom = scroller->StyleRef().EffectiveZoom();
++    const float zoom = scroller->Style().EffectiveZoom();
 +    reading->box_x = area->GetScrollOffset().x() / zoom;
 +    reading->box_y = area->GetScrollOffset().y() / zoom;
 +    if (auto* named = DynamicTo<Element>(scroller->GetNode())) {
@@ -28703,7 +29344,7 @@ index 0000000000..55e84c9231
 +  survey->device_scale_factor = scale;
 +  if (const LayoutView* layout_view = root->ContentLayoutObject();
 +      layout_view && scale > 0) {
-+    survey->page_zoom = layout_view->StyleRef().EffectiveZoom() / scale;
++    survey->page_zoom = layout_view->Style().EffectiveZoom() / scale;
 +  }
 +  const float frequency = widget->GetScreenInfo().display_frequency;
 +  if (frequency > 0) {
@@ -29330,7 +29971,7 @@ index 0000000000..55e84c9231
 +  if (!layout_object) {
 +    return false;
 +  }
-+  const ComputedStyle& style = layout_object->StyleRef();
++  const ComputedStyle& style = layout_object->Style();
 +  if (style.Visibility() != EVisibility::kVisible ||
 +      (!style.HasAutoClip() && style.HasOutOfFlowPosition())) {
 +    return false;
@@ -30457,13 +31098,287 @@ index 0000000000..55e84c9231
 +  ScheduleWatchTick();
 +}
 +
++// ---- browser: Page.agentCanvasText.
++
++namespace {
++
++String CanvasContextKind(const HTMLCanvasElement& canvas) {
++  if (canvas.IsPlaceholder()) {
++    return "offscreen";
++  }
++  CanvasRenderingContext* context = canvas.RenderingContext();
++  if (!context) {
++    return "none";
++  }
++  switch (context->GetRenderingAPI()) {
++    case CanvasRenderingContext::CanvasRenderingAPI::k2D:
++      return "2d";
++    case CanvasRenderingContext::CanvasRenderingAPI::kWebgl:
++    case CanvasRenderingContext::CanvasRenderingAPI::kWebgl2:
++      return "webgl";
++    case CanvasRenderingContext::CanvasRenderingAPI::kBitmaprenderer:
++      return "bitmaprenderer";
++    case CanvasRenderingContext::CanvasRenderingAPI::kWebgpu:
++      return "webgpu";
++    default:
++      return "none";
++  }
++}
++
++String InexactName(CanvasTextRecord::Inexact inexact) {
++  switch (inexact) {
++    case CanvasTextRecord::Inexact::kNone:
++      return "";
++    case CanvasTextRecord::Inexact::kPartlyCovered:
++      return "partlyCovered";
++    case CanvasTextRecord::Inexact::kNotFollowed:
++      return "notFollowed";
++    case CanvasTextRecord::Inexact::kFontChanged:
++      return "fontChanged";
++  }
++  return "";
++}
++
++// Every <canvas> of a document, open and closed shadow trees included, in
++// tree order.
++void CollectCanvases(Document& document,
++                     HeapVector<Member<HTMLCanvasElement>>& out) {
++  Element* top = document.documentElement();
++  if (!top) {
++    return;
++  }
++  HeapVector<Member<Node>> stack;
++  stack.push_back(top);
++  while (!stack.empty()) {
++    Node* node = stack.back();
++    stack.pop_back();
++    auto* element = DynamicTo<Element>(node);
++    if (!element) {
++      continue;
++    }
++    if (auto* canvas = DynamicTo<HTMLCanvasElement>(element)) {
++      out.push_back(canvas);
++    }
++    for (Node* child = element->lastChild(); child;
++         child = child->previousSibling()) {
++      stack.push_back(child);
++    }
++    if (ShadowRoot* shadow = element->GetShadowRoot()) {
++      for (Node* child = shadow->lastChild(); child;
++           child = child->previousSibling()) {
++        stack.push_back(child);
++      }
++    }
++  }
++}
++
++}  // namespace
++
++void AgentSnapshotCollectorImpl::CanvasText(int32_t node_id,
++                                            bool in_view,
++                                            int32_t max_runs,
++                                            int32_t max_chars,
++                                            int32_t max_fills,
++                                            CanvasTextCallback callback) {
++  auto reply = mojom::blink::AgentCanvasTextReply::New();
++  LocalFrame* root = GetSupplementable()->GetFrame();
++  auto* widget =
++      root ? static_cast<WebFrameWidgetImpl*>(root->GetWidgetForLocalRoot())
++           : nullptr;
++  LocalFrameView* view = root ? root->View() : nullptr;
++  if (!widget || !view) {
++    std::move(callback).Run(std::move(reply));
++    return;
++  }
++  view->UpdateLifecycleToLayoutClean(DocumentUpdateReason::kInspector);
++
++  HeapVector<Member<HTMLCanvasElement>> canvases;
++  if (node_id != 0) {
++    if (auto* canvas =
++            DynamicTo<HTMLCanvasElement>(OwnedElement(root, node_id))) {
++      canvases.push_back(canvas);
++    }
++  } else {
++    HeapVector<Member<LocalFrame>> frames;
++    CollectSameProcessFrames(root, frames);
++    for (LocalFrame* frame : frames) {
++      if (Document* document = frame->GetDocument()) {
++        CollectCanvases(*document, canvases);
++      }
++    }
++  }
++
++  const RootDips dips(*view, *widget);
++  const gfx::RectF viewport = ViewportRect(*view);
++  wtf_size_t runs_left = max_runs > 0 ? static_cast<wtf_size_t>(max_runs) : 0;
++  wtf_size_t chars_left =
++      max_chars > 0 ? static_cast<wtf_size_t>(max_chars) : 0;
++  wtf_size_t fills_left =
++      max_fills > 0 ? static_cast<wtf_size_t>(max_fills) : 0;
++  for (HTMLCanvasElement* canvas : canvases) {
++    auto entry = mojom::blink::AgentCanvas::New();
++    entry->node_id = DOMNodeIds::IdForNode(canvas);
++    LocalFrame* frame = canvas->GetDocument().GetFrame();
++    entry->frame_id =
++        frame ? String(frame->GetDevToolsFrameToken().ToString()) : String("");
++    entry->context = CanvasContextKind(*canvas);
++    entry->shown = gfx::RectF();
++
++    // Canvas pixels to the local root's widget DIPs, point by point:
++    // through the bitmap's place in the box (object-fit), the CSS transforms
++    // (LocalToAbsoluteTransform), the frames up to the local root.
++    const LayoutObject* object = canvas->GetLayoutObject();
++    LocalFrameView* element_view = canvas->GetDocument().View();
++    const LayoutReplaced* replaced = DynamicTo<LayoutReplaced>(object);
++    std::optional<gfx::Transform> to_absolute;
++    PhysicalRect image;
++    if (replaced && element_view) {
++      to_absolute = replaced->LocalToAbsoluteTransform();
++      image = replaced->ReplacedContentRect();
++    }
++    const auto local_to_dips = [&](const gfx::PointF& local) {
++      return dips.Dips(
++          element_view->ConvertToRootFrame(to_absolute->MapPoint(local)));
++    };
++    const gfx::Size size = canvas->Size();
++    const float scale_x =
++        size.width() > 0 ? image.Width().ToFloat() / size.width() : 0;
++    const float scale_y =
++        size.height() > 0 ? image.Height().ToFloat() / size.height() : 0;
++    const auto canvas_to_dips = [&](const gfx::PointF& p) {
++      return local_to_dips(gfx::PointF(image.X().ToFloat() + p.x() * scale_x,
++                                       image.Y().ToFloat() + p.y() * scale_y));
++    };
++    const auto quad_to_dips = [&](const gfx::QuadF& quad) {
++      return Vector<gfx::PointF>{
++          canvas_to_dips(quad.p1()), canvas_to_dips(quad.p2()),
++          canvas_to_dips(quad.p3()), canvas_to_dips(quad.p4())};
++    };
++    const auto bounds_of = [](const Vector<gfx::PointF>& points) {
++      gfx::RectF bounds(points[0], gfx::SizeF());
++      for (const gfx::PointF& point : points) {
++        bounds.UnionEvenIfEmpty(gfx::RectF(point, gfx::SizeF()));
++      }
++      return bounds;
++    };
++    if (to_absolute) {
++      entry->has_box = true;
++      const PhysicalRect content = replaced->PhysicalContentBoxRect();
++      const gfx::PointF corners[4] = {
++          gfx::PointF(content.X().ToFloat(), content.Y().ToFloat()),
++          gfx::PointF(content.Right().ToFloat(), content.Y().ToFloat()),
++          gfx::PointF(content.Right().ToFloat(), content.Bottom().ToFloat()),
++          gfx::PointF(content.X().ToFloat(), content.Bottom().ToFloat())};
++      gfx::RectF in_root;
++      for (int i = 0; i < 4; ++i) {
++        const gfx::PointF at =
++            element_view->ConvertToRootFrame(to_absolute->MapPoint(corners[i]));
++        entry->quad.push_back(dips.Dips(at));
++        if (i == 0) {
++          in_root = gfx::RectF(at, gfx::SizeF());
++        } else {
++          in_root.UnionEvenIfEmpty(gfx::RectF(at, gfx::SizeF()));
++        }
++      }
++      // What shows of it, as the snapshot's pieces are clipped.
++      gfx::RectF shown = VisibleInRoot(*replaced, *root, in_root);
++      shown.Intersect(viewport);
++      if (!shown.IsEmpty()) {
++        entry->shown = dips.Rect(shown);
++      }
++    }
++
++    CanvasRenderingContext* context = canvas->RenderingContext();
++    CanvasTextRecord* record =
++        context && context->IsRenderingContext2D() && !canvas->IsPlaceholder()
++            ? static_cast<CanvasRenderingContext2D*>(context)
++                  ->TextRecordForAgent()
++            : nullptr;
++    entry->recorded = record != nullptr;
++    entry->exact = record != nullptr;
++    if (record) {
++      if (!canvas_text_painter_) {
++        canvas_text_painter_ =
++            MakeGarbageCollected<PlainTextPainter>(PlainTextPainter::kCanvas);
++      }
++      const bool placeable = to_absolute && scale_x > 0 && scale_y > 0;
++      // Whether a quad (canvas pixels) meets the canvas's shown part, edges
++      // included (a run of no width too).
++      const auto shows = [&](const gfx::QuadF& quad) {
++        if (!placeable) {
++          return false;
++        }
++        const gfx::RectF b = bounds_of(quad_to_dips(quad));
++        const gfx::RectF& s = entry->shown;
++        return !s.IsEmpty() && b.x() <= s.right() && s.x() <= b.right() &&
++               b.y() <= s.bottom() && s.y() <= b.bottom();
++      };
++      // With in_view, only what shows, chosen before the caps and before
++      // any shaping; and nothing at all with no box to place it in.
++      const auto keep = [&](const gfx::QuadF& quad) {
++        return placeable && (!in_view || shows(quad));
++      };
++      CanvasTextRecord::Reading reading;
++      record->Read(size, *canvas_text_painter_, runs_left, chars_left,
++                   fills_left, keep, reading);
++      runs_left -= std::min(runs_left, reading.runs.size());
++      chars_left -= std::min(chars_left, reading.chars);
++      fills_left -= std::min(fills_left, reading.fills.size());
++      reply->runs_cut += static_cast<int32_t>(reading.runs_left);
++      reply->fills_cut += static_cast<int32_t>(reading.fills_left);
++      entry->truncated = reading.truncated;
++      entry->exact = !reading.truncated;
++      entry->record_bytes = reading.memory_bytes;
++      entry->record_peak_bytes = reading.peak_bytes;
++      for (const auto& run : reading.runs) {
++        if (run.inexact != CanvasTextRecord::Inexact::kNone) {
++          entry->exact = false;
++        }
++        auto out = mojom::blink::AgentCanvasRun::New();
++        out->text = NonNull(run.text);
++        out->font = NonNull(run.font);
++        out->color = NonNull(run.color);
++        out->alpha = run.alpha;
++        out->stroke = run.stroke;
++        out->rtl = run.rtl;
++        out->bidi = run.bidi;
++        out->start = canvas_to_dips(run.start);
++        out->end = canvas_to_dips(run.end);
++        out->quad = quad_to_dips(run.quad);
++        out->width = run.width;
++        out->advances = run.advances;
++        out->inexact = InexactName(run.inexact);
++        entry->runs.push_back(std::move(out));
++      }
++      for (const auto& fill : reading.fills) {
++        if (fill.inexact != CanvasTextRecord::Inexact::kNone) {
++          entry->exact = false;
++        }
++        auto out = mojom::blink::AgentCanvasFill::New();
++        out->quad = quad_to_dips(fill.quad);
++        out->color = NonNull(fill.color);
++        out->alpha = fill.alpha;
++        out->inexact = InexactName(fill.inexact);
++        entry->fills.push_back(std::move(out));
++      }
++    }
++    reply->canvases.push_back(std::move(entry));
++  }
++  // The painter's caches age by reads: what this read did not use goes at
++  // the next.
++  if (canvas_text_painter_) {
++    canvas_text_painter_->DidSwitchFrame();
++  }
++  std::move(callback).Run(std::move(reply));
++}
++
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.h b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.h
 new file mode 100644
-index 0000000000..43a7aed3b1
+index 0000000000..39b90bb035
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_snapshot_collector_impl.h
-@@ -0,0 +1,352 @@
+@@ -0,0 +1,366 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -30489,6 +31404,7 @@ index 0000000000..43a7aed3b1
 +class Document;
 +class Element;
 +class LocalFrame;
++class PlainTextPainter;
 +
 +// Serves Page.captureAgentSnapshot's per-frame interactive-element
 +// collection. Bound once per local root frame (the main frame and every
@@ -30660,6 +31576,13 @@ index 0000000000..43a7aed3b1
 +  void FreezeForCopy(int32_t max_text_chars,
 +                     mojo::PendingReceiver<mojom::blink::AgentFreezeHold> hold,
 +                     FreezeForCopyCallback callback) override;
++  // browser: Page.agentCanvasText's read (CanvasTextRecord).
++  void CanvasText(int32_t node_id,
++                  bool in_view,
++                  int32_t max_runs,
++                  int32_t max_chars,
++                  int32_t max_fills,
++                  CanvasTextCallback callback) override;
 +
 +  // LocalFrameView::LifecycleNotificationObserver: WatchDrag's look after
 +  // each frame.
@@ -30803,6 +31726,12 @@ index 0000000000..43a7aed3b1
 +  // browser: the freeze under way or held, if any.
 +  Member<AgentFreeze> freeze_;
 +
++  // browser: Page.agentCanvasText's own canvas-mode painter, made at first
++  // use: never a canvas's, whose word cache the page's own draws use. Its
++  // caches are keyed weakly by fallback list (they keep no font alive) and
++  // age out a read after their last use.
++  Member<PlainTextPainter> canvas_text_painter_;
++
 +  // browser: LiveRegions' last answer (every region read, before the
 +  // reply's cap), read with nothing dirty, and the DOM tree version and
 +  // style version of each document it was read from. DOM tree versions come
@@ -30817,7 +31746,7 @@ index 0000000000..43a7aed3b1
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_AGENT_SNAPSHOT_AGENT_SNAPSHOT_COLLECTOR_IMPL_H_
 diff --git a/third_party/blink/renderer/modules/modules_initializer.cc b/third_party/blink/renderer/modules/modules_initializer.cc
-index c43fc9b59f..ecd2278acd 100644
+index 6be2e31bd5..a61fc529aa 100644
 --- a/third_party/blink/renderer/modules/modules_initializer.cc
 +++ b/third_party/blink/renderer/modules/modules_initializer.cc
 @@ -40,6 +40,8 @@
@@ -30829,7 +31758,7 @@ index c43fc9b59f..ecd2278acd 100644
  #include "third_party/blink/renderer/modules/app_banner/app_banner_controller.h"
  #include "third_party/blink/renderer/modules/audio_output_devices/html_media_element_audio_output_device.h"
  #include "third_party/blink/renderer/modules/cache_storage/inspector_cache_storage_agent.h"
-@@ -250,6 +252,14 @@ void ModulesInitializer::InitLocalFrame(LocalFrame& frame) const {
+@@ -251,6 +253,14 @@ void ModulesInitializer::InitLocalFrame(LocalFrame& frame) const {
        BindRepeating(&PeerConnectionTracker::BindToFrame,
                      WrapCrossThreadWeakPersistent(&frame)));
  
@@ -30870,10 +31799,10 @@ index 804d2065f3..77db6af969 100644
                                   const AtomicString& initiator_type);
    virtual bool AllowImage() const { return false; }
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
-index eb403c197b..5eca4a175d 100644
+index e0f8670339..1c908a8d5c 100644
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
-@@ -2411,6 +2411,67 @@ int ResourceFetcher::ActiveRequestCount() const {
+@@ -2436,6 +2436,67 @@ int ResourceFetcher::ActiveRequestCount() const {
    return loaders_.size() + non_blocking_loaders_.size();
  }
  
@@ -30941,7 +31870,7 @@ index eb403c197b..5eca4a175d 100644
  void ResourceFetcher::EnableIsPreloadedForTest() {
    if (preloaded_urls_for_test_) {
      return;
-@@ -2820,6 +2881,16 @@ bool ResourceFetcher::StartLoad(
+@@ -2845,6 +2906,16 @@ bool ResourceFetcher::StartLoad(
      loader = MakeGarbageCollected<ResourceLoader>(
          this, scheduler_, resource, context_lifecycle_notifier_,
          std::move(request_body), size);
@@ -30959,7 +31888,7 @@ index eb403c197b..5eca4a175d 100644
      // actually continues to return true for Resources matched from the preload
      // cache that must block the load event, but that is OK because this method
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
-index 09598287fc..dc1d202960 100644
+index 3d69300f53..91b15f826b 100644
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
 @@ -27,11 +27,13 @@
@@ -30976,7 +31905,7 @@ index 09598287fc..dc1d202960 100644
  #include "base/memory/memory_pressure_listener.h"
  #include "base/task/single_thread_task_runner.h"
  #include "base/time/time.h"
-@@ -243,6 +245,28 @@ class PLATFORM_EXPORT ResourceFetcher
+@@ -245,6 +247,28 @@ class PLATFORM_EXPORT ResourceFetcher
    int NonblockingRequestCount() const;
    int ActiveRequestCount() const;
  
@@ -31005,7 +31934,7 @@ index 09598287fc..dc1d202960 100644
    enum ClearPreloadsPolicy {
      kClearAllPreloads,
      kClearSpeculativeMarkupPreloads
-@@ -719,6 +743,14 @@ class PLATFORM_EXPORT ResourceFetcher
+@@ -727,6 +751,14 @@ class PLATFORM_EXPORT ResourceFetcher
  
    HeapHashSet<Member<ResourceLoader>> loaders_;
    HeapHashSet<Member<ResourceLoader>> non_blocking_loaders_;
@@ -31021,7 +31950,7 @@ index 09598287fc..dc1d202960 100644
    HashMap<KURL, EarlyHintsPreloadEntry> unused_early_hints_preloaded_resources_;
  
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_loader.h b/third_party/blink/renderer/platform/loader/fetch/resource_loader.h
-index 1c0f7d84c8..6c9a47bb8f 100644
+index 319156ffac..85af05468e 100644
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_loader.h
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_loader.h
 @@ -117,6 +117,16 @@ class PLATFORM_EXPORT ResourceLoader final
@@ -31054,7 +31983,7 @@ index 1c0f7d84c8..6c9a47bb8f 100644
  
    // ResourceLoadSchedulerClient.
    void Run() override;
-@@ -302,6 +318,10 @@ class PLATFORM_EXPORT ResourceLoader final
+@@ -306,6 +322,10 @@ class PLATFORM_EXPORT ResourceLoader final
    CnameAliasInfoForTesting cname_alias_info_for_testing_;
    bool finished_ = false;
  

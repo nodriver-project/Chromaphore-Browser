@@ -1,7 +1,7 @@
-From d339ffc78ef5e348df15bb8ee68cd4d92c6214ba Mon Sep 17 00:00:00 2001
+From 7924df1747f4802aec0fb8c9713e44c04b7ff184 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:12 -0500
-Subject: [PATCH 28/61] cancel-payment-request
+Date: Sun, 22 Nov 2026 13:08:49 -0500
+Subject: [PATCH 29/62] cancel-payment-request
 
 --cancel-payment-request: a payment sheet a page opens is closed unseen
 after a random 1-2 s, as its Cancel button closes it, so a tab-modal sheet
@@ -14,7 +14,7 @@ Chrome's own AbortError. The switch declaration rides in switch-resolver.
  3 files changed, 19 insertions(+)
 
 diff --git a/components/payments/content/BUILD.gn b/components/payments/content/BUILD.gn
-index b26023b5ef..34b56171e3 100644
+index 4a6120141b..ae9c638d71 100644
 --- a/components/payments/content/BUILD.gn
 +++ b/components/payments/content/BUILD.gn
 @@ -64,6 +64,7 @@ static_library("content") {
@@ -26,7 +26,7 @@ index b26023b5ef..34b56171e3 100644
      "//components/payments/content/browser_binding",
      "//components/payments/content/utility",
 diff --git a/components/payments/content/DEPS b/components/payments/content/DEPS
-index 3c6c34a36a..41bc3ea1b5 100644
+index 5c606c7f95..33fdb85eb7 100644
 --- a/components/payments/content/DEPS
 +++ b/components/payments/content/DEPS
 @@ -5,6 +5,7 @@ include_rules = [
@@ -38,7 +38,7 @@ index 3c6c34a36a..41bc3ea1b5 100644
    "+components/link_header_util",
    "+components/keyed_service/core",
 diff --git a/components/payments/content/payment_request_display_manager.cc b/components/payments/content/payment_request_display_manager.cc
-index acf6fcfb4b..be6a901870 100644
+index 1dfe722244..553a287a65 100644
 --- a/components/payments/content/payment_request_display_manager.cc
 +++ b/components/payments/content/payment_request_display_manager.cc
 @@ -7,8 +7,15 @@

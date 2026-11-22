@@ -1,7 +1,7 @@
-From cfb7974f7ae8aff5d1e04e70675b9001b2474699 Mon Sep 17 00:00:00 2001
+From 47ad43ed653ef719f16ee2a11a0af2050cbdf16b Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:15:04 -0500
-Subject: [PATCH 38/61] linux-graphics
+Date: Sun, 22 Nov 2026 13:09:41 -0500
+Subject: [PATCH 39/62] linux-graphics
 
 WebGL in a Linux build presenting Windows (see the user-agent commit)
 reports what ANGLE's Direct3D 11 backend reports on Windows in place of the
@@ -34,41 +34,40 @@ Chrome on Windows writes it, not the host's PCI display device (or
 changes; the limits Blink and the GPU process enforce stay the host's.
 Nothing changes on Windows or with --use-chromium-defaults.
 ---
- content/browser/gpu/gpu_process_host.cc       |   5 +
+ content/browser/gpu/gpu_process_host.cc       |   4 +
  .../renderer/renderer_blink_platform_impl.cc  |  23 ++
  gpu/command_buffer/service/BUILD.gn           |  15 ++
- .../service/d3d11_shader_translation.cc       | 251 ++++++++++++++++++
+ .../service/d3d11_shader_translation.cc       | 249 ++++++++++++++++++
  .../service/d3d11_shader_translation.h        |  40 +++
  .../service/gles2_cmd_decoder_passthrough.h   |  15 ++
- .../gles2_cmd_decoder_passthrough_doers.cc    |  97 +++++++
- .../service/webgpu_decoder_impl.cc            |  35 ++-
+ .../gles2_cmd_decoder_passthrough_doers.cc    |  96 +++++++
+ .../service/webgpu_decoder_impl.cc            |  34 ++-
  .../webgl/webgl2_rendering_context_base.cc    |  11 +
  .../webgl/webgl_rendering_context_base.cc     |  78 +++++-
  .../blink/renderer/modules/webgpu/gpu.cc      |  11 +
  .../renderer/modules/webgpu/gpu_adapter.cc    |  46 ++++
  third_party/blink/renderer/platform/BUILD.gn  |   8 +
- .../graphics/gpu/windows_gpu_profile.cc       | 241 +++++++++++++++++
- .../graphics/gpu/windows_gpu_profile.h        |  78 ++++++
- 15 files changed, 948 insertions(+), 6 deletions(-)
+ .../graphics/gpu/windows_gpu_profile.cc       | 242 +++++++++++++++++
+ .../graphics/gpu/windows_gpu_profile.h        |  77 ++++++
+ 15 files changed, 943 insertions(+), 6 deletions(-)
  create mode 100644 gpu/command_buffer/service/d3d11_shader_translation.cc
  create mode 100644 gpu/command_buffer/service/d3d11_shader_translation.h
  create mode 100644 third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
  create mode 100644 third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
 
 diff --git a/content/browser/gpu/gpu_process_host.cc b/content/browser/gpu/gpu_process_host.cc
-index 23877b74ab..1edd6174f8 100644
+index 1b29f20028..7f657883ef 100644
 --- a/content/browser/gpu/gpu_process_host.cc
 +++ b/content/browser/gpu/gpu_process_host.cc
-@@ -4,6 +4,8 @@
- 
- #include "content/browser/gpu/gpu_process_host.h"
- 
+@@ -34,6 +34,7 @@
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
+ #include "cc/base/switches.h"
 +#include "components/browser/browser_switches.h"
-+
- #include <stddef.h>
- 
- #include <algorithm>
-@@ -257,6 +259,9 @@ GpuTerminationStatus ConvertToGpuTerminationStatus(
+ #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
+ #include "components/tracing/common/tracing_switches.h"
+ #include "components/viz/common/features.h"
+@@ -257,6 +258,9 @@ GpuTerminationStatus ConvertToGpuTerminationStatus(
  
  // Command-line switches to propagate to the GPU process.
  static const char* const kSwitchNames[] = {
@@ -79,10 +78,10 @@ index 23877b74ab..1edd6174f8 100644
      sandbox::policy::switches::kGpuSandboxAllowSysVShm,
      sandbox::policy::switches::kGpuSandboxFailuresFatal,
 diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer/renderer_blink_platform_impl.cc
-index 4341f407c4..3036881153 100644
+index a5041175f1..e47d870f30 100644
 --- a/content/renderer/renderer_blink_platform_impl.cc
 +++ b/content/renderer/renderer_blink_platform_impl.cc
-@@ -141,6 +141,11 @@
+@@ -143,6 +143,11 @@
  #include "content/common/android/sync_compositor_statics.h"
  #endif
  
@@ -94,7 +93,7 @@ index 4341f407c4..3036881153 100644
  using blink::Platform;
  using blink::WebAudioDevice;
  using blink::WebAudioLatencyHint;
-@@ -728,6 +733,24 @@ void RendererBlinkPlatformImpl::CollectWebGLContextInfo(
+@@ -749,6 +754,24 @@ void RendererBlinkPlatformImpl::CollectWebGLContextInfo(
    gl_info->using_gpu_compositing = !IsGpuCompositingDisabled();
    gl_info->using_passthrough_command_decoder = gpu_info.passthrough_cmd_decoder;
    gl_info->angle_implementation = gpu_info.gl_implementation_parts.angle;
@@ -120,10 +119,10 @@ index 4341f407c4..3036881153 100644
  
  std::unique_ptr<blink::WebGraphicsContext3DProvider>
 diff --git a/gpu/command_buffer/service/BUILD.gn b/gpu/command_buffer/service/BUILD.gn
-index dfd4182a87..45476f77b6 100644
+index 33edf27467..84b2b7fb33 100644
 --- a/gpu/command_buffer/service/BUILD.gn
 +++ b/gpu/command_buffer/service/BUILD.gn
-@@ -354,6 +354,11 @@ target(link_target_type, "gles2_sources") {
+@@ -351,6 +351,11 @@ target(link_target_type, "gles2_sources") {
        "webgpu_decoder_impl.cc",
        "webgpu_decoder_impl.h",
      ]
@@ -135,7 +134,7 @@ index dfd4182a87..45476f77b6 100644
    }
  
    configs += [
-@@ -415,6 +420,16 @@ target(link_target_type, "gles2_sources") {
+@@ -412,6 +417,16 @@ target(link_target_type, "gles2_sources") {
      "//ui/gl/init",
    ]
  
@@ -154,10 +153,10 @@ index dfd4182a87..45476f77b6 100644
        "shared_image/gl_ozone_image_representation.cc",
 diff --git a/gpu/command_buffer/service/d3d11_shader_translation.cc b/gpu/command_buffer/service/d3d11_shader_translation.cc
 new file mode 100644
-index 0000000000..d02c3f6ff2
+index 0000000000..5acb66d802
 --- /dev/null
 +++ b/gpu/command_buffer/service/d3d11_shader_translation.cc
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,249 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -173,10 +172,10 @@ index 0000000000..d02c3f6ff2
 +#include "base/command_line.h"
 +#include "base/no_destructor.h"
 +#include "base/strings/string_split.h"
-+#include "ui/gfx/extension_set.h"
 +#include "base/synchronization/lock.h"
 +#include "components/browser/browser_switches.h"
 +#include "third_party/angle/include/GLSLANG/ShaderLang.h"
++#include "ui/gfx/extension_set.h"
 +#include "ui/gl/gl_bindings.h"
 +#include "ui/gl/gl_switches.h"
 +
@@ -272,12 +271,10 @@ index 0000000000..d02c3f6ff2
 +    {"GL_EXT_shader_texture_lod", &ShBuiltInResources::EXT_shader_texture_lod,
 +     true, false},
 +    {"GL_EXT_frag_depth", &ShBuiltInResources::EXT_frag_depth, true, false},
-+    {"GL_EXT_draw_buffers", &ShBuiltInResources::EXT_draw_buffers, true,
-+     false},
-+    {"GL_EXT_blend_func_extended",
-+     &ShBuiltInResources::EXT_blend_func_extended, true, true},
-+    {"GL_ANGLE_multi_draw", &ShBuiltInResources::ANGLE_multi_draw, true,
-+     true},
++    {"GL_EXT_draw_buffers", &ShBuiltInResources::EXT_draw_buffers, true, false},
++    {"GL_EXT_blend_func_extended", &ShBuiltInResources::EXT_blend_func_extended,
++     true, true},
++    {"GL_ANGLE_multi_draw", &ShBuiltInResources::ANGLE_multi_draw, true, true},
 +    {"GL_OVR_multiview2", &ShBuiltInResources::OVR_multiview2, false, true},
 +    {"GL_ANGLE_clip_cull_distance",
 +     &ShBuiltInResources::ANGLE_clip_cull_distance, false, true},
@@ -456,10 +453,10 @@ index 0000000000..532fe7ec03
 +
 +#endif  // GPU_COMMAND_BUFFER_SERVICE_D3D11_SHADER_TRANSLATION_H_
 diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h
-index 75172439b5..50f5847a15 100644
+index 3bd5694b6a..79dd41ce61 100644
 --- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h
 +++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough.h
-@@ -529,6 +529,21 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl : public GLES2Decoder {
+@@ -541,6 +541,21 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl : public GLES2Decoder {
    // Mappings from client side IDs to service side IDs for shared objects
    raw_ptr<PassthroughResources> resources_ = nullptr;
  
@@ -482,7 +479,7 @@ index 75172439b5..50f5847a15 100644
    ClientServiceMap<GLuint, GLuint> framebuffer_id_map_;
    ClientServiceMap<GLuint, GLuint> transform_feedback_id_map_;
 diff --git a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
-index 4aeff35017..26840ae9e6 100644
+index 5599996c2f..1dd238f4d6 100644
 --- a/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
 +++ b/gpu/command_buffer/service/gles2_cmd_decoder_passthrough_doers.cc
 @@ -41,6 +41,12 @@
@@ -498,7 +495,7 @@ index 4aeff35017..26840ae9e6 100644
  namespace gpu {
  namespace gles2 {
  
-@@ -729,9 +735,68 @@ error::Error GLES2DecoderPassthroughImpl::DoColorMaskiOES(GLuint buf,
+@@ -729,9 +735,67 @@ error::Error GLES2DecoderPassthroughImpl::DoColorMaskiOES(GLuint buf,
  
  error::Error GLES2DecoderPassthroughImpl::DoCompileShader(GLuint shader) {
    api()->glCompileShaderFn(GetShaderServiceID(shader, resources_));
@@ -556,8 +553,7 @@ index 4aeff35017..26840ae9e6 100644
 +    compiled.translation =
 +        compile_status
 +            ? TranslateAsDirect3D11(type, feature_info_->IsWebGL2OrES3Context(),
-+                                    compiled.source,
-+                                    compiled.extension_bits)
++                                    compiled.source, compiled.extension_bits)
 +            : std::string();
 +  }
 +  return *compiled.translation;
@@ -567,7 +563,7 @@ index 4aeff35017..26840ae9e6 100644
  error::Error GLES2DecoderPassthroughImpl::DoCompressedTexImage2D(
      GLenum target,
      GLint level,
-@@ -1043,6 +1108,9 @@ error::Error GLES2DecoderPassthroughImpl::DoDeleteSync(GLuint sync) {
+@@ -1048,6 +1112,9 @@ error::Error GLES2DecoderPassthroughImpl::DoDeleteSync(GLuint sync) {
  }
  
  error::Error GLES2DecoderPassthroughImpl::DoDeleteShader(GLuint shader) {
@@ -577,7 +573,7 @@ index 4aeff35017..26840ae9e6 100644
    return DeleteHelper(
        shader, &resources_->shader_id_map,
        [this](GLuint shader) { api()->glDeleteShaderFn(shader); });
-@@ -1732,6 +1800,23 @@ error::Error GLES2DecoderPassthroughImpl::DoGetShaderiv(GLuint shader,
+@@ -1745,6 +1812,23 @@ error::Error GLES2DecoderPassthroughImpl::DoGetShaderiv(GLuint shader,
                                                          GLsizei bufsize,
                                                          GLsizei* length,
                                                          GLint* params) {
@@ -601,7 +597,7 @@ index 4aeff35017..26840ae9e6 100644
    api()->glGetShaderivRobustANGLEFn(GetShaderServiceID(shader, resources_),
                                      pname, bufsize, length, params);
    return error::kNoError;
-@@ -4302,6 +4387,18 @@ error::Error GLES2DecoderPassthroughImpl::DoGetTranslatedShaderSourceANGLE(
+@@ -4374,6 +4458,18 @@ error::Error GLES2DecoderPassthroughImpl::DoGetTranslatedShaderSourceANGLE(
      std::string* source) {
    CheckErrorCallbackState();
    GLuint service_id = GetShaderServiceID(shader, resources_);
@@ -621,10 +617,10 @@ index 4aeff35017..26840ae9e6 100644
    api()->glGetShaderivFn(service_id, GL_TRANSLATED_SHADER_SOURCE_LENGTH_ANGLE,
                           &translated_source_length);
 diff --git a/gpu/command_buffer/service/webgpu_decoder_impl.cc b/gpu/command_buffer/service/webgpu_decoder_impl.cc
-index 02a3f6f90b..fb8e46b104 100644
+index aac28018fd..13dcb06a42 100644
 --- a/gpu/command_buffer/service/webgpu_decoder_impl.cc
 +++ b/gpu/command_buffer/service/webgpu_decoder_impl.cc
-@@ -53,6 +53,11 @@
+@@ -54,6 +54,11 @@
  #include "gpu/config/gpu_finch_features.h"
  #include "gpu/config/gpu_preferences.h"
  #include "gpu/config/webgpu_blocklist_impl.h"
@@ -636,7 +632,7 @@ index 02a3f6f90b..fb8e46b104 100644
  #include "gpu/webgpu/callback.h"
  #include "third_party/blink/public/common/tokens/tokens.h"
  #include "third_party/dawn/include/dawn/native/DawnNative.h"
-@@ -80,6 +85,26 @@ namespace webgpu {
+@@ -82,6 +87,26 @@ namespace webgpu {
  
  namespace {
  
@@ -663,17 +659,16 @@ index 02a3f6f90b..fb8e46b104 100644
  constexpr wgpu::TextureUsage kAllowedWritableMailboxTextureUsages =
      wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::RenderAttachment |
      wgpu::TextureUsage::StorageBinding;
-@@ -1630,7 +1655,8 @@ wgpu::Adapter WebGPUDecoderImpl::CreatePreferredAdapter(
+@@ -1689,7 +1714,7 @@ wgpu::Adapter WebGPUDecoderImpl::CreatePreferredAdapter(
    // The fallback adapter is SwiftShader, which is only allowed with
    // --enable-unsafe-webgpu. Don't make Dawn load it otherwise.
    const bool allow_fallback_adapter =
 -      safety_level_ == webgpu::SafetyLevel::kUnsafe;
-+      safety_level_ == webgpu::SafetyLevel::kUnsafe ||
-+      PresentsWindowsWebGpu();
++      safety_level_ == webgpu::SafetyLevel::kUnsafe || PresentsWindowsWebGpu();
    if (force_fallback && !allow_fallback_adapter) {
      return nullptr;
    }
-@@ -1778,7 +1804,12 @@ wgpu::Adapter WebGPUDecoderImpl::CreatePreferredAdapter(
+@@ -1837,7 +1862,12 @@ wgpu::Adapter WebGPUDecoderImpl::CreatePreferredAdapter(
      wgpu::AdapterInfo adapter_info = {};
      adapter.GetInfo(&adapter_info);
  
@@ -724,10 +719,10 @@ index 9eb36fe26c..89f8d55d56 100644
  }
  
 diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
-index b17f336f90..227186c30c 100644
+index 1a00418d11..7836546798 100644
 --- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
 +++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
-@@ -170,6 +170,10 @@
+@@ -171,6 +171,10 @@
  #include "third_party/skia/include/gpu/ganesh/GrTypes.h"
  #include "ui/gfx/geometry/size.h"
  
@@ -738,7 +733,7 @@ index b17f336f90..227186c30c 100644
  
  // Populates parameters from texImage2D except for border, width, height, and
  // depth (which are not present for all texImage2D functions).
-@@ -3854,6 +3858,13 @@ bool WebGLRenderingContextBase::ExtensionSupportedAndAllowed(
+@@ -3933,6 +3937,13 @@ bool WebGLRenderingContextBase::ExtensionSupportedAndAllowed(
      return false;
    if (disabled_extensions_.Contains(String(tracker->ExtensionName())))
      return false;
@@ -752,7 +747,7 @@ index b17f336f90..227186c30c 100644
    return true;
  }
  
-@@ -4216,8 +4227,15 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+@@ -4295,8 +4306,15 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
        return ScriptValue::CreateNull(script_state->GetIsolate());
      case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
        if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
@@ -770,7 +765,7 @@ index b17f336f90..227186c30c 100644
        }
        SynthesizeGLError(
            GL_INVALID_ENUM, "getParameter",
-@@ -4225,8 +4243,14 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+@@ -4304,8 +4322,14 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
        return ScriptValue::CreateNull(script_state->GetIsolate());
      case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
        if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
@@ -787,7 +782,7 @@ index b17f336f90..227186c30c 100644
        }
        SynthesizeGLError(
            GL_INVALID_ENUM, "getParameter",
-@@ -4526,6 +4550,18 @@ WebGLShaderPrecisionFormat* WebGLRenderingContextBase::getShaderPrecisionFormat(
+@@ -4605,6 +4629,18 @@ WebGLShaderPrecisionFormat* WebGLRenderingContextBase::getShaderPrecisionFormat(
    GLint precision = 0;
    ContextGL()->GetShaderPrecisionFormat(shader_type, precision_type, range,
                                          &precision);
@@ -806,7 +801,7 @@ index b17f336f90..227186c30c 100644
    return MakeGarbageCollected<WebGLShaderPrecisionFormat>(range[0], range[1],
                                                            precision);
  }
-@@ -8011,6 +8047,12 @@ ScriptValue WebGLRenderingContextBase::GetFloatParameter(
+@@ -8037,6 +8073,12 @@ ScriptValue WebGLRenderingContextBase::GetFloatParameter(
    GLfloat value = 0;
    if (!isContextLost()) {
      ContextGL()->GetFloatv(pname, &value);
@@ -819,7 +814,7 @@ index b17f336f90..227186c30c 100644
    }
    return WebGLAny(script_state, value);
  }
-@@ -8021,6 +8063,12 @@ ScriptValue WebGLRenderingContextBase::GetIntParameter(
+@@ -8047,6 +8089,12 @@ ScriptValue WebGLRenderingContextBase::GetIntParameter(
    GLint value = 0;
    if (!isContextLost()) {
      ContextGL()->GetIntegerv(pname, &value);
@@ -832,7 +827,7 @@ index b17f336f90..227186c30c 100644
      switch (pname) {
        case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
        case GL_IMPLEMENTATION_COLOR_READ_TYPE:
-@@ -8043,6 +8091,12 @@ ScriptValue WebGLRenderingContextBase::GetInt64Parameter(
+@@ -8069,6 +8117,12 @@ ScriptValue WebGLRenderingContextBase::GetInt64Parameter(
    GLint64 value = 0;
    if (!isContextLost())
      ContextGL()->GetInteger64v(pname, &value);
@@ -845,7 +840,7 @@ index b17f336f90..227186c30c 100644
    return WebGLAny(script_state, value);
  }
  
-@@ -8061,6 +8115,14 @@ ScriptValue WebGLRenderingContextBase::GetWebGLFloatArrayParameter(
+@@ -8087,6 +8141,14 @@ ScriptValue WebGLRenderingContextBase::GetWebGLFloatArrayParameter(
    std::array<GLfloat, 4> value = {0};
    if (!isContextLost())
      ContextGL()->GetFloatv(pname, value.data());
@@ -860,7 +855,7 @@ index b17f336f90..227186c30c 100644
    unsigned length = 0;
    switch (pname) {
      case GL_ALIASED_POINT_SIZE_RANGE:
-@@ -8085,6 +8147,14 @@ ScriptValue WebGLRenderingContextBase::GetWebGLIntArrayParameter(
+@@ -8111,6 +8173,14 @@ ScriptValue WebGLRenderingContextBase::GetWebGLIntArrayParameter(
    std::array<GLint, 4> value = {0};
    if (!isContextLost())
      ContextGL()->GetIntegerv(pname, value.data());
@@ -989,10 +984,10 @@ index 5d35a355c7..5a445496d3 100644
    GPUAdapterInfo* info;
    if (RuntimeEnabledFeatures::WebGPUDeveloperFeaturesEnabled()) {
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index 5f771bafbe..55ec53e29c 100644
+index 0514645923..9d39aeba89 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -1777,6 +1777,14 @@ component("platform") {
+@@ -1810,6 +1810,14 @@ component("platform") {
      ]
    }
  
@@ -1009,10 +1004,10 @@ index 5f771bafbe..55ec53e29c 100644
        "fonts/win/dwrite_font_format_support.cc",
 diff --git a/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
 new file mode 100644
-index 0000000000..2643caec1e
+index 0000000000..bbf6201c6b
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.cc
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,242 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1060,6 +1055,7 @@ index 0000000000..2643caec1e
 +};
 +
 +constexpr std::string_view kWebgpuFeatures[] = {
++    "atomic-vec2u-min-max",
 +    "bgra8unorm-storage",
 +    "clip-distances",
 +    "core-features-and-limits",
@@ -1256,10 +1252,10 @@ index 0000000000..2643caec1e
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
 new file mode 100644
-index 0000000000..eadf530687
+index 0000000000..080b51029d
 --- /dev/null
 +++ b/third_party/blink/renderer/platform/graphics/gpu/windows_gpu_profile.h
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,77 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1273,7 +1269,6 @@ index 0000000000..eadf530687
 +#include <string_view>
 +
 +#include "base/containers/span.h"
-+
 +#include "third_party/blink/renderer/platform/graphics/gpu/webgpu_cpp.h"
 +#include "third_party/blink/renderer/platform/platform_export.h"
 +

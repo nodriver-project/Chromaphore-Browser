@@ -1,7 +1,7 @@
-From 52811db3751fb18f37f30e9b4cdf9be86781606a Mon Sep 17 00:00:00 2001
+From b1f1eae93b70c3ce36c31119e102dc182c276cde Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:06 -0500
-Subject: [PATCH 25/61] multi-pip-multiview
+Date: Sun, 22 Nov 2026 13:08:42 -0500
+Subject: [PATCH 26/62] multi-pip-multiview
 
 Video picture-in-picture windows from several tabs at once, each new one
 opening in the next free corner, and a chrome://multiview tab that tiles
@@ -16,7 +16,7 @@ registration in browser-settings.
  chrome/app/generated_resources.grd.gritdeps   |   1 +
  chrome/app/multiview_strings.grdp             |  16 +
  .../auto_picture_in_picture_tab_helper.cc     |  12 +-
- .../picture_in_picture_window_manager.cc      | 189 ++++++-
+ .../picture_in_picture_window_manager.cc      | 188 ++++++-
  .../picture_in_picture_window_manager.h       |  63 ++-
  .../ui/browser_web_contents_delegate/BUILD.gn |   1 +
  .../browser_web_contents_delegate.cc          |  16 +
@@ -47,7 +47,7 @@ registration in browser-settings.
  content/public/browser/web_contents.h         |  16 +
  .../public/browser/web_contents_delegate.cc   |  16 +
  .../public/browser/web_contents_delegate.h    |  16 +
- 35 files changed, 2131 insertions(+), 39 deletions(-)
+ 35 files changed, 2130 insertions(+), 39 deletions(-)
  create mode 100644 chrome/app/multiview_strings.grdp
  create mode 100644 chrome/browser/ui/views/overlay/multiview/multiview_grid_view.cc
  create mode 100644 chrome/browser/ui/views/overlay/multiview/multiview_grid_view.h
@@ -59,7 +59,7 @@ registration in browser-settings.
  create mode 100644 chrome/browser/ui/views/overlay/multiview/multiview_ui.h
 
 diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
-index 21e5fd0d92..4bf1527777 100644
+index b9d0f60014..7b214ee7f2 100644
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
 @@ -301,6 +301,9 @@ are declared in tools/grit/grit_args.gni.
@@ -73,7 +73,7 @@ index 21e5fd0d92..4bf1527777 100644
        <part file="notebooks_strings.grdp" />
  
 diff --git a/chrome/app/generated_resources.grd.gritdeps b/chrome/app/generated_resources.grd.gritdeps
-index 9aa7b11d7b..787660bc8a 100644
+index c56cb13d3c..dcc2d65d80 100644
 --- a/chrome/app/generated_resources.grd.gritdeps
 +++ b/chrome/app/generated_resources.grd.gritdeps
 @@ -12,6 +12,7 @@ chrome/app/glic_strings.grdp
@@ -107,10 +107,10 @@ index 0000000000..d0deda3988
 +  </message>
 +</grit-part>
 diff --git a/chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.cc b/chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.cc
-index 359dba00ed..6039d66a90 100644
+index 32d1522db9..e6656393eb 100644
 --- a/chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.cc
 +++ b/chrome/browser/picture_in_picture/auto_picture_in_picture_tab_helper.cc
-@@ -640,7 +640,10 @@ void AutoPictureInPictureTabHelper::MaybeExitAutoPictureInPicture() {
+@@ -678,7 +678,10 @@ void AutoPictureInPictureTabHelper::MaybeExitAutoPictureInPicture() {
    }
    is_in_auto_picture_in_picture_ = false;
  
@@ -121,8 +121,8 @@ index 359dba00ed..6039d66a90 100644
 +      ->ExitPictureInPictureForWebContents(web_contents());
  }
  
- void AutoPictureInPictureTabHelper::MaybeStartOrStopObservers() {
-@@ -698,8 +701,11 @@ bool AutoPictureInPictureTabHelper::IsEligibleForAutoPictureInPicture(
+ void AutoPictureInPictureTabHelper::
+@@ -755,8 +758,11 @@ bool AutoPictureInPictureTabHelper::IsEligibleForAutoPictureInPicture(
      return false;
    }
  
@@ -137,7 +137,7 @@ index 359dba00ed..6039d66a90 100644
    // The user may block autopip via a content setting. Also, if we're in an
    // incognito or isolated mode window, then we should treat "ask" as "block".
 diff --git a/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc b/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc
-index b02065efac..eef814412c 100644
+index 811bac8db0..d6cf787a6c 100644
 --- a/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc
 +++ b/chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc
 @@ -4,6 +4,11 @@
@@ -201,13 +201,13 @@ index b02065efac..eef814412c 100644
    if (pip_window_controller_)
      CloseWindowInternal();
  
-@@ -198,10 +224,26 @@ PictureInPictureWindowManager::EnterVideoPictureInPicture(
+@@ -205,9 +231,16 @@ PictureInPictureWindowManager::EnterVideoPictureInPicture(
    if (!pip_window_controller_ ||
        pip_window_controller_->GetWebContents() != web_contents ||
        !pip_window_controller_->GetWebContents()->HasPictureInPictureVideo()) {
 -    // If there was already a video PiP controller, close the existing window
 -    // before creating the next one.
--    if (pip_window_controller_)
+-    if (pip_window_controller_) {
 +    // browser: another tab's video window stays open next to the new one.
 +    if (video_web_contents_observer_ &&
 +        pip_window_controller_->GetWebContents() != web_contents &&
@@ -218,9 +218,13 @@ index b02065efac..eef814412c 100644
 +    } else if (pip_window_controller_) {
 +      // If there was already a video PiP controller, close the existing window
 +      // before creating the next one.
+       base::WeakPtr<content::WebContents> weak_web_contents =
+           web_contents->GetWeakPtr();
        CloseWindowInternal();
-+    }
-+
+@@ -216,6 +249,14 @@ PictureInPictureWindowManager::EnterVideoPictureInPicture(
+       }
+     }
+ 
 +    // browser: when this tab already has an older window (it starts
 +    // picture-in-picture for another of its videos), that window becomes the
 +    // current one.
@@ -228,10 +232,11 @@ index b02065efac..eef814412c 100644
 +                  [web_contents](const OtherVideoWindow& window) {
 +                    return window.observer->web_contents() == web_contents;
 +                  });
- 
++
      CreateWindowInternal(web_contents);
    }
-@@ -215,7 +257,14 @@ PictureInPictureWindowManager::EnterVideoPictureInPicture(
+ 
+@@ -228,7 +269,14 @@ PictureInPictureWindowManager::EnterVideoPictureInPicture(
  
  bool PictureInPictureWindowManager::ExitPictureInPictureViaWindowUi(
      UiBehavior behavior) {
@@ -247,7 +252,7 @@ index b02065efac..eef814412c 100644
      return false;
    }
  
-@@ -223,20 +272,22 @@ bool PictureInPictureWindowManager::ExitPictureInPictureViaWindowUi(
+@@ -236,20 +284,22 @@ bool PictureInPictureWindowManager::ExitPictureInPictureViaWindowUi(
    // The user manually closed the pip window, so let the tab helper know in case
    // the auto-pip permission dialog was visible.
    if (auto* tab_helper = AutoPictureInPictureTabHelper::FromWebContents(
@@ -274,7 +279,7 @@ index b02065efac..eef814412c 100644
        break;
    }
  
-@@ -248,6 +299,8 @@ bool PictureInPictureWindowManager::ExitPictureInPictureViaWindowUi(
+@@ -261,6 +311,8 @@ bool PictureInPictureWindowManager::ExitPictureInPictureViaWindowUi(
  }
  
  bool PictureInPictureWindowManager::ExitPictureInPicture() {
@@ -283,7 +288,7 @@ index b02065efac..eef814412c 100644
    if (pip_window_controller_) {
      CloseWindowInternal();
      return true;
-@@ -260,6 +313,25 @@ bool PictureInPictureWindowManager::ExitPictureInPicture() {
+@@ -273,6 +325,25 @@ bool PictureInPictureWindowManager::ExitPictureInPicture() {
    return false;
  }
  
@@ -309,7 +314,7 @@ index b02065efac..eef814412c 100644
  // static
  void PictureInPictureWindowManager::ExitPictureInPictureSoon() {
    // Unretained is safe because we're a singleton.
-@@ -415,6 +487,19 @@ PictureInPictureWindowManager::GetPictureInPictureWindowBoundsInScreen() const {
+@@ -428,6 +499,19 @@ PictureInPictureWindowManager::GetPictureInPictureWindowBoundsInScreen() const {
               : std::nullopt;
  }
  
@@ -329,7 +334,7 @@ index b02065efac..eef814412c 100644
  gfx::Rect PictureInPictureWindowManager::CalculateOuterWindowBounds(
      const blink::mojom::PictureInPictureWindowOptions& pip_options,
      const gfx::Size& minimum_outer_window_size,
-@@ -641,6 +726,8 @@ void PictureInPictureWindowManager::CreateWindowInternal(
+@@ -654,6 +738,8 @@ void PictureInPictureWindowManager::CreateWindowInternal(
  }
  
  void PictureInPictureWindowManager::CloseWindowInternal() {
@@ -338,7 +343,7 @@ index b02065efac..eef814412c 100644
    video_web_contents_observer_.reset();
  
  #if !BUILDFLAG(IS_ANDROID)
-@@ -667,6 +754,56 @@ void PictureInPictureWindowManager::CloseWindowInternal() {
+@@ -680,6 +766,56 @@ void PictureInPictureWindowManager::CloseWindowInternal() {
  #endif  // !BUILDFLAG(IS_ANDROID)
  }
  
@@ -395,7 +400,7 @@ index b02065efac..eef814412c 100644
  bool PictureInPictureWindowManager::IsPictureInPictureDisabled() const {
  #if !BUILDFLAG(IS_ANDROID)
    return number_of_existing_scoped_disallow_picture_in_pictures_ > 0;
-@@ -677,8 +814,9 @@ bool PictureInPictureWindowManager::IsPictureInPictureDisabled() const {
+@@ -690,8 +826,9 @@ bool PictureInPictureWindowManager::IsPictureInPictureDisabled() const {
  
  #if BUILDFLAG(IS_MAC)
  void PictureInPictureWindowManager::OnAnyBrowserEnteredFullscreen() {
@@ -407,7 +412,7 @@ index b02065efac..eef814412c 100644
    }
  }
  #endif  // BUILDFLAG(IS_MAC)
-@@ -841,18 +979,21 @@ void PictureInPictureWindowManager::OnScopedDisallowPictureInPictureDestroyed(
+@@ -854,18 +991,21 @@ void PictureInPictureWindowManager::OnScopedDisallowPictureInPictureDestroyed(
  
  void PictureInPictureWindowManager::OnPictureInPictureWindowShown(
      PictureInPictureWindow* window) {
@@ -434,7 +439,7 @@ index b02065efac..eef814412c 100644
  }
  
  bool PictureInPictureWindowManager::ShouldFileDialogTuckPictureInPicture(
-@@ -874,8 +1015,9 @@ bool PictureInPictureWindowManager::ShouldFileDialogTuckPictureInPicture(
+@@ -887,8 +1027,9 @@ bool PictureInPictureWindowManager::ShouldFileDialogTuckPictureInPicture(
  void PictureInPictureWindowManager::OnScopedTuckPictureInPictureCreated(
      base::PassKey<ScopedTuckPictureInPicture>) {
    number_of_existing_scoped_tuck_picture_in_pictures_++;
@@ -446,7 +451,7 @@ index b02065efac..eef814412c 100644
      RecordPictureInPictureTucked(
          PictureInPictureTuckedType::kExistingWindowTucked);
    }
-@@ -885,8 +1027,11 @@ void PictureInPictureWindowManager::OnScopedTuckPictureInPictureDestroyed(
+@@ -898,8 +1039,11 @@ void PictureInPictureWindowManager::OnScopedTuckPictureInPictureDestroyed(
      base::PassKey<ScopedTuckPictureInPicture>) {
    CHECK_NE(number_of_existing_scoped_tuck_picture_in_pictures_, 0u);
    number_of_existing_scoped_tuck_picture_in_pictures_--;
@@ -461,7 +466,7 @@ index b02065efac..eef814412c 100644
  }
  
 diff --git a/chrome/browser/picture_in_picture/picture_in_picture_window_manager.h b/chrome/browser/picture_in_picture/picture_in_picture_window_manager.h
-index 063a8f7383..b312560276 100644
+index 2786953a87..822feac73e 100644
 --- a/chrome/browser/picture_in_picture/picture_in_picture_window_manager.h
 +++ b/chrome/browser/picture_in_picture/picture_in_picture_window_manager.h
 @@ -6,7 +6,9 @@
@@ -484,7 +489,7 @@ index 063a8f7383..b312560276 100644
  class PictureInPictureWindowManager {
   public:
    // Observer for PictureInPictureWindowManager events.
-@@ -114,6 +119,12 @@ class PictureInPictureWindowManager {
+@@ -115,6 +120,12 @@ class PictureInPictureWindowManager {
    // window UI.
    bool ExitPictureInPictureViaWindowUi(UiBehavior behavior);
  
@@ -497,7 +502,7 @@ index 063a8f7383..b312560276 100644
    // Closes any existing picture-in-picture windows (video or document pip).
    // Returns true if a picture-in-picture window was closed, and false if there
    // were no picture-in-picture windows to close.
-@@ -126,6 +137,11 @@ class PictureInPictureWindowManager {
+@@ -127,6 +138,11 @@ class PictureInPictureWindowManager {
    // not be a problem.
    bool ExitPictureInPicture();
  
@@ -509,7 +514,7 @@ index 063a8f7383..b312560276 100644
    // Exits picture in picture soon, but not before this call returns.  If
    // picture in picture closes between now and then, that's okay.  Intended as a
    // helper for callbacks and observers to avoid re-entrant calls during pip
-@@ -167,6 +183,10 @@ class PictureInPictureWindowManager {
+@@ -168,6 +184,10 @@ class PictureInPictureWindowManager {
    // picture-in-picture if either of them is present.
    std::optional<gfx::Rect> GetPictureInPictureWindowBoundsInScreen() const;
  
@@ -520,7 +525,7 @@ index 063a8f7383..b312560276 100644
    // Used for Document picture-in-picture windows only. The returned dimensions
    // represent the outer window bounds.
    // This method is called from the |BrowserNavigator|. Note that the window
-@@ -316,6 +336,21 @@ class PictureInPictureWindowManager {
+@@ -317,6 +337,21 @@ class PictureInPictureWindowManager {
    class VideoWebContentsObserver;
    class DocumentWebContentsObserver;
  
@@ -542,7 +547,7 @@ index 063a8f7383..b312560276 100644
    // These values are persisted to logs. Entries should not be renumbered and
    // numeric values should never be reused.
    //
-@@ -363,6 +398,22 @@ class PictureInPictureWindowManager {
+@@ -364,6 +399,22 @@ class PictureInPictureWindowManager {
    // This is suffixed with "Internal" to keep consistency with the method above.
    void CloseWindowInternal();
  
@@ -565,7 +570,7 @@ index 063a8f7383..b312560276 100644
    // Called when the document PiP parent web contents is being destroyed.
    void DocumentWebContentsDestroyed();
  
-@@ -425,8 +476,8 @@ class PictureInPictureWindowManager {
+@@ -426,8 +477,8 @@ class PictureInPictureWindowManager {
    // tucked.
    uint32_t number_of_existing_scoped_tuck_picture_in_pictures_ = 0;
  
@@ -576,7 +581,7 @@ index 063a8f7383..b312560276 100644
  
    std::unique_ptr<PictureInPictureWindowManagerUmaHelper> uma_helper_;
  
-@@ -442,6 +493,14 @@ class PictureInPictureWindowManager {
+@@ -443,6 +494,14 @@ class PictureInPictureWindowManager {
  
    raw_ptr<content::PictureInPictureWindowController, DanglingUntriaged>
        pip_window_controller_ = nullptr;
@@ -592,7 +597,7 @@ index 063a8f7383..b312560276 100644
  
  #endif  // CHROME_BROWSER_PICTURE_IN_PICTURE_PICTURE_IN_PICTURE_WINDOW_MANAGER_H_
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn b/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
-index d4dacf5897..67a90f131f 100644
+index 7dbf9fb2fd..1650defb55 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
 +++ b/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
 @@ -37,6 +37,7 @@ if (!is_android) {
@@ -604,10 +609,10 @@ index d4dacf5897..67a90f131f 100644
        "//components/find_in_page",
        "//components/headless/console_message_logger",
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-index 3bc40bcc91..fbd11f0352 100644
+index 3c3aaff4f9..abc72052f0 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-@@ -52,6 +52,7 @@
+@@ -53,6 +53,7 @@
  #include "chrome/browser/ui/unload_controller.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
  #include "chrome/browser/ui/views/frame/contents_web_view.h"
@@ -615,7 +620,7 @@ index 3bc40bcc91..fbd11f0352 100644
  #include "chrome/browser/ui/views/status_bubble_views.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/browser/web_applications/web_app_provider.h"
-@@ -300,6 +301,11 @@ BrowserWebContentsDelegate::~BrowserWebContentsDelegate() = default;
+@@ -339,6 +340,11 @@ BrowserWebContentsDelegate::~BrowserWebContentsDelegate() = default;
  content::PictureInPictureResult
  BrowserWebContentsDelegate::EnterPictureInPicture(
      content::WebContents* web_contents) {
@@ -627,7 +632,7 @@ index 3bc40bcc91..fbd11f0352 100644
    return PictureInPictureWindowManager::GetInstance()
        ->EnterVideoPictureInPicture(web_contents);
  }
-@@ -308,6 +314,16 @@ void BrowserWebContentsDelegate::ExitPictureInPicture() {
+@@ -347,6 +353,16 @@ void BrowserWebContentsDelegate::ExitPictureInPicture() {
    PictureInPictureWindowManager::GetInstance()->ExitPictureInPicture();
  }
  
@@ -645,7 +650,7 @@ index 3bc40bcc91..fbd11f0352 100644
  BrowserWebContentsDelegate::PreHandleKeyboardEvent(
      content::WebContents* source,
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h
-index 360d1abf0b..e2014816c9 100644
+index cb68c459f3..43132b7875 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h
 @@ -54,6 +54,9 @@ class BrowserWebContentsDelegate : public content::WebContentsDelegate {
@@ -659,7 +664,7 @@ index 360d1abf0b..e2014816c9 100644
        content::WebContents* source,
        const input::NativeWebKeyboardEvent& event) override;
 diff --git a/chrome/browser/ui/views/autofill/popup/popup_view_utils.cc b/chrome/browser/ui/views/autofill/popup/popup_view_utils.cc
-index bac0916002..bbf081caab 100644
+index 78db702362..6430ea108d 100644
 --- a/chrome/browser/ui/views/autofill/popup/popup_view_utils.cc
 +++ b/chrome/browser/ui/views/autofill/popup/popup_view_utils.cc
 @@ -298,10 +298,18 @@ bool BoundsOverlapWithOpenPermissionsPrompt(
@@ -685,23 +690,24 @@ index bac0916002..bbf081caab 100644
  
  bool PopupMayExceedContentAreaBounds(content::WebContents* web_contents) {
 diff --git a/chrome/browser/ui/views/frame/contents_web_view.cc b/chrome/browser/ui/views/frame/contents_web_view.cc
-index e1d30f930b..831b751678 100644
+index 184614e93d..160bd385b9 100644
 --- a/chrome/browser/ui/views/frame/contents_web_view.cc
 +++ b/chrome/browser/ui/views/frame/contents_web_view.cc
-@@ -5,10 +5,12 @@
+@@ -5,11 +5,13 @@
  #include "chrome/browser/ui/views/frame/contents_web_view.h"
  
  #include "base/debug/dump_without_crashing.h"
 +#include "base/functional/bind.h"
  #include "build/build_config.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/views/animations/common_animation_values.h"
  #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
  #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
 +#include "chrome/browser/ui/views/overlay/multiview/multiview_host.h"
  #include "chrome/browser/ui/views/status_bubble_views.h"
  #include "components/tabs/public/tab_interface.h"
  #include "components/web_modal/web_contents_modal_dialog_manager.h"
-@@ -39,6 +41,10 @@ ContentsWebView::ContentsWebView(content::BrowserContext* browser_context)
+@@ -48,6 +50,10 @@ ContentsWebView::ContentsWebView(content::BrowserContext* browser_context)
    status_bubble_ = std::make_unique<StatusBubbleViews>(this);
    status_bubble_->Reposition();
    web_contents_close_handler_ = std::make_unique<WebContentsCloseHandler>(this);
@@ -712,7 +718,7 @@ index e1d30f930b..831b751678 100644
  }
  
  ContentsWebView::~ContentsWebView() = default;
-@@ -147,6 +153,7 @@ void ContentsWebView::OnLetterboxingChanged() {
+@@ -158,6 +164,7 @@ void ContentsWebView::OnLetterboxingChanged() {
  
  void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
    views::WebView::SetWebContents(web_contents);
@@ -720,7 +726,7 @@ index e1d30f930b..831b751678 100644
    if (web_contents == nullptr) {
      status_bubble_.reset();
      holder()->SetProperty(views::kIsBlockedByModalKey, false);
-@@ -273,5 +280,44 @@ void ContentsWebView::RenderViewReady() {
+@@ -294,5 +301,44 @@ void ContentsWebView::RenderViewReady() {
    WebView::RenderViewReady();
  }
  
@@ -766,7 +772,7 @@ index e1d30f930b..831b751678 100644
  BEGIN_METADATA(ContentsWebView)
  END_METADATA
 diff --git a/chrome/browser/ui/views/frame/contents_web_view.h b/chrome/browser/ui/views/frame/contents_web_view.h
-index 0dc0d4b8d3..2c0c82299a 100644
+index af18353b9d..179bb18014 100644
 --- a/chrome/browser/ui/views/frame/contents_web_view.h
 +++ b/chrome/browser/ui/views/frame/contents_web_view.h
 @@ -7,6 +7,7 @@
@@ -785,7 +791,7 @@ index 0dc0d4b8d3..2c0c82299a 100644
  class StatusBubbleViews;
  class WebContentsCloseHandler;
  
-@@ -81,6 +83,15 @@ class ContentsWebView : public views::WebView,
+@@ -76,6 +78,15 @@ class ContentsWebView : public views::WebView,
  
   private:
    void UpdateBackgroundColor();
@@ -801,8 +807,8 @@ index 0dc0d4b8d3..2c0c82299a 100644
    std::unique_ptr<StatusBubbleViews> status_bubble_;
    std::unique_ptr<WebContentsCloseHandler> web_contents_close_handler_;
  
-@@ -89,6 +100,11 @@ class ContentsWebView : public views::WebView,
-   bool use_default_deadline_when_animating_ = false;
+@@ -84,6 +95,11 @@ class ContentsWebView : public views::WebView,
+   const bool use_default_deadline_when_animating_;
  
    std::unique_ptr<ui::LayerTreeOwner> cloned_layer_tree_;
 +
@@ -814,10 +820,10 @@ index 0dc0d4b8d3..2c0c82299a 100644
  
  #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CONTENTS_WEB_VIEW_H_
 diff --git a/chrome/browser/ui/views/global_media_controls/BUILD.gn b/chrome/browser/ui/views/global_media_controls/BUILD.gn
-index 12e744f8d9..254aee593a 100644
+index 9de97a9a9d..0146871256 100644
 --- a/chrome/browser/ui/views/global_media_controls/BUILD.gn
 +++ b/chrome/browser/ui/views/global_media_controls/BUILD.gn
-@@ -62,6 +62,7 @@ source_set("impl") {
+@@ -61,6 +61,7 @@ source_set("impl") {
    ]
    deps = [
      ":global_media_controls",
@@ -834,18 +840,18 @@ index 12e744f8d9..254aee593a 100644
      "//components/live_caption:constants",
      "//components/live_caption:utils",
 diff --git a/chrome/browser/ui/views/global_media_controls/media_dialog_view.cc b/chrome/browser/ui/views/global_media_controls/media_dialog_view.cc
-index 250792cdba..387928512f 100644
+index 66a2ae80b7..c2e0aa6df1 100644
 --- a/chrome/browser/ui/views/global_media_controls/media_dialog_view.cc
 +++ b/chrome/browser/ui/views/global_media_controls/media_dialog_view.cc
-@@ -12,6 +12,7 @@
- #include "base/memory/raw_ptr.h"
- #include "base/metrics/histogram_functions.h"
- #include "base/observer_list.h"
+@@ -18,6 +18,7 @@
+ #include "base/scoped_observation.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
 +#include "chrome/app/vector_icons/vector_icons.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/media/router/media_router_feature.h"
- #include "chrome/browser/profiles/profile.h"
-@@ -23,6 +24,7 @@
+ #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+@@ -30,6 +31,7 @@
  #include "chrome/browser/ui/views/controls/rich_hover_button.h"
  #include "chrome/browser/ui/views/global_media_controls/media_dialog_view_observer.h"
  #include "chrome/browser/ui/views/global_media_controls/media_item_ui_helper.h"
@@ -853,7 +859,7 @@ index 250792cdba..387928512f 100644
  #include "chrome/grit/generated_resources.h"
  #include "components/global_media_controls/public/constants.h"
  #include "components/global_media_controls/public/media_item_manager.h"
-@@ -688,11 +690,24 @@ MediaDialogView::BuildMediaItemUIUpdatedView(
+@@ -809,11 +811,24 @@ MediaDialogView::BuildMediaItemUIUpdatedView(
      base::WeakPtr<media_message_center::MediaNotificationItem> item) {
    bool show_devices =
        entry_point_ == GlobalMediaControlsEntryPoint::kPresentation;
@@ -880,7 +886,7 @@ index 250792cdba..387928512f 100644
  
  BEGIN_METADATA(MediaDialogView)
 diff --git a/chrome/browser/ui/views/overlay/BUILD.gn b/chrome/browser/ui/views/overlay/BUILD.gn
-index 5fda29ab24..03e113ca08 100644
+index 0827decae3..0c8651e42e 100644
 --- a/chrome/browser/ui/views/overlay/BUILD.gn
 +++ b/chrome/browser/ui/views/overlay/BUILD.gn
 @@ -14,6 +14,8 @@ source_set("overlay") {
@@ -905,11 +911,12 @@ index 5fda29ab24..03e113ca08 100644
      "overlay_controls_fade_animation.cc",
      "overlay_window_image_button.cc",
      "overlay_window_live_caption_button.cc",
-@@ -74,13 +82,18 @@ source_set("impl") {
+@@ -74,14 +82,19 @@ source_set("impl") {
  
    deps = [
      ":overlay",
 +    "//cc",
+     "//chrome/browser:shell_integration",
      "//chrome/browser/media",
      "//chrome/browser/ui:browser_init_state",
      "//chrome/browser/ui/color:color_headers",
@@ -923,7 +930,7 @@ index 5fda29ab24..03e113ca08 100644
 +    "//ui/compositor",
    ]
  
-   # video_overlay_window_views.cc includes chrome/browser/ui/browser.h to read
+   if (is_mac) {
 diff --git a/chrome/browser/ui/views/overlay/multiview/multiview_grid_view.cc b/chrome/browser/ui/views/overlay/multiview/multiview_grid_view.cc
 new file mode 100644
 index 0000000000..a78e9c664a
@@ -1516,7 +1523,7 @@ index 0000000000..7dedbd1107
 +#endif  // CHROME_BROWSER_UI_VIEWS_OVERLAY_MULTIVIEW_MULTIVIEW_GRID_VIEW_H_
 diff --git a/chrome/browser/ui/views/overlay/multiview/multiview_host.cc b/chrome/browser/ui/views/overlay/multiview/multiview_host.cc
 new file mode 100644
-index 0000000000..09a84ffe3a
+index 0000000000..63a270358c
 --- /dev/null
 +++ b/chrome/browser/ui/views/overlay/multiview/multiview_host.cc
 @@ -0,0 +1,383 @@
@@ -1815,7 +1822,7 @@ index 0000000000..09a84ffe3a
 +                                             url::kStandardSchemeSeparator,
 +                                             kChromeUIMultiviewHost})),
 +                          ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
-+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    params.disposition = WindowOpenDisposition::kNewForegroundTab;
 +    Navigate(&params);
 +    multiview_tab = params.navigated_or_inserted_contents;
 +    if (!multiview_tab) {
@@ -2464,7 +2471,7 @@ index 0000000000..a1032096af
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_OVERLAY_MULTIVIEW_MULTIVIEW_UI_H_
 diff --git a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
-index 0afdeb691c..9890db4357 100644
+index a20b96209b..3370404798 100644
 --- a/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
 +++ b/chrome/browser/ui/views/overlay/video_overlay_window_views.cc
 @@ -4,17 +4,22 @@
@@ -2641,7 +2648,7 @@ index 0afdeb691c..9890db4357 100644
            },
            base::Unretained(this)));
  
-@@ -2204,7 +2288,8 @@ void VideoOverlayWindowViews::CloseAndPauseIfAvailable() {
+@@ -2206,7 +2290,8 @@ void VideoOverlayWindowViews::CloseAndPauseIfAvailable() {
    PictureInPictureWindowManager::GetInstance()->ExitPictureInPictureViaWindowUi(
        should_pause_video
            ? PictureInPictureWindowManager::UiBehavior::kCloseWindowAndPauseVideo
@@ -2692,10 +2699,10 @@ index 222a5167b5..43c4fb1214 100644
    bool show_play_pause_button_ = false;
  
 diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
-index 7341632b43..55a46d2abb 100644
+index 867d0cee38..50a909a393 100644
 --- a/chrome/browser/ui/webui/BUILD.gn
 +++ b/chrome/browser/ui/webui/BUILD.gn
-@@ -165,6 +165,7 @@ source_set("configs") {
+@@ -186,6 +186,7 @@ source_set("configs") {
  
    if (is_win || is_mac || is_linux || is_chromeos) {
      deps += [
@@ -2704,10 +2711,10 @@ index 7341632b43..55a46d2abb 100644
        "//chrome/browser/ui/webui/signin",
        "//chrome/browser/ui/webui/skills",
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-index 139fecebd5..081903d1b7 100644
+index 105d9e9726..f3a0f5b0b6 100644
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -84,6 +84,7 @@
+@@ -89,6 +89,7 @@
  #include "chrome/browser/actor/ui/actor_overlay_ui.h"
  #include "chrome/browser/contextual_cueing/internals/contextual_cueing_internals_ui.h"
  #include "chrome/browser/ui/tabs/tab_group_home/tab_group_home_ui.h"
@@ -2715,7 +2722,7 @@ index 139fecebd5..081903d1b7 100644
  #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_ui.h"
  #include "chrome/browser/ui/webui_browser/webui_browser_ui.h"
  #if !BUILDFLAG(IS_CHROMEOS)
-@@ -379,6 +380,8 @@ void RegisterChromeWebUIConfigs() {
+@@ -390,6 +391,8 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(std::make_unique<IwaDevUIConfig>());
    map.AddWebUIConfig(
        std::make_unique<media_router::MediaRouterInternalsUIConfig>());
@@ -2725,7 +2732,7 @@ index 139fecebd5..081903d1b7 100644
        std::make_unique<
            multistep_filter_internals::MultistepFilterInternalsUIConfig>());
 diff --git a/components/global_media_controls/public/views/media_item_ui_updated_view.cc b/components/global_media_controls/public/views/media_item_ui_updated_view.cc
-index ed993ebdc9..5e2f449d49 100644
+index d29849f55a..28ebe2fcd1 100644
 --- a/components/global_media_controls/public/views/media_item_ui_updated_view.cc
 +++ b/components/global_media_controls/public/views/media_item_ui_updated_view.cc
 @@ -173,6 +173,16 @@ MediaItemUIUpdatedView::MediaItemUIUpdatedView(
@@ -2745,7 +2752,7 @@ index ed993ebdc9..5e2f449d49 100644
    // Create the casting indicator view which is visible when footer view is
    // shown.
    casting_indicator_view_ =
-@@ -694,11 +704,32 @@ void MediaItemUIUpdatedView::UpdateMediaActionButtonsVisibility() {
+@@ -698,11 +708,32 @@ void MediaItemUIUpdatedView::UpdateMediaActionButtonsVisibility() {
      }
    }
  
@@ -2779,7 +2786,7 @@ index ed993ebdc9..5e2f449d49 100644
    current_timestamp_label_->SetVisible(drag_state_ == DragState::kDragStarted);
    duration_timestamp_label_->SetVisible(drag_state_ == DragState::kDragStarted);
 diff --git a/components/global_media_controls/public/views/media_item_ui_updated_view.h b/components/global_media_controls/public/views/media_item_ui_updated_view.h
-index 099ceb36eb..240e1c1dc3 100644
+index 739a3116c9..583636b445 100644
 --- a/components/global_media_controls/public/views/media_item_ui_updated_view.h
 +++ b/components/global_media_controls/public/views/media_item_ui_updated_view.h
 @@ -5,8 +5,10 @@
@@ -2793,7 +2800,7 @@ index 099ceb36eb..240e1c1dc3 100644
  #include "base/memory/raw_ptr.h"
  #include "components/global_media_controls/public/media_item_ui.h"
  #include "components/global_media_controls/public/views/media_action_button.h"
-@@ -120,6 +122,13 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaItemUIUpdatedView
+@@ -124,6 +126,13 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaItemUIUpdatedView
    MediaActionButton* GetMediaActionButton(
        media_session::mojom::MediaSessionAction action);
  
@@ -2807,7 +2814,7 @@ index 099ceb36eb..240e1c1dc3 100644
    // Helper functions for testing:
    views::ImageView* GetArtworkViewForTesting();
    views::ImageView* GetFaviconViewForTesting();
-@@ -220,6 +229,9 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaItemUIUpdatedView
+@@ -224,6 +233,9 @@ class COMPONENT_EXPORT(GLOBAL_MEDIA_CONTROLS) MediaItemUIUpdatedView
    raw_ptr<MediaActionButton> save_video_frame_button_ = nullptr;
    raw_ptr<MediaActionButton> start_casting_button_ = nullptr;
    raw_ptr<MediaActionButton> picture_in_picture_button_ = nullptr;
@@ -2818,10 +2825,10 @@ index 099ceb36eb..240e1c1dc3 100644
  
    // Init parameters.
 diff --git a/content/browser/media/session/media_session_controller.cc b/content/browser/media/session/media_session_controller.cc
-index 6bc8cbbe2f..e48fbb5d4c 100644
+index adbbc03b96..a87e3ec9d1 100644
 --- a/content/browser/media/session/media_session_controller.cc
 +++ b/content/browser/media/session/media_session_controller.cc
-@@ -286,9 +286,11 @@ bool MediaSessionController::IsMediaSessionNeeded() const {
+@@ -288,9 +288,11 @@ bool MediaSessionController::IsMediaSessionNeeded() const {
      return true;
    }
  
@@ -2837,10 +2844,10 @@ index 6bc8cbbe2f..e48fbb5d4c 100644
  
  bool MediaSessionController::AddOrRemovePlayer() {
 diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
-index f038e08ea0..001101520f 100644
+index a2638c29d4..82d8ba45fd 100644
 --- a/content/browser/web_contents/web_contents_impl.cc
 +++ b/content/browser/web_contents/web_contents_impl.cc
-@@ -77,6 +77,7 @@
+@@ -76,6 +76,7 @@
  #include "content/browser/compositor/surface_utils.h"
  #include "content/browser/declarative_performance_observer/declarative_performance_observer_coordinator.h"
  #include "content/browser/device_posture/device_posture_provider_impl.h"
@@ -2848,7 +2855,7 @@ index f038e08ea0..001101520f 100644
  #include "content/browser/devtools/protocol/page_handler.h"
  #include "content/browser/devtools/render_frame_devtools_agent_host.h"
  #include "content/browser/display_cutout/display_cutout_host_impl.h"
-@@ -3974,6 +3975,33 @@ void WebContentsImpl::DidChangeVisibleSecurityState() {
+@@ -3993,6 +3994,33 @@ void WebContentsImpl::DidChangeVisibleSecurityState() {
        &WebContentsObserver::DidChangeVisibleSecurityState);
  }
  
@@ -2882,7 +2889,7 @@ index f038e08ea0..001101520f 100644
  const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
      RenderFrameHostImpl* main_frame) {
    OPTIONAL_TRACE_EVENT0("browser", "WebContentsImpl::ComputeWebPreferences");
-@@ -7050,6 +7078,25 @@ WebContents* WebContentsImpl::OpenURL(
+@@ -7078,6 +7106,25 @@ WebContents* WebContentsImpl::OpenURL(
    WebContents* new_contents = delegate_->OpenURLFromTab(
        this, params, std::move(navigation_handle_callback));
  
@@ -2894,7 +2901,7 @@ index f038e08ea0..001101520f 100644
 +  // drawn from it. The source frame may have gone during the call; the weak
 +  // pointer says so.
 +  if (new_contents && new_contents != this && weak_source_rfh &&
-+      params.disposition != WindowOpenDisposition::CURRENT_TAB &&
++      params.disposition != WindowOpenDisposition::kCurrentTab &&
 +      new_contents->GetController().IsInitialNavigation()) {
 +    FrameTreeNode* new_root = static_cast<WebContentsImpl*>(new_contents)
 +                                  ->GetPrimaryFrameTree()
@@ -2908,7 +2915,7 @@ index f038e08ea0..001101520f 100644
    if (new_contents && weak_source_rfh && new_contents != this) {
      observers_.NotifyObservers(
          &WebContentsObserver::DidOpenRequestedURL, new_contents,
-@@ -12343,7 +12390,7 @@ PictureInPictureResult WebContentsImpl::EnterPictureInPicture() {
+@@ -12335,7 +12382,7 @@ PictureInPictureResult WebContentsImpl::EnterPictureInPicture() {
  void WebContentsImpl::ExitPictureInPicture() {
    OPTIONAL_TRACE_EVENT0("content", "WebContentsImpl::ExitPictureInPicture");
    if (delegate_) {
@@ -2918,10 +2925,10 @@ index f038e08ea0..001101520f 100644
  }
  
 diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
-index fef4c035f6..1c8a7f5437 100644
+index 928d746f12..521f8c6da3 100644
 --- a/content/browser/web_contents/web_contents_impl.h
 +++ b/content/browser/web_contents/web_contents_impl.h
-@@ -532,6 +532,13 @@ class CONTENT_EXPORT WebContentsImpl
+@@ -534,6 +534,13 @@ class CONTENT_EXPORT WebContentsImpl
    std::vector<WebContents*> GetInnerWebContents() override;
    WebContentsImpl* GetResponsibleWebContents() override;
    void DidChangeVisibleSecurityState() override;
@@ -2936,10 +2943,10 @@ index fef4c035f6..1c8a7f5437 100644
    void Stop() override;
    void SetPageFrozen(bool frozen) override;
 diff --git a/content/public/browser/web_contents.h b/content/public/browser/web_contents.h
-index 29358322a5..a24c5b3840 100644
+index 1c5e61a5aa..6c2a8c731c 100644
 --- a/content/public/browser/web_contents.h
 +++ b/content/public/browser/web_contents.h
-@@ -1159,6 +1159,22 @@ class WebContents : public PageNavigator, public base::SupportsUserData {
+@@ -1162,6 +1162,22 @@ class WebContents : public PageNavigator, public base::SupportsUserData {
    // Invoked when visible security state changes.
    virtual void DidChangeVisibleSecurityState() = 0;
  
@@ -2963,10 +2970,10 @@ index 29358322a5..a24c5b3840 100644
    // page.
    virtual void SyncRendererPrefs() = 0;
 diff --git a/content/public/browser/web_contents_delegate.cc b/content/public/browser/web_contents_delegate.cc
-index 2de5b3392b..dee5f0085a 100644
+index 0b44d8bc87..d816f16815 100644
 --- a/content/public/browser/web_contents_delegate.cc
 +++ b/content/public/browser/web_contents_delegate.cc
-@@ -420,6 +420,12 @@ PictureInPictureResult WebContentsDelegate::EnterPictureInPicture(
+@@ -431,6 +431,12 @@ PictureInPictureResult WebContentsDelegate::EnterPictureInPicture(
    return PictureInPictureResult::kNotSupported;
  }
  
@@ -2979,7 +2986,7 @@ index 2de5b3392b..dee5f0085a 100644
  std::optional<gfx::Rect> WebContentsDelegate::GetWindowBoundsInScreen() {
    return std::nullopt;
  }
-@@ -539,4 +545,14 @@ void WebContentsDelegate::RequestImmersivePlaybackConfirmation(
+@@ -541,4 +547,14 @@ void WebContentsDelegate::RequestImmersivePlaybackConfirmation(
    std::move(callback).Run(std::move(result));
  }
  
@@ -2995,10 +3002,10 @@ index 2de5b3392b..dee5f0085a 100644
 +
  }  // namespace content
 diff --git a/content/public/browser/web_contents_delegate.h b/content/public/browser/web_contents_delegate.h
-index cd03383472..c39c9b3159 100644
+index 7e0c703c67..917a0dc34b 100644
 --- a/content/public/browser/web_contents_delegate.h
 +++ b/content/public/browser/web_contents_delegate.h
-@@ -105,6 +105,7 @@ enum class ProtocolHandlerSecurityLevel;
+@@ -106,6 +106,7 @@ enum class ProtocolHandlerSecurityLevel;
  
  namespace content {
  
@@ -3006,7 +3013,7 @@ index cd03383472..c39c9b3159 100644
  class AudioStreamBrokerFactory;
  #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_APPLE)
  class ColorChooser;
-@@ -811,6 +812,11 @@ class CONTENT_EXPORT WebContentsDelegate {
+@@ -817,6 +818,11 @@ class CONTENT_EXPORT WebContentsDelegate {
    // Picture-in-Picture mode has ended.
    virtual void ExitPictureInPicture() {}
  
@@ -3018,7 +3025,7 @@ index cd03383472..c39c9b3159 100644
  #if BUILDFLAG(IS_ANDROID)
    // Updates information to determine whether a user gesture should carryover to
    // future navigations. This is needed so navigations within a certain
-@@ -975,6 +981,16 @@ class CONTENT_EXPORT WebContentsDelegate {
+@@ -972,6 +978,16 @@ class CONTENT_EXPORT WebContentsDelegate {
        const ImmersiveOptions& default_options,
        base::OnceCallback<void(ImmersivePlaybackConfirmationResult)> callback);
  

@@ -1,7 +1,7 @@
-From 562be6cb99f574c997b6269c0e9ac19161b1e00d Mon Sep 17 00:00:00 2001
+From 2ec4d2cc085e997d679d0fbf024bff5fc3adb930 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:16 -0500
-Subject: [PATCH 30/61] browser-defaults
+Date: Sun, 22 Nov 2026 13:08:52 -0500
+Subject: [PATCH 31/62] browser-defaults
 
 Browser default overrides: the browser-defaults preset is expanded before
 anything reads the command line (opt out with --use-chromium-defaults).
@@ -14,10 +14,10 @@ adds its own).
  3 files changed, 9 insertions(+)
 
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index 268b874b1d..cb0590bc30 100644
+index 523ad9560a..a00ee2deec 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
-@@ -1290,6 +1290,7 @@ if (is_win) {
+@@ -1306,6 +1306,7 @@ if (is_win) {
        "//chrome/common:buildflags",
        "//chrome/common:version_header",
        "//chrome/common/profiler",
@@ -26,10 +26,10 @@ index 268b874b1d..cb0590bc30 100644
        "//components/memory_system",
        "//components/policy:generated",
 diff --git a/chrome/app/BUILD.gn b/chrome/app/BUILD.gn
-index 0b362a0bbc..2f7dc8131b 100644
+index 05d75b9617..9d3f2c7bfc 100644
 --- a/chrome/app/BUILD.gn
 +++ b/chrome/app/BUILD.gn
-@@ -165,6 +165,7 @@ static_library("test_support") {
+@@ -171,6 +171,7 @@ static_library("test_support") {
      "//chrome/gpu",
      "//chrome/renderer",
      "//chrome/utility",
@@ -38,7 +38,7 @@ index 0b362a0bbc..2f7dc8131b 100644
      "//components/crash/core/app:test_support",
      "//components/devtools/devtools_pipe",
 diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
-index c6dfce70e6..52011779f8 100644
+index 33a3b3844a..90ca15c3ee 100644
 --- a/chrome/app/chrome_main_delegate.cc
 +++ b/chrome/app/chrome_main_delegate.cc
 @@ -13,6 +13,7 @@
@@ -49,7 +49,7 @@ index c6dfce70e6..52011779f8 100644
  #include "base/cpu.h"
  #include "base/dcheck_is_on.h"
  #include "base/features.h"
-@@ -59,6 +60,7 @@
+@@ -60,6 +61,7 @@
  #include "chrome/common/url_constants.h"
  #include "chrome/grit/generated_resources.h"
  #include "chrome/renderer/chrome_content_renderer_client.h"
@@ -57,7 +57,7 @@ index c6dfce70e6..52011779f8 100644
  #include "components/component_updater/component_updater_paths.h"
  #include "components/content_settings/core/common/content_settings_pattern.h"
  #include "components/crash/core/app/crash_reporter_client.h"
-@@ -1175,6 +1177,11 @@ void ChromeMainDelegate::SetupTracing() {
+@@ -1192,6 +1194,11 @@ void ChromeMainDelegate::SetupTracing() {
  }
  
  std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
@@ -66,9 +66,9 @@ index c6dfce70e6..52011779f8 100644
 +  // Browser process only.
 +  browser::MaybeExpandBrowserDefaults();
 +
+   crash_reporter::InitializeCrashKeys();
+ 
  #if BUILDFLAG(IS_CHROMEOS)
-   ash::BootTimesRecorder::Get()->SaveChromeMainStats();
- #endif
 -- 
 2.45.1.windows.1
 

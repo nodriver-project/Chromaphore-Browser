@@ -1,7 +1,7 @@
-From 5d84e32c18e60dd65d7eadf88264bfb494eea045 Mon Sep 17 00:00:00 2001
+From f3cf550b9bf5af8997820bdbd58c9f16c648a9cf Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:32 -0500
-Subject: [PATCH 13/61] cursor-overlay
+Date: Sun, 22 Nov 2026 13:07:00 -0500
+Subject: [PATCH 13/62] cursor-overlay
 
 CDP screencast cursor overlay compositing. Its page_handler.cc/.h wiring
 rides in agent-snapshot, which dominates that file; its BUILD.gn sources and
@@ -19,7 +19,7 @@ One overlay per tab (WebContentsUserData), redrawn through DevToolsVideoConsumer
 
 diff --git a/content/browser/devtools/cdp_cursor_overlay.cc b/content/browser/devtools/cdp_cursor_overlay.cc
 new file mode 100644
-index 0000000000..065eafe9dc
+index 0000000000..65eeeb2f79
 --- /dev/null
 +++ b/content/browser/devtools/cdp_cursor_overlay.cc
 @@ -0,0 +1,431 @@
@@ -424,8 +424,8 @@ index 0000000000..065eafe9dc
 +  }
 +  // The ink around the hotspot, in DIPs: the arrow with its outline, and the
 +  // click mark's disc while clicking.
-+  SkRect ink = CursorPath().getBounds().makeOutset(kOutlineReach,
-+                                                   kOutlineReach);
++  SkRect ink =
++      CursorPath().getBounds().makeOutset(kOutlineReach, kOutlineReach);
 +  if (is_clicking_) {
 +    ink.join(SkRect::MakeLTRB(-kRippleRadius, -kRippleRadius, kRippleRadius,
 +                              kRippleRadius));
@@ -633,7 +633,7 @@ index 0000000000..2df721d3b5
 +
 +#endif  // CONTENT_BROWSER_DEVTOOLS_CDP_CURSOR_OVERLAY_H_
 diff --git a/content/browser/devtools/devtools_video_consumer.cc b/content/browser/devtools/devtools_video_consumer.cc
-index 47660a1a9a..2438145d58 100644
+index 1c1edf61c1..cfe52aaf34 100644
 --- a/content/browser/devtools/devtools_video_consumer.cc
 +++ b/content/browser/devtools/devtools_video_consumer.cc
 @@ -73,6 +73,7 @@ void DevToolsVideoConsumer::StartCapture() {
@@ -644,7 +644,7 @@ index 47660a1a9a..2438145d58 100644
    if (!capturer_)
      return;
    capturer_.reset();
-@@ -112,6 +113,32 @@ void DevToolsVideoConsumer::SetFormat(media::VideoPixelFormat format) {
+@@ -113,6 +114,32 @@ void DevToolsVideoConsumer::SetFormat(media::VideoPixelFormat format) {
    }
  }
  

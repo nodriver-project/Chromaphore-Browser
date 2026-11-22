@@ -1,7 +1,7 @@
-From 3ce44c22485741ed506d24461170203dc775ca88 Mon Sep 17 00:00:00 2001
+From bfdc4168717f90be62c57e7eb1698ec1bd4dbbff Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:17 -0500
-Subject: [PATCH 31/61] headless-parity
+Date: Sun, 22 Nov 2026 13:08:54 -0500
+Subject: [PATCH 32/62] headless-parity
 
 A headless browser reports what a headed one does. Its screen
 (--screen-info) is taken from the primary monitor -- pixels, work area,
@@ -30,7 +30,7 @@ outerWidth minus innerWidth, and none when maximized or fullscreen.
  4 files changed, 174 insertions(+)
 
 diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
-index 52011779f8..716f7bb4dc 100644
+index 90ca15c3ee..280d8f7142 100644
 --- a/chrome/app/chrome_main_delegate.cc
 +++ b/chrome/app/chrome_main_delegate.cc
 @@ -6,6 +6,7 @@
@@ -68,7 +68,7 @@ index 52011779f8..716f7bb4dc 100644
  #include <malloc.h>
  
  #include <algorithm>
-@@ -200,6 +206,7 @@
+@@ -199,6 +205,7 @@
  #include "chrome/gpu/chrome_content_gpu_client.h"  // nogncheck
  #include "chrome/utility/chrome_content_utility_client.h"  // nogncheck
  #include "components/devtools/devtools_pipe/devtools_pipe.h"  // nogncheck
@@ -76,7 +76,7 @@ index 52011779f8..716f7bb4dc 100644
  
  #if BUILDFLAG(IS_WIN)
  #include "chrome/browser/chrome_browser_main_win.h"  // nogncheck
-@@ -207,6 +214,8 @@
+@@ -206,6 +213,8 @@
  #include "chrome/browser/win/browser_util.h"  // nogncheck
  #include "chrome/browser/win/isolated_browser/isolated_browser_support.h"  // nogncheck
  #include "chrome/chrome_elf/chrome_elf_main.h"
@@ -85,7 +85,7 @@ index 52011779f8..716f7bb4dc 100644
  #endif  // BUILDFLAG(IS_WIN)
  
  #if BUILDFLAG(IS_MAC)
-@@ -1176,11 +1185,136 @@ void ChromeMainDelegate::SetupTracing() {
+@@ -1193,11 +1202,136 @@ void ChromeMainDelegate::SetupTracing() {
            std::move(tracing_factory), unwinder_type);
  }
  
@@ -220,13 +220,13 @@ index 52011779f8..716f7bb4dc 100644
 +#endif
 +  }
  
- #if BUILDFLAG(IS_CHROMEOS)
-   ash::BootTimesRecorder::Get()->SaveChromeMainStats();
+   crash_reporter::InitializeCrashKeys();
+ 
 diff --git a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-index fbd11f0352..57f13908d9 100644
+index abc72052f0..a1dfb76951 100644
 --- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
 +++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
-@@ -440,6 +440,21 @@ void BrowserWebContentsDelegate::SetFocusToLocationBar() {
+@@ -473,6 +473,21 @@ void BrowserWebContentsDelegate::SetFocusToLocationBar() {
    // (2) This is called with |is_user_initiated| == false, because this is a
    //     renderer initiated focus (this method is a WebContentsDelegate
    //     override).
@@ -249,7 +249,7 @@ index fbd11f0352..57f13908d9 100644
  }
  
 diff --git a/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc b/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc
-index 0f79aa00ed..2200353897 100644
+index 56d1635045..f24298cd4a 100644
 --- a/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc
 +++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.cc
 @@ -21,6 +21,10 @@

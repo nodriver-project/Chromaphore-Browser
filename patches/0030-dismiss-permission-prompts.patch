@@ -1,44 +1,43 @@
-From 717dc4654b27bc014125b071ede601b221ef3d05 Mon Sep 17 00:00:00 2001
+From ba960a2bc34e2c523ac00d2138e2dd66fb35f3f8 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:14:14 -0500
-Subject: [PATCH 29/61] dismiss-permission-prompts
+Date: Sun, 22 Nov 2026 13:08:51 -0500
+Subject: [PATCH 30/62] dismiss-permission-prompts
 
 --dismiss-permission-prompts: permission prompts, File System Access
 prompts included, are built unseen and dismissed after a short random
 delay, and Input.permissionPromptDismissed tells the client. The event's
 declaration rides in input-actions (Input.pdl, input_handler.*).
 ---
- ...ystem_access_permission_request_manager.cc | 37 ++++++++
+ ...ystem_access_permission_request_manager.cc | 35 +++++++
  .../permissions/permission_request_manager.cc | 92 ++++++++++++++++++-
  .../permissions/permission_request_manager.h  |  7 ++
  components/permissions/switches.cc            | 11 +++
  components/permissions/switches.h             |  1 +
- 5 files changed, 146 insertions(+), 2 deletions(-)
+ 5 files changed, 144 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/file_system_access/file_system_access_permission_request_manager.cc b/chrome/browser/file_system_access/file_system_access_permission_request_manager.cc
-index d55873f6f1..3a87659655 100644
+index 734d4ac75c..3e75a2c717 100644
 --- a/chrome/browser/file_system_access/file_system_access_permission_request_manager.cc
 +++ b/chrome/browser/file_system_access/file_system_access_permission_request_manager.cc
-@@ -5,12 +5,18 @@
- #include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
+@@ -6,6 +6,8 @@
  
  #include "base/command_line.h"
-+#include "base/functional/bind.h"
+ #include "base/functional/bind.h"
 +#include "base/rand_util.h"
 +#include "base/task/single_thread_task_runner.h"
  #include "chrome/browser/ui/file_system_access/file_system_access_dialogs.h"
  #include "chrome/browser/ui/file_system_access/file_system_access_permission_dialog.h"
  #include "components/permissions/permission_util.h"
- #include "components/permissions/switches.h"
+@@ -13,6 +15,8 @@
+ #include "components/tabs/public/tab_interface.h"
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/weak_document_ptr.h"
-+#include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents.h"
  
  namespace {
- 
-@@ -99,6 +105,37 @@ void FileSystemAccessPermissionRequestManager::AddRequest(
+@@ -119,6 +123,37 @@ void FileSystemAccessPermissionRequestManager::AddRequest(
      return;
    }
  
@@ -77,10 +76,10 @@ index d55873f6f1..3a87659655 100644
    if (current_request_ && RequestsAreIdentical(current_request_->data, data)) {
      current_request_->callbacks.push_back(std::move(callback));
 diff --git a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
-index f331f4df78..8a5e9f6a49 100644
+index ddbb3fcf56..fd499ee4d2 100644
 --- a/components/permissions/permission_request_manager.cc
 +++ b/components/permissions/permission_request_manager.cc
-@@ -187,6 +187,46 @@ tabs::TabInterface* GetTabInterface(content::WebContents* web_contents) {
+@@ -189,6 +189,46 @@ tabs::TabInterface* GetTabInterface(content::WebContents* web_contents) {
  #endif  // BUILDFLAG(IS_ANDROID)
  }
  
@@ -127,7 +126,7 @@ index f331f4df78..8a5e9f6a49 100644
  }  // namespace
  
  // PermissionRequestManager ----------------------------------------------------
-@@ -227,7 +267,10 @@ void PermissionRequestManager::AddRequest(
+@@ -229,7 +269,10 @@ void PermissionRequestManager::AddRequest(
      return;
    }
  
@@ -139,7 +138,7 @@ index f331f4df78..8a5e9f6a49 100644
      request->PermissionDenied();
      return;
    }
-@@ -930,7 +973,12 @@ bool PermissionRequestManager::RecreateView() {
+@@ -999,7 +1042,12 @@ bool PermissionRequestManager::RecreateView() {
      }
      CalculateCurrentVariantForEmbeddedPrompt();
    }
@@ -153,7 +152,7 @@ index f331f4df78..8a5e9f6a49 100644
    if (!view_) {
      current_request_prompt_disposition_ =
          PermissionPromptDisposition::NONE_VISIBLE;
-@@ -1330,12 +1378,50 @@ void PermissionRequestManager::ShowPrompt() {
+@@ -1399,12 +1447,50 @@ void PermissionRequestManager::ShowPrompt() {
    // `NotifyPromptAdded` if failure is reached before the prompt is rendered.
    NotifyPromptAdded();
  
@@ -204,7 +203,7 @@ index f331f4df78..8a5e9f6a49 100644
  void PermissionRequestManager::SetHatsShownCallback(
      base::OnceCallback<void()> callback) {
    hats_shown_callback_ = std::move(callback);
-@@ -1354,6 +1440,7 @@ void PermissionRequestManager::ResetViewStateForCurrentRequest() {
+@@ -1423,6 +1509,7 @@ void PermissionRequestManager::ResetViewStateForCurrentRequest() {
    for (const auto& selector : permission_ui_selectors_) {
      selector->Cancel();
    }
@@ -212,7 +211,7 @@ index f331f4df78..8a5e9f6a49 100644
  
    current_request_already_displayed_ = false;
    current_request_first_display_time_ = base::Time();
-@@ -1512,6 +1599,7 @@ void PermissionRequestManager::CleanUpRequests() {
+@@ -1581,6 +1668,7 @@ void PermissionRequestManager::CleanUpRequests() {
    // No need to execute the preignore logic as we canceling currently active
    // requests anyway.
    preignore_timer_.Stop();
@@ -221,10 +220,10 @@ index f331f4df78..8a5e9f6a49 100644
    for (; !pending_permission_requests_.IsEmpty();
         pending_permission_requests_.Pop()) {
 diff --git a/components/permissions/permission_request_manager.h b/components/permissions/permission_request_manager.h
-index 86dbfe3884..aff29c6460 100644
+index 0b4b3bac77..4ba26a8a52 100644
 --- a/components/permissions/permission_request_manager.h
 +++ b/components/permissions/permission_request_manager.h
-@@ -496,6 +496,10 @@ class PermissionRequestManager
+@@ -512,6 +512,10 @@ class PermissionRequestManager
  
    void DoAutoResponseForTesting();
  
@@ -235,7 +234,7 @@ index 86dbfe3884..aff29c6460 100644
    void PreIgnoreQuietPromptInternal();
  
    // Returns true if there is a request in progress that is for exclusive
-@@ -701,6 +705,9 @@ class PermissionRequestManager
+@@ -728,6 +732,9 @@ class PermissionRequestManager
    // as a quiet chip.
    base::OneShotTimer preignore_timer_;
  

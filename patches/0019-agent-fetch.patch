@@ -1,7 +1,7 @@
-From 4b053ad1d5272523747bd55c0220bb82f8611a41 Mon Sep 17 00:00:00 2001
+From 6f080ea6771233aa2f13dae02a8fbebebc6bfdd8 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:13:34 -0500
-Subject: [PATCH 18/61] agent-fetch
+Date: Sun, 22 Nov 2026 13:08:09 -0500
+Subject: [PATCH 19/62] agent-fetch
 
 Browser.agentFetch and agentFetchCancel: reads a URL the way a tab would,
 in a page that is never shown and never appears as a target, renders and
@@ -10,6 +10,13 @@ other response as it is before it commits; a method, header or body makes
 the call a real fetch() from a document of the URL's origin. The widget
 layer gains a headless native window so a headed browser can host the
 off-screen page.
+
+The page makes its own helpers: the ones Chrome's tab setup
+(tabs::TabFeatures::Init) still makes from a WebContents alone, in its
+order and under its conditions. What only a tab can have it does without;
+of that a page can tell the popup blocker, so Chrome's check of a new
+window (ChromeContentBrowserClient::CanCreateWindow) refuses the page's
+window.open() without a user gesture by the blocker's own rule.
 
 This commit owns the Browser-domain hub (browser_handler.*, Browser.pdl,
 the chrome DevTools session and protocol config) and so also registers
@@ -22,8 +29,8 @@ is content's; chrome/browser/devtools/BUILD.gn and
 devtools_http_handler.cc hold their public state here, the production
 commit adds its own hunks on top.
 ---
- .../browser/chrome_content_browser_client.cc  |   20 +-
- chrome/browser/devtools/BUILD.gn              |   26 +
+ .../browser/chrome_content_browser_client.cc  |   44 +-
+ chrome/browser/devtools/BUILD.gn              |   27 +
  .../devtools/chrome_devtools_session.cc       |    7 +-
  .../browser/devtools/devtools_targets_ui.cc   |    8 +
  .../devtools/inspector_protocol_config.json   |    5 +-
@@ -31,8 +38,8 @@ commit adds its own hunks on top.
  .../devtools/protocol/agent_fetch_body_sink.h |  178 +
  .../protocol/agent_fetch_challenge.cc         |  575 +++
  .../devtools/protocol/agent_fetch_challenge.h |  110 +
- .../devtools/protocol/agent_fetch_contents.cc |  319 ++
- .../devtools/protocol/agent_fetch_contents.h  |  136 +
+ .../devtools/protocol/agent_fetch_contents.cc |  532 +++
+ .../devtools/protocol/agent_fetch_contents.h  |  141 +
  .../devtools/protocol/agent_fetch_job.cc      | 1264 ++++++
  .../devtools/protocol/agent_fetch_job.h       |  234 ++
  .../devtools/protocol/agent_fetcher.cc        |  179 +
@@ -40,7 +47,6 @@ commit adds its own hunks on top.
  .../devtools/protocol/browser_handler.cc      |  431 +-
  .../devtools/protocol/browser_handler.h       |   74 +-
  .../extensions/api/debugger/debugger_api.cc   |    7 +
- chrome/browser/ui/tab_helpers.h               |    4 +
  .../browser/devtools/devtools_http_handler.cc |    8 +
  .../devtools/protocol/target_handler.cc       |   12 +-
  .../renderer_host/navigation_request.cc       |   60 +
@@ -59,7 +65,7 @@ commit adds its own hunks on top.
  ui/views/win/hwnd_message_handler.cc          |    5 +-
  ui/views/win/hwnd_message_handler.h           |    6 +-
  ui/views/win/hwnd_message_handler_headless.cc |   13 +
- 37 files changed, 8850 insertions(+), 19 deletions(-)
+ 36 files changed, 9089 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/devtools/protocol/agent_fetch_body_sink.cc
  create mode 100644 chrome/browser/devtools/protocol/agent_fetch_body_sink.h
  create mode 100644 chrome/browser/devtools/protocol/agent_fetch_challenge.cc
@@ -77,10 +83,41 @@ commit adds its own hunks on top.
  create mode 100644 third_party/blink/renderer/modules/agent_snapshot/resources/agent_fetch.js
 
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 1275dfdeb1..2ef032e5ee 100644
+index e08c9667ae..b8d6860a1b 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6169,7 +6169,13 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
+@@ -4632,6 +4632,30 @@ bool ChromeContentBrowserClient::CanCreateWindow(
+     }
+   }
+ 
++  // browser: a Browser.agentFetch page has no popup blocker, which is a
++  // tab's helper, so MaybeBlockPopup() below would let every window through.
++  // The blocker's rule is applied for it here, where a refusal ends as the
++  // blocker's does: no window without a user gesture, unless popup blocking
++  // is off or the site may open popups.
++  if (web_contents->GetDelegate() &&
++      web_contents->GetDelegate()->IsAgentFetchContents() &&
++      blocked_content::ConsiderForPopupBlocking(disposition) && !user_gesture &&
++      !base::CommandLine::ForCurrentProcess()->HasSwitch(
++          embedder_support::kDisablePopupBlocking)) {
++    HostContentSettingsMap* settings =
++        HostContentSettingsMapFactory::GetForProfile(profile);
++    const ContentSetting setting =
++        opener_top_level_frame_url.is_valid()
++            ? settings->GetContentSetting(opener_top_level_frame_url,
++                                          opener_top_level_frame_url,
++                                          ContentSettingsType::POPUPS)
++            : settings->GetDefaultContentSetting(ContentSettingsType::POPUPS,
++                                                 nullptr);
++    if (setting != CONTENT_SETTING_ALLOW) {
++      return false;
++    }
++  }
++
+   const BlockedWindowParams blocked_params(
+       target_url, opener->GetGlobalFrameToken(), source_origin,
+       opener->GetSiteInstance(), referrer, frame_name, disposition, features,
+@@ -6292,7 +6316,13 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
    // so only a navigation request may be intercepted; the navigation ID is
    // present exactly for those. Browser-side preloads and other
    // non-navigation requests pass through untouched.
@@ -95,8 +132,8 @@ index 1275dfdeb1..2ef032e5ee 100644
      result.push_back(
          std::make_unique<PluginResponseInterceptorURLLoaderThrottle>(
              request.destination, frame_tree_node_id, navigation_id.value()));
-@@ -7312,6 +7318,13 @@ ChromeContentBrowserClient::CreateLoginDelegate(
-     bool first_auth_attempt,
+@@ -7478,6 +7508,13 @@ ChromeContentBrowserClient::CreateLoginDelegate(
+     bool do_not_prompt_for_login,
      content::GuestPageHolder* guest,
      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
 +  // browser: a Browser.agentFetch page has no tab to hold a login prompt.
@@ -109,7 +146,7 @@ index 1275dfdeb1..2ef032e5ee 100644
  #if BUILDFLAG(IS_CHROMEOS)
    // Negotiate challenge is handled via GSSAPI library, which can not receive
    // external credentials. However, on ChromeOS we can suggest the user to
-@@ -7419,6 +7432,11 @@ bool ChromeContentBrowserClient::HandleExternalProtocol(
+@@ -7588,6 +7625,11 @@ bool ChromeContentBrowserClient::HandleExternalProtocol(
      // applications.
      return false;
    }
@@ -122,32 +159,35 @@ index 1275dfdeb1..2ef032e5ee 100644
  
  #if BUILDFLAG(ENABLE_EXTENSIONS)
 diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
-index 2fa8d5a48a..5b80a5dba5 100644
+index 519b00f395..8cfecd10c0 100644
 --- a/chrome/browser/devtools/BUILD.gn
 +++ b/chrome/browser/devtools/BUILD.gn
-@@ -165,6 +165,7 @@ static_library("devtools") {
+@@ -163,6 +163,7 @@ static_library("devtools") {
      # Similar bandaid as the above. Since we cannot depend on
      # //chrome/browser:browser, we include indirect dependencies here.
      ":protocol_generated_sources",
 +    "//base:i18n",
      "//chrome/browser/autofill",
+     "//chrome/browser/policy",
      "//chrome/browser/profiles:profile_manager",
-     "//chrome/browser/profiles/keep_alive",
-@@ -433,10 +434,13 @@ static_library("devtools") {
+@@ -445,12 +446,16 @@ static_library("devtools") {
        "//chrome/app:command_ids",
        "//chrome/browser/badging",
        "//chrome/browser/custom_handlers",
 +      "//chrome/browser/headless",
 +      "//chrome/browser/media/webrtc",
+       "//chrome/browser/origin_gating",
+       "//chrome/browser/private_verification_tokens",
        "//chrome/browser/ui:browser_window_header",
        "//chrome/browser/ui/media_router",
        "//chrome/browser/ui/startup",
        "//chrome/browser/ui/views/frame:contents_web_view",
 +      "//components/browser:browser_switches",
++      "//components/captive_portal/core:buildflags",
        "//components/constrained_window",
        "//components/content_settings/core/common",
        "//components/custom_handlers",
-@@ -461,6 +465,16 @@ static_library("devtools") {
+@@ -480,6 +485,16 @@ static_library("devtools") {
        "devtools_navigation_throttle.h",
        "protocol/ads_handler.cc",
        "protocol/ads_handler.h",
@@ -164,8 +204,8 @@ index 2fa8d5a48a..5b80a5dba5 100644
        "protocol/browser_handler.cc",
        "protocol/browser_handler.h",
        "protocol/cast_handler.cc",
-@@ -473,6 +487,18 @@ static_library("devtools") {
-       "protocol/page_handler.h",
+@@ -493,6 +508,18 @@ static_library("devtools") {
+       "protocol/page_handler_desktop.cc",
        "protocol/pwa_handler.cc",
        "protocol/pwa_handler.h",
 +      "protocol/recording.cc",
@@ -184,10 +224,10 @@ index 2fa8d5a48a..5b80a5dba5 100644
        "protocol/security_handler.h",
        "protocol/storage_handler.cc",
 diff --git a/chrome/browser/devtools/chrome_devtools_session.cc b/chrome/browser/devtools/chrome_devtools_session.cc
-index 545f65e3ed..8929bd7504 100644
+index a93a5d26c1..92f2e31b10 100644
 --- a/chrome/browser/devtools/chrome_devtools_session.cc
 +++ b/chrome/browser/devtools/chrome_devtools_session.cc
-@@ -112,8 +112,11 @@ ChromeDevToolsSession::ChromeDevToolsSession(
+@@ -117,8 +117,11 @@ ChromeDevToolsSession::ChromeDevToolsSession(
    }
    if (IsDomainAvailableToUntrustedClient<BrowserHandler>() ||
        channel->GetClient()->IsTrusted()) {
@@ -228,7 +268,7 @@ index ff68fa80c7..65deb10490 100644
        continue;
  
 diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
-index c972f74e20..deea66acda 100644
+index d773e68097..3b32b58ef4 100644
 --- a/chrome/browser/devtools/inspector_protocol_config.json
 +++ b/chrome/browser/devtools/inspector_protocol_config.json
 @@ -18,8 +18,9 @@
@@ -1726,10 +1766,10 @@ index 0000000000..02a8998690
 +#endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_AGENT_FETCH_CHALLENGE_H_
 diff --git a/chrome/browser/devtools/protocol/agent_fetch_contents.cc b/chrome/browser/devtools/protocol/agent_fetch_contents.cc
 new file mode 100644
-index 0000000000..94d998656e
+index 0000000000..7ab4e845b9
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/agent_fetch_contents.cc
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,532 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1737,6 +1777,7 @@ index 0000000000..94d998656e
 +#include "chrome/browser/devtools/protocol/agent_fetch_contents.h"
 +
 +#include <algorithm>
++#include <memory>
 +#include <utility>
 +
 +#include "base/functional/bind.h"
@@ -1744,19 +1785,73 @@ index 0000000000..94d998656e
 +#include "base/task/sequenced_task_runner.h"
 +#include "base/time/time.h"
 +#include "build/build_config.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/commerce/shopping_service_factory.h"
++#include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
++#include "chrome/browser/favicon/favicon_utils.h"
++#include "chrome/browser/file_system_access/file_system_access_tab_helper.h"
 +#include "chrome/browser/headless/headless_mode_util.h"
++#include "chrome/browser/history/history_tab_helper.h"
++#include "chrome/browser/history/top_sites_factory.h"
++#include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
++#include "chrome/browser/login_detection/login_detection_tab_helper.h"
++#include "chrome/browser/lookalikes/safety_tip_web_contents_observer.h"
++#include "chrome/browser/media/media_engagement_service.h"
 +#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
++#include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
++#include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
++#include "chrome/browser/password_manager/chrome_password_manager_client.h"
++#include "chrome/browser/permissions/one_time_permissions_tracker_helper.h"
++#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
++#include "chrome/browser/resource_coordinator/tab_helper.h"
++#include "chrome/browser/sessions/session_tab_helper_factory.h"
++#include "chrome/browser/ssl/https_only_mode_tab_helper.h"
++#include "chrome/browser/subresource_filter/chrome_content_subresource_filter_web_contents_helper_factory.h"
++#include "chrome/browser/translate/chrome_translate_client.h"
++#include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
++#include "chrome/browser/ui/autofill/autofill_client_provider.h"
++#include "chrome/browser/ui/autofill/autofill_client_provider_factory.h"
++#include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 +#include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
-+#include "chrome/browser/ui/tab_helpers.h"
++#include "chrome/browser/ui/find_bar/find_bar_state.h"
++#include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.h"
++#include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/web_applications/policy/pre_redirection_url_observer.h"
++#include "chrome/common/chrome_isolated_world_ids.h"
++#include "components/captive_portal/core/buildflags.h"
++#include "components/client_hints/browser/client_hints_web_contents_observer.h"
++#include "components/commerce/content/browser/commerce_tab_helper.h"
++#include "components/content_settings/browser/page_specific_content_settings.h"
++#include "components/history/content/browser/web_contents_top_sites_observer.h"
++#include "components/history/core/browser/top_sites.h"
++#include "components/infobars/content/content_infobar_manager.h"
++#include "components/javascript_dialogs/tab_modal_dialog_manager.h"
++#include "components/metrics/content/metrics_services_web_contents_observer.h"
++#include "components/metrics_services_manager/metrics_services_manager.h"
++#include "components/optimization_guide/core/optimization_guide_features.h"
++#include "components/performance_manager/embedder/performance_manager_registry.h"
++#include "components/performance_manager/public/graph/page_node.h"
++#include "components/performance_manager/public/performance_manager.h"
++#include "components/permissions/permission_recovery_success_rate_tracker.h"
++#include "components/permissions/permission_request_manager.h"
++#include "components/site_engagement/content/site_engagement_helper.h"
++#include "components/site_engagement/content/site_engagement_service.h"
++#include "components/ukm/content/source_url_recorder.h"
++#include "components/web_modal/web_contents_modal_dialog_manager.h"
++#include "components/webapps/browser/installable/installable_manager.h"
++#include "components/zoom/zoom_controller.h"
 +#include "content/public/browser/agent_fetch_response_taker.h"
 +#include "content/public/browser/browser_thread.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/navigation_handle.h"
 +#include "content/public/browser/page_navigator.h"
++#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/web_contents.h"
++#include "extensions/buildflags/buildflags.h"
++#include "printing/buildflags/buildflags.h"
 +#include "ui/base/base_window.h"
 +#include "ui/base/window_open_disposition.h"
 +#include "ui/gfx/geometry/rect.h"
@@ -1765,6 +1860,23 @@ index 0000000000..94d998656e
 +#include "ui/views/view.h"
 +#include "ui/views/widget/widget.h"
 +#include "url/origin.h"
++
++#if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
++#include "chrome/browser/captive_portal/captive_portal_service_factory.h"
++#include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
++#include "components/captive_portal/content/captive_portal_tab_helper.h"
++#endif
++
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++#include "chrome/browser/extensions/api/web_navigation/web_navigation_tab_observer.h"
++#include "chrome/browser/extensions/tab_helper.h"
++#include "extensions/browser/view_type_utils.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++#endif
++
++#if BUILDFLAG(ENABLE_PRINTING)
++#include "chrome/browser/printing/printing_init.h"
++#endif
 +
 +namespace {
 +
@@ -1875,6 +1987,19 @@ index 0000000000..94d998656e
 +  std::move(callback).Run(/*success=*/false, std::u16string());
 +}
 +
++// browser: the helpers of a tab that Chrome keeps in tabs::TabFeatures
++// rather than on the WebContents, held here for this page.
++struct AgentFetchContents::OwnedHelpers {
++  std::unique_ptr<commerce::CommerceTabHelper> commerce;
++  std::unique_ptr<history::WebContentsTopSitesObserver> top_sites;
++  std::unique_ptr<client_hints::ClientHintsWebContentsObserver> client_hints;
++  std::unique_ptr<FileSystemAccessTabHelper> file_system_access;
++  std::unique_ptr<metrics::MetricsServicesWebContentsObserver> metrics;
++  std::unique_ptr<OneTimePermissionsTrackerHelper> one_time_permissions;
++  std::unique_ptr<site_engagement::SiteEngagementService::Helper>
++      site_engagement;
++};
++
 +AgentFetchContents::AgentFetchContents(Profile* profile,
 +                                       content::AgentFetchResponseTaker* taker)
 +    : taker_(taker) {
@@ -1886,9 +2011,10 @@ index 0000000000..94d998656e
 +  // creates DevTools hosts, and this delegate is what hides them; it also
 +  // routes the very first response to the taker.
 +  web_contents_->SetDelegate(this);
-+  // The same helpers a tab has: renderer preferences (languages, font
-+  // rendering), the permission, print and popup machinery, and the rest.
-+  TabHelpers::AttachTabHelpers(web_contents_.get());
++  // The helpers a tab has, as far as a page that is no tab can have them:
++  // renderer preferences (languages, font rendering), the permission and
++  // print machinery, and the rest.
++  AttachHelpers(profile);
 +  CreateHost(profile);
 +  web_contents_->SetAudioMuted(true);
 +  profile_observation_.Observe(profile);
@@ -1906,6 +2032,132 @@ index 0000000000..94d998656e
 +  }
 +  base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
 +      FROM_HERE, std::move(contents));
++}
++
++// browser: Chrome makes a tab's helpers in tabs::TabFeatures::Init(), most of
++// them from the tab itself. Of the ones it makes from the WebContents alone,
++// these are the ones that attach themselves to it and the seven a page or a
++// request can meet (OwnedHelpers), in its order and under its conditions,
++// which is as far as a page that is no tab can follow. Left out: what only a
++// tab can have; the helpers of Chrome's own UI, metrics and preloading, which
++// TabFeatures keeps as members; and the Safe Browsing helpers, of which this
++// build has none. Of what only a tab has, a page can tell the popup blocker:
++// ChromeContentBrowserClient::CanCreateWindow() answers for it.
++void AgentFetchContents::AttachHelpers(Profile* profile) {
++  content::WebContents* contents = web_contents_.get();
++  helpers_ = std::make_unique<OwnedHelpers>();
++
++  CreateSessionServiceTabHelper(contents);
++  zoom::ZoomController::CreateForWebContents(contents);
++  infobars::ContentInfoBarManager::CreateForWebContents(contents);
++  autofill::AutofillClientProvider& autofill_client_provider =
++      autofill::AutofillClientProviderFactory::GetForProfile(profile);
++  autofill_client_provider.CreateClientForWebContents(contents);
++  if (!autofill_client_provider.uses_platform_autofill()) {
++    ChromePasswordManagerClient::CreateForWebContents(contents);
++  }
++  CreateSubresourceFilterWebContentsHelper(contents);
++  ChromeTranslateClient::CreateForWebContents(contents);
++  if (!content_settings::PageSpecificContentSettings::GetDelegateForWebContents(
++          contents)) {
++    content_settings::PageSpecificContentSettings::CreateForWebContents(
++        contents,
++        std::make_unique<PageSpecificContentSettingsDelegate>(contents));
++  }
++  favicon::CreateContentFaviconDriverForWebContents(contents);
++  if (!profile->IsOffTheRecord()) {
++    HistoryTabHelper::GetOrCreateForWebContents(contents);
++  }
++  webapps::InstallableManager::CreateForWebContents(contents);
++  if (optimization_guide::features::IsOptimizationHintsEnabled()) {
++    OptimizationGuideWebContentsObserver::CreateForWebContents(contents);
++  }
++  InitializePageLoadMetricsForWebContents(contents);
++  BookmarkTabHelper::CreateForWebContents(contents);
++  helpers_->commerce = std::make_unique<commerce::CommerceTabHelper>(
++      contents, profile->IsOffTheRecord(),
++      commerce::ShoppingServiceFactory::GetForBrowserContext(profile),
++      ISOLATED_WORLD_ID_CHROME_INTERNAL);
++
++#if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
++  captive_portal::CaptivePortalTabHelper::CreateForWebContents(
++      contents, CaptivePortalServiceFactory::GetForProfile(profile),
++      base::BindRepeating(
++          &ChromeSecurityBlockingPageFactory::OpenLoginTabForWebContents,
++          contents, false));
++#endif
++
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  if (extensions::GetViewType(contents) ==
++      extensions::mojom::ViewType::kInvalid) {
++    extensions::SetViewType(contents,
++                            extensions::mojom::ViewType::kTabContents);
++  }
++  extensions::WebNavigationTabObserver::CreateForWebContents(contents);
++  extensions::TabHelper::CreateForWebContents(contents);
++#endif
++
++  permissions::PermissionRequestManager::CreateForWebContents(contents);
++  helpers_->top_sites = std::make_unique<history::WebContentsTopSitesObserver>(
++      contents, TopSitesFactory::GetForProfile(profile).get());
++  helpers_->client_hints =
++      std::make_unique<client_hints::ClientHintsWebContentsObserver>(contents);
++  helpers_->file_system_access =
++      std::make_unique<FileSystemAccessTabHelper>(contents);
++  webapps::PreRedirectionURLObserver::CreateForWebContents(contents);
++  if (auto* metrics_services_manager =
++          g_browser_process->GetMetricsServicesManager()) {
++    helpers_->metrics =
++        std::make_unique<metrics::MetricsServicesWebContentsObserver>(
++            contents, metrics_services_manager->GetOnDidStartLoadingCb(),
++            metrics_services_manager->GetOnDidStopLoadingCb(),
++            metrics_services_manager->GetOnRendererUnresponsiveCb());
++  }
++  FindBarState::ConfigureWebContents(contents);
++  if (MediaEngagementService::IsEnabled()) {
++    MediaEngagementService::CreateWebContentsObserver(contents);
++  }
++#if BUILDFLAG(ENABLE_PRINTING)
++  printing::InitializePrintingForWebContents(contents);
++#endif
++  permissions::PermissionRecoverySuccessRateTracker::CreateForWebContents(
++      contents);
++  javascript_dialogs::TabModalDialogManager::CreateForWebContents(
++      contents,
++      std::make_unique<JavaScriptTabModalDialogManagerDelegateDesktop>(
++          contents));
++  web_modal::WebContentsModalDialogManager::CreateForWebContents(contents);
++  TrustedVaultEncryptionKeysTabHelper::CreateForWebContents(contents);
++  helpers_->one_time_permissions =
++      std::make_unique<OneTimePermissionsTrackerHelper>(contents);
++  PrefsTabHelper::CreateForWebContents(contents);
++  if (site_engagement::SiteEngagementService::IsEnabled()) {
++    helpers_->site_engagement =
++        std::make_unique<site_engagement::SiteEngagementService::Helper>(
++            contents,
++            prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
++                profile));
++  }
++  SafetyTipWebContentsObserver::CreateForWebContents(contents);
++  HttpsOnlyModeTabHelper::CreateForWebContents(contents);
++  login_detection::LoginDetectionTabHelper::MaybeCreateForWebContents(contents);
++  if (!profile->IsOffTheRecord()) {
++    HistoryClustersTabHelper::CreateForWebContents(
++        contents, HistoryTabHelper::FromWebContents(contents));
++  }
++  if (auto* pm_registry =
++          performance_manager::PerformanceManagerRegistry::GetInstance()) {
++    base::WeakPtr<performance_manager::PageNode> page_node =
++        performance_manager::PerformanceManager::
++            GetPrimaryPageNodeForWebContents(contents);
++    if (page_node &&
++        page_node->GetType() != performance_manager::PageType::kTab) {
++      pm_registry->SetPageType(contents, performance_manager::PageType::kTab);
++    }
++  }
++  resource_coordinator::ResourceCoordinatorTabHelper::CreateForWebContents(
++      contents);
++  ukm::InitializeSourceUrlRecorderForWebContents(contents);
 +}
 +
 +void AgentFetchContents::CreateHost(Profile* profile) {
@@ -1963,6 +2215,7 @@ index 0000000000..94d998656e
 +  profile_observation_.Reset();
 +  capture_handle_.RunAndReset();
 +  widget_.reset();
++  helpers_.reset();
 +  web_contents_.reset();
 +}
 +
@@ -1972,7 +2225,7 @@ index 0000000000..94d998656e
 +    base::OnceCallback<void(content::NavigationHandle&)>
 +        navigation_handle_callback) {
 +  // A new tab or window has nowhere to go; the page's own navigations stay.
-+  if (params.disposition != WindowOpenDisposition::CURRENT_TAB) {
++  if (params.disposition != WindowOpenDisposition::kCurrentTab) {
 +    return nullptr;
 +  }
 +  base::WeakPtr<content::NavigationHandle> handle =
@@ -2051,10 +2304,10 @@ index 0000000000..94d998656e
 +}
 diff --git a/chrome/browser/devtools/protocol/agent_fetch_contents.h b/chrome/browser/devtools/protocol/agent_fetch_contents.h
 new file mode 100644
-index 0000000000..bc1c632413
+index 0000000000..ee9a1f9b3b
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/agent_fetch_contents.h
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,141 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -2117,7 +2370,8 @@ index 0000000000..bc1c632413
 +
 +// browser: the offscreen page one Browser.agentFetch reads in: a
 +// WebContents that is a tab in everything but the tab strip. It
-+// starts visible, carries Chrome's tab helpers, and is hosted in a
++// starts visible, carries the helpers of a tab that can be had without
++// being one, and is hosted in a
 +// never-shown frameless widget sized like the profile's most recently active
 +// browser window, kept visible to the renderer by a capturer handle. It is
 +// muted, never downloads, drops popups, refuses fullscreen, answers dialogs
@@ -2178,12 +2432,16 @@ index 0000000000..bc1c632413
 +  void OnProfileWillBeDestroyed(Profile* profile) override;
 +
 + private:
++  struct OwnedHelpers;
++
++  void AttachHelpers(Profile* profile);
 +  void CreateHost(Profile* profile);
 +  void DestroyWebContents();
 +
 +  raw_ptr<content::AgentFetchResponseTaker> taker_;
 +  AgentFetchDialogManager dialog_manager_;
 +  std::unique_ptr<content::WebContents> web_contents_;
++  std::unique_ptr<OwnedHelpers> helpers_;
 +  std::unique_ptr<views::Widget> widget_;
 +  // Keeps the page visible and painting while it lives.
 +  base::ScopedClosureRunner capture_handle_;
@@ -4513,10 +4771,10 @@ index e1424aa52c..a31915ca45 100644
  #include "base/containers/flat_set.h"
  #include "chrome/browser/devtools/protocol/browser.h"
 +#include "chrome/browser/devtools/protocol/recording_registry.h"
-+
-+class AgentFetcher;
  
 -class BrowserHandler : public protocol::Browser::Backend {
++class AgentFetcher;
++
 +class BrowserHandler : public protocol::Browser::Backend,
 +                       public RecordingRegistry::Listener {
   public:
@@ -4600,20 +4858,20 @@ index e1424aa52c..a31915ca45 100644
  
  #endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_BROWSER_HANDLER_H_
 diff --git a/chrome/browser/extensions/api/debugger/debugger_api.cc b/chrome/browser/extensions/api/debugger/debugger_api.cc
-index 4f4153a4bd..e952f2913c 100644
+index 7d9cd373a8..a7a0fda343 100644
 --- a/chrome/browser/extensions/api/debugger/debugger_api.cc
 +++ b/chrome/browser/extensions/api/debugger/debugger_api.cc
-@@ -44,6 +44,7 @@
- #include "content/public/browser/render_process_host.h"
+@@ -47,6 +47,7 @@
  #include "content/public/browser/security_principal.h"
+ #include "content/public/browser/storage_partition.h"
  #include "content/public/browser/web_contents.h"
 +#include "content/public/browser/web_contents_delegate.h"
  #include "content/public/common/url_constants.h"
  #include "extensions/browser/event_router.h"
  #include "extensions/browser/extension_host.h"
-@@ -1285,6 +1286,12 @@ ExtensionFunction::ResponseAction DebuggerGetTargetsFunction::Run() {
-         web_contents && web_contents->IsPrivileged()) {
-       continue;
+@@ -1608,6 +1609,12 @@ ExtensionFunction::ResponseAction DebuggerGetTargetsFunction::Run() {
+         continue;
+       }
      }
 +    // browser: a Browser.agentFetch page is not listed.
 +    if (content::WebContents* web_contents = host->GetWebContents();
@@ -4624,23 +4882,8 @@ index 4f4153a4bd..e952f2913c 100644
  #if BUILDFLAG(ENABLE_PDF)
      // OOPIF PDF viewer only. Don't list the `content::DevToolsAgentHost`s for
      // inner PDF frames. PDF extension frames and PDF content frames shouldn't
-diff --git a/chrome/browser/ui/tab_helpers.h b/chrome/browser/ui/tab_helpers.h
-index c6e05eb620..b8a37ca8c3 100644
---- a/chrome/browser/ui/tab_helpers.h
-+++ b/chrome/browser/ui/tab_helpers.h
-@@ -79,6 +79,10 @@ class TabHelpers {
-   // Link Preview shows a preview of a page, then promote it as a new tab.
-   friend class PreviewTab;
- 
-+  // browser: Browser.agentFetch loads arbitrary pages in a WebContents that
-+  // is never a tab but must look like one to the page.
-+  friend class AgentFetchContents;
-+
-   // FYI: Do NOT add any more friends here. The functions above are the ONLY
-   // ones that need to call AttachTabHelpers; if you think you do, re-read the
-   // design document linked above, especially the section "Reusing tab helpers".
 diff --git a/content/browser/devtools/devtools_http_handler.cc b/content/browser/devtools/devtools_http_handler.cc
-index fab13300e5..95f3e5ad2e 100644
+index b1a097466d..d4fdb54399 100644
 --- a/content/browser/devtools/devtools_http_handler.cc
 +++ b/content/browser/devtools/devtools_http_handler.cc
 @@ -45,6 +45,8 @@
@@ -4652,7 +4895,7 @@ index fab13300e5..95f3e5ad2e 100644
  #include "content/public/common/content_client.h"
  #include "content/public/common/content_constants.h"
  #include "content/public/common/content_switches.h"
-@@ -659,6 +661,12 @@ void DevToolsHttpHandler::OnJsonRequest(
+@@ -667,6 +669,12 @@ void DevToolsHttpHandler::OnJsonRequest(
                                    for_tab ? DevToolsManagerDelegate::kTab
                                            : DevToolsManagerDelegate::kFrame)
              : DevToolsAgentHost::GetOrCreateAll();
@@ -4666,7 +4909,7 @@ index fab13300e5..95f3e5ad2e 100644
      RespondToJsonList(connection_id, info.GetHeaderValue("host"),
                        std::move(list), for_tab);
 diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
-index e77c87427f..81e26d9fac 100644
+index 3c5724c74a..404ca2c902 100644
 --- a/content/browser/devtools/protocol/target_handler.cc
 +++ b/content/browser/devtools/protocol/target_handler.cc
 @@ -36,6 +36,8 @@
@@ -4678,7 +4921,7 @@ index e77c87427f..81e26d9fac 100644
  #include "content/public/common/content_client.h"
  #include "content/public/common/url_constants.h"
  #include "url/url_constants.h"
-@@ -740,7 +742,15 @@ class TargetHandler::TargetFilter {
+@@ -750,7 +752,15 @@ class TargetHandler::TargetFilter {
      return base::WrapUnique(new TargetFilter(std::move(*filter)));
    }
  
@@ -4696,7 +4939,7 @@ index e77c87427f..81e26d9fac 100644
    bool Match(std::string_view type) const {
      for (const auto& entry : entries_) {
 diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
-index 6baf465bd2..4158449ddb 100644
+index ecdd16654a..53e66667f0 100644
 --- a/content/browser/renderer_host/navigation_request.cc
 +++ b/content/browser/renderer_host/navigation_request.cc
 @@ -123,6 +123,7 @@
@@ -4716,7 +4959,7 @@ index 6baf465bd2..4158449ddb 100644
  #include "content/public/common/content_client.h"
  #include "content/public/common/content_features.h"
  #include "content/public/common/content_switches.h"
-@@ -6618,6 +6621,63 @@ void NavigationRequest::OnWillProcessResponseChecksComplete(
+@@ -6937,6 +6940,63 @@ void NavigationRequest::OnWillProcessResponseChecksComplete(
    // If the NavigationThrottles allowed the navigation to continue, have the
    // processing of the response resume in the network stack.
    if (result.action() == NavigationThrottle::PROCEED) {
@@ -4833,10 +5076,10 @@ index 0000000000..244bf61f62
 +
 +#endif  // CONTENT_PUBLIC_BROWSER_AGENT_FETCH_RESPONSE_TAKER_H_
 diff --git a/third_party/blink/public/BUILD.gn b/third_party/blink/public/BUILD.gn
-index 6dc75e2d3f..d3a2bace54 100644
+index b40fe89390..91de0823c8 100644
 --- a/third_party/blink/public/BUILD.gn
 +++ b/third_party/blink/public/BUILD.gn
-@@ -554,6 +554,9 @@ grit("resources") {
+@@ -562,6 +562,9 @@ grit("resources") {
      "//third_party/blink/renderer/core/html/resources/quirks.css",
      "//third_party/blink/renderer/core/xml/DocumentXMLTreeViewer.css",
      "//third_party/blink/renderer/core/xml/DocumentXMLTreeViewer.js",
@@ -4862,10 +5105,10 @@ index 8ec7eabf20..656d23a4d3 100644
        <include name="IDR_VALIDATION_BUBBLE_CSS" file="../renderer/core/html/forms/resources/validation_bubble.css" type="BINDATA" compress="brotli"/>
        <if expr="not is_android">
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 142bd94887..e44c38beaf 100644
+index 039f48f27d..c416cd2d22 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-@@ -343,6 +343,449 @@ domain Browser
+@@ -344,6 +344,449 @@ domain Browser
      parameters
        string url
  
@@ -5484,7 +5727,7 @@ index 0000000000..ca0aa18d55
 +};
 diff --git a/third_party/blink/renderer/modules/agent_snapshot/agent_fetch_agent.cc b/third_party/blink/renderer/modules/agent_snapshot/agent_fetch_agent.cc
 new file mode 100644
-index 0000000000..3912e29dc1
+index 0000000000..54ff0440b0
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/agent_snapshot/agent_fetch_agent.cc
 @@ -0,0 +1,3524 @@
@@ -5958,7 +6201,7 @@ index 0000000000..3912e29dc1
 +bool IsRendered(const Element& element) {
 +  const LayoutObject* layout_object = element.GetLayoutObject();
 +  if (!layout_object ||
-+      layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
++      layout_object->Style().Visibility() != EVisibility::kVisible) {
 +    return false;
 +  }
 +  const gfx::Rect box = layout_object->AbsoluteBoundingBoxRect();
@@ -5990,7 +6233,7 @@ index 0000000000..3912e29dc1
 +  if (!layout_object.IsBox()) {
 +    return false;
 +  }
-+  const ComputedStyle& style = layout_object.StyleRef();
++  const ComputedStyle& style = layout_object.Style();
 +  if (style.OverflowX() == EOverflow::kVisible &&
 +      style.OverflowY() == EOverflow::kVisible && style.HasAutoClip()) {
 +    return false;
@@ -6531,7 +6774,7 @@ index 0000000000..3912e29dc1
 +    }
 +    const LayoutObject* layout_object = text.GetLayoutObject();
 +    return layout_object &&
-+           layout_object->StyleRef().Visibility() == EVisibility::kVisible;
++           layout_object->Style().Visibility() == EVisibility::kVisible;
 +  }
 +
 +  // A closed <details> on the live page: its content has no layout, but it
@@ -7891,7 +8134,7 @@ index 0000000000..3912e29dc1
 +    if (!scan.fixed_cover && viewport_width > 0 && viewport_height > 0 &&
 +        layout_object->IsBox() &&
 +        To<LayoutBox>(*layout_object).IsFixedToView() &&
-+        layout_object->StyleRef().Visibility() == EVisibility::kVisible) {
++        layout_object->Style().Visibility() == EVisibility::kVisible) {
 +      const gfx::Rect box = layout_object->AbsoluteBoundingBoxRect();
 +      const int64_t width =
 +          std::min<int64_t>(std::max(box.width(), 0), viewport_width);
@@ -7903,7 +8146,7 @@ index 0000000000..3912e29dc1
 +    // where the text walk cannot see it; the classifier learns how much of
 +    // the window a canvas fills.
 +    if (visible_area && element->HasTagName(html_names::kCanvasTag) &&
-+        layout_object->StyleRef().Visibility() == EVisibility::kVisible) {
++        layout_object->Style().Visibility() == EVisibility::kVisible) {
 +      gfx::Rect box = layout_object->AbsoluteBoundingBoxRect();
 +      box.Intersect(visible_rect);
 +      scan.canvas_coverage = std::max(scan.canvas_coverage,
@@ -8343,7 +8586,7 @@ index 0000000000..3912e29dc1
 +    }
 +    const LayoutObject* layout_object = text->GetLayoutObject();
 +    if (!layout_object ||
-+        layout_object->StyleRef().Visibility() != EVisibility::kVisible) {
++        layout_object->Style().Visibility() != EVisibility::kVisible) {
 +      continue;
 +    }
 +    // The raw length bounds the scan before it is spent.
@@ -9329,10 +9572,10 @@ index ab35ace7b3..7665d1f612 100644
  }
  
 diff --git a/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc b/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
-index 8afd9e7b82..e6439d663c 100644
+index d0baabf229..9f172ef750 100644
 --- a/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
 +++ b/ui/views/widget/desktop_aura/desktop_window_tree_host_win.cc
-@@ -255,7 +255,8 @@ void DesktopWindowTreeHostWin::Init(const Widget::InitParams& params) {
+@@ -277,7 +277,8 @@ void DesktopWindowTreeHostWin::Init(const Widget::InitParams& params) {
    }
  
    message_handler_ = HWNDMessageHandler::Create(
@@ -9343,10 +9586,10 @@ index 8afd9e7b82..e6439d663c 100644
    ConfigureWindowStyles(message_handler_.get(), params,
                          GetWidget()->widget_delegate(),
 diff --git a/ui/views/widget/widget.h b/ui/views/widget/widget.h
-index b0896143e1..4e9737bd89 100644
+index 30114c58ff..1f7881d3cf 100644
 --- a/ui/views/widget/widget.h
 +++ b/ui/views/widget/widget.h
-@@ -491,6 +491,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
+@@ -496,6 +496,11 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
      // If true, force the window not to be shown in the taskbar, even for
      // window types that do appear in the taskbar by default.
      bool dont_show_in_taskbar = false;
@@ -9376,11 +9619,11 @@ index 42fd008731..b6a3f37cdc 100644
            : new HWNDMessageHandler(delegate, debugging_id);
    return base::WrapUnique(message_handler);
 diff --git a/ui/views/win/hwnd_message_handler.h b/ui/views/win/hwnd_message_handler.h
-index 8092c7ef65..4118278643 100644
+index 7f7227f73f..c76025de5c 100644
 --- a/ui/views/win/hwnd_message_handler.h
 +++ b/ui/views/win/hwnd_message_handler.h
 @@ -95,10 +95,12 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
-   ADVANCED_MEMORY_SAFETY_CHECKS();
+   SANITIZED_OBJECT();
  
   public:
 -  // See WindowImpl for details on |debugging_id|.

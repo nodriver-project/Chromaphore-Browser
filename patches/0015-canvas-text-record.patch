@@ -1,0 +1,2297 @@
+From 43995e4953773501df10afc8ec55f1b01355e792 Mon Sep 17 00:00:00 2001
+From: The browser Authors <noreply@browser.invalid>
+Date: Sun, 22 Nov 2026 13:07:15 -0500
+Subject: [PATCH 15/62] canvas-text-record
+
+Page.agentCanvasText: the text runs and fills a page's 2D canvases still
+show, read from a record of the canvas's own draw calls, not from its
+pixels, with every character boundary placed in Input.moveTo's space.
+The record (CanvasTextRecord) exists only on an HTMLCanvasElement's 2D
+context and only under --enable-canvas-text-record: without the switch
+every hook is a null test and the command answers that recording is
+off. An OffscreenCanvas and the paint worklet never record. Draws
+append; a replay resolves what still shows, and what it cannot follow is
+reported as inexact with a reason. A read starts no font load: the
+page's font is used only while it is still valid for the draw,
+otherwise system fonts, with fontChanged.
+
+The command's handler, its types and the renderer's read ride in
+agent-snapshot (page_handler.*, Page.pdl, the collector's mojom and
+impl); the switch's declaration and its forwarding to renderers ride in
+switch-resolver. The 2D canvas files this commit shares with the private
+layer are this commit's: the private layer adds its lines to them.
+---
+ .../blink/renderer/modules/canvas/BUILD.gn    |    3 +
+ .../canvas2d/base_rendering_context_2d.cc     |   15 +
+ .../canvas2d/canvas_2d_recorder_context.cc    |   11 +
+ .../canvas2d/canvas_2d_recorder_context.h     |   38 +
+ .../canvas2d/canvas_rendering_context_2d.cc   |   22 +
+ .../canvas_rendering_context_2d_state.cc      |    8 +
+ .../canvas_rendering_context_2d_state.h       |   10 +
+ .../modules/canvas/canvas2d/canvas_style.h    |    4 +
+ .../canvas/canvas2d/canvas_text_record.cc     | 1481 +++++++++++++++++
+ .../canvas/canvas2d/canvas_text_record.h      |  369 ++++
+ .../platform/fonts/font_fallback_iterator.cc  |   29 +-
+ .../platform/fonts/font_fallback_iterator.h   |   19 +
+ .../platform/fonts/plain_text_painter.cc      |    6 +-
+ 13 files changed, 2011 insertions(+), 4 deletions(-)
+ create mode 100644 third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.cc
+ create mode 100644 third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h
+
+diff --git a/third_party/blink/renderer/modules/canvas/BUILD.gn b/third_party/blink/renderer/modules/canvas/BUILD.gn
+index 1d29be2717..930396e3c3 100644
+--- a/third_party/blink/renderer/modules/canvas/BUILD.gn
++++ b/third_party/blink/renderer/modules/canvas/BUILD.gn
+@@ -30,6 +30,8 @@ blink_modules_sources("canvas") {
+     "canvas2d/canvas_rendering_context_2d_state.h",
+     "canvas2d/canvas_style.cc",
+     "canvas2d/canvas_style.h",
++    "canvas2d/canvas_text_record.cc",
++    "canvas2d/canvas_text_record.h",
+     "canvas2d/clip_list.cc",
+     "canvas2d/clip_list.h",
+     "canvas2d/mesh_2d_buffer.h",
+@@ -58,6 +60,7 @@ blink_modules_sources("canvas") {
+   ]
+ 
+   deps = [
++    "//components/browser:browser_switches",
+     "//third_party/blink/renderer/modules/webcodecs",
+     "//third_party/blink/renderer/modules/webgpu",
+   ]
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+index eaa71b910d..0d2f97bf1b 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
+@@ -1051,6 +1051,12 @@ void BaseRenderingContext2D::PutByteArray(const SkPixmap& source,
+   DCHECK_GE(dest_y, 0);
+   DCHECK_LT(dest_y, Height());
+ 
++  // browser: the canvas text record (Page.agentCanvasText).
++  if (text_record_) {
++    RecordDeviceDrawForAgent(
++        gfx::Rect(dest_x, dest_y, source_rect.width(), source_rect.height()));
++  }
++
+   SkImageInfo info =
+       source.info().makeWH(source_rect.width(), source_rect.height());
+   if (!HasAlpha()) {
+@@ -1559,6 +1565,15 @@ void BaseRenderingContext2D::DrawTextInternal(
+                              font_data->GetFontMetrics().FloatHeight());
+   }
+ 
++  // browser: the canvas text record (Page.agentCanvasText), from the draw's
++  // own arguments, before anything changes the paint.
++  if (text_record_) {
++    RecordTextForAgent(
++        text, run_start, run_end, *font, *font_data, is_rtl, bidi_override,
++        location, width, font_width,
++        paint_type == CanvasRenderingContext2DState::kStrokePaintType);
++  }
++
+   bounds.Offset(location.x(), location.y());
+   if (paint_type == CanvasRenderingContext2DState::kStrokePaintType) {
+     InflateStrokeRect(bounds);
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.cc b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.cc
+index 96cee8f261..6fee4991c9 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.cc
+@@ -738,6 +738,11 @@ void Canvas2DRecorderContext::endLayer(ExceptionState& exception_state) {
+     WillDraw(gfx::SkIRectToRect(clip_bounds),
+              CanvasPerformanceMonitor::DrawType::kOther);
+   }
++  // browser: the canvas text record (Page.agentCanvasText): what the layers
++  // drew lands once the outermost one ends.
++  if (text_record_ && layer_count_ == 0) {
++    RecordLayerEndForAgent(parent_canvas);
++  }
+ 
+   ValidateStateStack();
+ }
+@@ -2005,6 +2010,10 @@ void Canvas2DRecorderContext::clearRect(double x,
+       host->ClearRenderedText(canvas_clear_rect);
+     }
+   }
++  // browser: the canvas text record (Page.agentCanvasText).
++  if (text_record_) {
++    RecordClearForAgent(rect, clip_bounds);
++  }
+   if (RectContainsTransformedRect(rect, clip_bounds)) {
+     CheckOverdraw(&clear_flags, CanvasRenderingContext2DState::kNoImage,
+                   OverdrawOp::kClearRect);
+@@ -2722,6 +2731,8 @@ void Canvas2DRecorderContext::setImageSmoothingQuality(
+ void Canvas2DRecorderContext::Trace(Visitor* visitor) const {
+   visitor->Trace(state_stack_);
+   visitor->Trace(color_cache_);
++  // browser: the canvas text record (Page.agentCanvasText).
++  TraceTextRecordForAgent(visitor);
+   CanvasPath::Trace(visitor);
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.h b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.h
+index 620f58d3a3..0f7a88ddd2 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.h
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.h
+@@ -95,6 +95,8 @@ class OffscreenCanvas;
+ class Path;
+ class Path2D;
+ class ScriptState;
++class CanvasTextRecord;  // browser
++class SimpleFontData;    // browser
+ class V8UnionCanvasFilterOrString;
+ enum class ColorParseResult;
+ enum RespectImageOrientationEnum : uint8_t;
+@@ -395,6 +397,10 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
+ 
+   const UsageCounters& GetUsage();
+ 
++  // browser: the canvas text record (Page.agentCanvasText): the canvas
++  // element's own context's; null for every other context.
++  CanvasTextRecord* TextRecordForAgent() const { return text_record_.Get(); }
++
+  protected:
+   explicit Canvas2DRecorderContext(float effective_zoom = 1.0f);
+ 
+@@ -449,6 +455,33 @@ class MODULES_EXPORT Canvas2DRecorderContext : public CanvasPath {
+   // offscreencanvas.
+   float effective_zoom_ = 1.0f;
+ 
++  // browser: the canvas text record (Page.agentCanvasText). Only
++  // CanvasRenderingContext2D sets it, so an OffscreenCanvas's and the paint
++  // worklet's contexts record nothing.
++  Member<CanvasTextRecord> text_record_;
++  friend class CanvasTextRecord;
++  // Its hooks, called only while text_record_ is set; defined in
++  // canvas_text_record.cc.
++  void RecordDrawForAgent(const gfx::RectF& bounds,
++                          CanvasRenderingContext2DState::PaintType paint_type,
++                          CanvasPerformanceMonitor::DrawType draw_type,
++                          const SkIRect& clip_bounds);
++  void RecordTextForAgent(const String& text,
++                          unsigned start,
++                          unsigned end,
++                          const Font& font,
++                          const SimpleFontData& font_data,
++                          bool rtl,
++                          bool bidi_override,
++                          const gfx::PointF& location,
++                          double width,
++                          double font_width,
++                          bool stroke);
++  void RecordClearForAgent(const gfx::RectF& rect, const SkIRect& clip_bounds);
++  void RecordDeviceDrawForAgent(const gfx::Rect& device_rect);
++  void RecordLayerEndForAgent(cc::PaintCanvas& canvas);
++  void TraceTextRecordForAgent(Visitor* visitor) const;
++
+   virtual void DisableAcceleration() {}
+ 
+   virtual bool IsPaint2D() const { return false; }
+@@ -799,6 +832,11 @@ void Canvas2DRecorderContext::Draw(
+     return;
+   }
+ 
++  // browser: the canvas text record (Page.agentCanvasText).
++  if (text_record_) {
++    RecordDrawForAgent(bounds, paint_type, draw_type, clip_bounds);
++  }
++
+   const CanvasRenderingContext2DState& state = GetState();
+   SkBlendMode global_composite = state.GlobalComposite();
+   if (ShouldUseCompositedDraw(paint_type, image_type)) {
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.cc
+index 3e07fa0d7e..09c98cd531 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.cc
+@@ -94,6 +94,7 @@
+ #include "third_party/blink/renderer/core/svg/svg_resource_client.h"
+ #include "third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.h"
+ #include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.h"
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h"
+ #include "third_party/blink/renderer/modules/canvas/canvas2d/path_2d.h"
+ #include "third_party/blink/renderer/modules/canvas/htmlcanvas/canvas_context_creation_attributes_helpers.h"
+ #include "third_party/blink/renderer/platform/fonts/font.h"
+@@ -212,6 +213,11 @@ CanvasRenderingContext2D::CanvasRenderingContext2D(
+     clip_antialiasing_ = kAntiAliased;
+   SetShouldAntialias(true);
+   FlushForImageListener::Get()->AddObserver(this);
++  // browser: the canvas text record (Page.agentCanvasText), only under
++  // --enable-canvas-text-record.
++  if (CanvasTextRecord::Enabled()) {
++    text_record_ = MakeGarbageCollected<CanvasTextRecord>();
++  }
+ }
+ 
+ V8RenderingContext* CanvasRenderingContext2D::AsV8RenderingContext() {
+@@ -227,6 +233,11 @@ void CanvasRenderingContext2D::ResetInternal() {
+     GetHibernationHandler()->Clear();
+   }
+   BaseRenderingContext2D::ResetInternal();
++  // browser: reset() and a lost context empty the canvas text record; a
++  // resize does in Reshape().
++  if (text_record_) {
++    text_record_->Clear();
++  }
+ }
+ 
+ bool CanvasRenderingContext2D::IsComposited() const {
+@@ -952,6 +963,12 @@ void CanvasRenderingContext2D::DrawFocusRing(const Path& path,
+   if (!ComputeDirtyRect(path.StrokeBoundingRect(stroke_data), &dirty_rect))
+     return;
+ 
++  // browser: the canvas text record (Page.agentCanvasText): a focus ring is
++  // drawn past every other hook, an operation it does not follow.
++  if (text_record_) {
++    RecordDeviceDrawForAgent(gfx::SkIRectToRect(dirty_rect));
++  }
++
+   DidDraw(gfx::SkIRectToRect(dirty_rect),
+           CanvasPerformanceMonitor::DrawType::kPath);
+ }
+@@ -1036,6 +1053,11 @@ void CanvasRenderingContext2D::Reshape(gfx::Size old_size, gfx::Size new_size) {
+   ResetState();
+   ClearCanvas(old_size);
+   set_clear_frame(true);
++  // browser: an assignment to the canvas's width or height empties the
++  // canvas text record, as reset() does (ResetInternal()).
++  if (text_record_) {
++    text_record_->Clear();
++  }
+ 
+   if (old_size != new_size) {
+     ResetBacking();
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.cc b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.cc
+index 5a79a0b7ea..f249fab870 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.cc
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.cc
+@@ -239,6 +239,8 @@ CanvasRenderingContext2DState::CanvasRenderingContext2DState(
+   if (mode == kCopyClipList) {
+     clip_list_ = other.clip_list_;
+   }
++  // browser: the canvas text record's clip exactness, kept as has_clip_ is.
++  clip_off_axis_ = other.clip_off_axis_;
+   // Since FontSelector is weakly persistent with |font_|, the memory may be
+   // freed even |font_| is valid.
+   if (realized_font_ && font_->GetFontSelector()) {
+@@ -356,6 +358,12 @@ void CanvasRenderingContext2DState::ClipPath(
+   has_clip_ = true;
+   if (!path.isRect(nullptr))
+     has_complex_clip_ = true;
++  // browser: a rect clip under a rotation or skew is no device rect
++  // (ClipIsDeviceRect).
++  if (!((transform_.B() == 0 && transform_.C() == 0) ||
++        (transform_.A() == 0 && transform_.D() == 0))) {
++    clip_off_axis_ = true;
++  }
+ }
+ 
+ void CanvasRenderingContext2DState::SetLang(const String& lang) {
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.h b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.h
+index 40784dbf0a..c7db9b7a58 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.h
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.h
+@@ -132,6 +132,12 @@ class MODULES_EXPORT CanvasRenderingContext2DState final
+   void ClipPath(const SkPath&, AntiAliasingMode);
+   bool HasClip() const { return has_clip_; }
+   bool HasComplexClip() const { return has_complex_clip_; }
++  // browser: whether the clip is an exact device-space rectangle -- none, or
++  // only rect clips set under transforms that keep rects rects -- for the
++  // canvas text record (Page.agentCanvasText).
++  bool ClipIsDeviceRect() const {
++    return !has_complex_clip_ && !clip_off_axis_;
++  }
+   void PlaybackClips(cc::PaintCanvas* canvas) const {
+     clip_list_.Playback(canvas);
+   }
+@@ -452,6 +458,10 @@ class MODULES_EXPORT CanvasRenderingContext2DState final
+ 
+   ClipList clip_list_;
+ 
++  // browser: a clip was set under a transform that turns rects into other
++  // shapes (ClipIsDeviceRect).
++  bool clip_off_axis_ = false;
++
+   const SaveType save_type_ = SaveType::kInitial;
+ };
+ 
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h
+index 57b6d1ffb5..6f0f0f1a72 100644
+--- a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h
+@@ -108,6 +108,10 @@ class CanvasStyle final {
+     pattern_ = nullptr;
+   }
+ 
++  // browser: the colour of a colour style as set, for the canvas text
++  // record (Page.agentCanvasText); meaningless for a gradient or pattern.
++  const Color& ColorForTextRecord() const { return color_; }
++
+   void Trace(Visitor*) const;
+ 
+  private:
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.cc b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.cc
+new file mode 100644
+index 0000000000..5c8127509d
+--- /dev/null
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.cc
+@@ -0,0 +1,1481 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h"
++
++#include <algorithm>
++#include <cmath>
++#include <limits>
++#include <utility>
++
++#include "base/command_line.h"
++#include "cc/paint/paint_canvas.h"
++#include "components/browser/browser_switches.h"
++#include "third_party/blink/renderer/core/css/css_value.h"
++#include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_2d_recorder_context.h"
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_style.h"
++#include "third_party/blink/renderer/platform/fonts/font.h"
++#include "third_party/blink/renderer/platform/fonts/font_description.h"
++#include "third_party/blink/renderer/platform/fonts/font_fallback_iterator.h"
++#include "third_party/blink/renderer/platform/fonts/font_fallback_list.h"
++#include "third_party/blink/renderer/platform/fonts/font_fallback_map.h"
++#include "third_party/blink/renderer/platform/fonts/font_metrics.h"
++#include "third_party/blink/renderer/platform/fonts/font_selection_types.h"
++#include "third_party/blink/renderer/platform/fonts/font_selector.h"
++#include "third_party/blink/renderer/platform/fonts/plain_text_node.h"
++#include "third_party/blink/renderer/platform/fonts/plain_text_painter.h"
++#include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
++#include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
++#include "third_party/blink/renderer/platform/geometry/path_types.h"
++#include "third_party/blink/renderer/platform/text/text_direction.h"
++#include "third_party/blink/renderer/platform/text/text_run.h"
++#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
++#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
++#include "third_party/blink/renderer/platform/wtf/text/string_view.h"
++#include "third_party/skia/include/core/SkBlendMode.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/gfx/geometry/vector2d_f.h"
++
++namespace blink {
++
++namespace {
++
++// The grid of device space the showing set is indexed by, in px, and the
++// most cells there are along each axis (a canvas is at most 32,767 px a side).
++constexpr float kCellWidth = 128;
++constexpr float kCellHeight = 32;
++constexpr int kMaxCols = 256;
++constexpr int kMaxRows = 1024;
++// How far a baseline's ends, or a fill's corners, may lie from a showing
++// one's and still be the same again, in device px.
++constexpr float kSame = 0.5f;
++// Slack for "wholly inside", in device px.
++constexpr float kSlack = 0.01f;
++// Dead items and index entries kept before a squeeze.
++constexpr wtf_size_t kDeadSlack = 1024;
++
++// The composite modes whose draw replaces the whole clip, as
++// Canvas2DRecorderContext::IsFullCanvasCompositeMode takes them.
++bool IsFullClipMode(SkBlendMode mode) {
++  return mode == SkBlendMode::kSrcIn || mode == SkBlendMode::kSrcOut ||
++         mode == SkBlendMode::kDstIn || mode == SkBlendMode::kDstATop;
++}
++
++// A transform that maps rects to rects: scales, flips, translations and
++// quarter turns.
++bool AxisAligned(const float m[6]) {
++  return (m[1] == 0 && m[2] == 0) || (m[0] == 0 && m[3] == 0);
++}
++
++gfx::RectF ClipRect(const SkIRect& clip) {
++  return gfx::RectF(clip.x(), clip.y(), clip.width(), clip.height());
++}
++
++bool Near(const gfx::PointF& a, const gfx::PointF& b) {
++  return (a - b).Length() <= kSame;
++}
++
++// Overlap along one axis: positive overlap, or a zero-size side lying
++// strictly inside the other.
++bool Overlaps(float a0, float a1, float b0, float b1) {
++  if (a0 == a1) {
++    return a0 > b0 && a0 < b1;
++  }
++  if (b0 == b1) {
++    return b0 > a0 && b0 < a1;
++  }
++  return a0 < b1 && b0 < a1;
++}
++
++// Whether `a` crosses `b`: they share area, or a box of no width or height
++// lies inside the other.
++bool Crosses(const gfx::RectF& a, const gfx::RectF& b) {
++  return Overlaps(a.x(), a.right(), b.x(), b.right()) &&
++         Overlaps(a.y(), a.bottom(), b.y(), b.bottom());
++}
++
++// `a` within `b`, edges included; boxes of no size allowed.
++bool Within(const gfx::RectF& a, const gfx::RectF& b) {
++  return a.x() >= b.x() && a.right() <= b.right() && a.y() >= b.y() &&
++         a.bottom() <= b.bottom();
++}
++
++// `a` cut to `b`, edges included; false when nothing of `a` is in `b`.
++bool CutTo(const gfx::RectF& a, const gfx::RectF& b, gfx::RectF& out) {
++  const float left = std::max(a.x(), b.x());
++  const float top = std::max(a.y(), b.y());
++  const float right = std::min(a.right(), b.right());
++  const float bottom = std::min(a.bottom(), b.bottom());
++  if (left > right || top > bottom) {
++    return false;
++  }
++  out = gfx::RectF(left, top, right - left, bottom - top);
++  return true;
++}
++
++bool QuadInside(const gfx::RectF& area, const gfx::QuadF& quad) {
++  gfx::RectF slack = area;
++  slack.Outset(kSlack);
++  return slack.InclusiveContains(quad.p1()) &&
++         slack.InclusiveContains(quad.p2()) &&
++         slack.InclusiveContains(quad.p3()) &&
++         slack.InclusiveContains(quad.p4());
++}
++
++// A run's central band from its box (left-top, right-top, right-bottom,
++// left-bottom): the middle half of its height, its full length.
++gfx::QuadF CentralBand(const gfx::QuadF& box) {
++  const auto at = [](const gfx::PointF& a, const gfx::PointF& b, float t) {
++    return gfx::PointF(a.x() + (b.x() - a.x()) * t,
++                       a.y() + (b.y() - a.y()) * t);
++  };
++  return gfx::QuadF(
++      at(box.p1(), box.p4(), 0.25f), at(box.p2(), box.p3(), 0.25f),
++      at(box.p2(), box.p3(), 0.75f), at(box.p1(), box.p4(), 0.75f));
++}
++
++// The font getter's serialization (BaseRenderingContext2D::font), from a
++// font's description.
++String FontCss(const FontDescription& description) {
++  StringBuilder css;
++  if (description.Style() == kItalicSlopeValue) {
++    css.Append("italic ");
++  }
++  if (description.Weight() == kBoldWeightValue) {
++    css.Append("bold ");
++  } else if (description.Weight() != kNormalWeightValue) {
++    css.AppendNumber(
++        static_cast<int>(static_cast<float>(description.Weight())));
++    css.Append(" ");
++  }
++  if (description.VariantCaps() == FontDescription::kSmallCaps) {
++    css.Append("small-caps ");
++  }
++  css.AppendNumber(description.ComputedSize());
++  css.Append("px ");
++  css.Append(
++      ComputedStyleUtils::ValueForFontFamily(description.Family())->CssText());
++  return css.ToString();
++}
++
++// Whether a filter is set, without resolving it (resolving allocates, and the
++// draw resolves it itself); one not yet resolved counts as a filter.
++bool HasFilter(const CanvasRenderingContext2DState& state) {
++  return state.IsFilterUnresolved() || state.IsFilterResolved();
++}
++
++// The cell along one axis holding `v`, clamped to the grid (what lies off the
++// canvas goes in its edge cells).
++int CellOf(float v, float size, int count) {
++  const float cell = std::floor(v / size);
++  if (!(cell >= 0)) {  // negative, or NaN
++    return 0;
++  }
++  return cell >= count - 1 ? count - 1 : static_cast<int>(cell);
++}
++
++template <typename EntryT, typename StyleT>
++void SetStyle(EntryT& entry, const CanvasStyle& style) {
++  if (style.GetCanvasGradient()) {
++    entry.style = StyleT::kGradient;
++  } else if (style.GetCanvasPattern()) {
++    entry.style = StyleT::kPattern;
++  } else {
++    entry.style = StyleT::kColor;
++    entry.color = style.ColorForTextRecord();
++  }
++}
++
++}  // namespace
++
++// static
++bool CanvasTextRecord::Enabled() {
++  static const bool enabled = base::CommandLine::ForCurrentProcess()->HasSwitch(
++      ::switches::kEnableCanvasTextRecord);
++  return enabled;
++}
++
++CanvasTextRecord::CanvasTextRecord() {
++  // The font table's store, once: a draw adds to it only past eight fonts
++  // in use at once.
++  fonts_.ReserveInitialCapacity(8);
++}
++
++CanvasTextRecord::~CanvasTextRecord() = default;
++
++void CanvasTextRecord::Trace(Visitor* visitor) const {
++  visitor->Trace(fonts_);
++  visitor->Trace(pending_font_);
++  FontSelectorClient::Trace(visitor);
++}
++
++// The slots whose font's list this invalidation may invalidate, chosen as
++// FontFallbackMap::FontsNeedUpdate chooses (it may already have run: a list
++// it invalidated reads invalid here). A valid list is its description's entry
++// in its selector's map, so Get() finds the font's own list and creates
++// nothing.
++void CanvasTextRecord::FontsNeedUpdate(FontSelector* selector,
++                                       FontInvalidationReason reason) {
++  for (wtf_size_t i = 0; i < fonts_.size(); ++i) {
++    const Font* font = fonts_[i].Get();
++    if (!font || font_stale_[i] || font->GetFontSelector() != selector) {
++      continue;
++    }
++    if (!selector || !font->IsFallbackValid()) {
++      font_stale_[i] = true;
++      continue;
++    }
++    const FontFallbackList& list =
++        *selector->GetFontFallbackMap().Get(font->GetFontDescription());
++    switch (reason) {
++      case FontInvalidationReason::kFontFaceLoaded:
++        font_stale_[i] = list.HasLoadingFallback();
++        break;
++      case FontInvalidationReason::kFontFaceDeleted:
++        font_stale_[i] = list.HasCustomFont();
++        break;
++      default:
++        font_stale_[i] = true;
++    }
++  }
++}
++
++// static
++gfx::PointF CanvasTextRecord::Map(const float m[6], float x, float y) {
++  return gfx::PointF(m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
++}
++
++// static
++uint64_t CanvasTextRecord::SameKey(bool fill, float x, float y) {
++  const auto q = [](float v) -> uint64_t {
++    // NaN, which a transform too large for a float can give, is the lowest.
++    if (!(v >= -1048576.0f)) {
++      return 0;
++    }
++    const float f = std::min(std::floor(v), 1048575.0f);
++    return static_cast<uint64_t>(static_cast<int64_t>(f) + 1048576);
++  };
++  // Never 0 nor the largest value (the hash table's empty and deleted keys).
++  return ((q(x) << 21 | q(y)) << 1 | (fill ? 1 : 0)) + 1;
++}
++
++// ---- Draw time.
++
++void CanvasTextRecord::Begin(Canvas2DRecorderContext& context,
++                             Entry& entry,
++                             Kind kind) {
++  const CanvasRenderingContext2DState& state = context.GetState();
++  entry.kind = kind;
++  entry.composite = static_cast<uint8_t>(state.GlobalComposite());
++  entry.clip_exact = state.ClipIsDeviceRect();
++  const AffineTransform& t = state.GetTransform();
++  entry.m[0] = static_cast<float>(t.A());
++  entry.m[1] = static_cast<float>(t.B());
++  entry.m[2] = static_cast<float>(t.C());
++  entry.m[3] = static_cast<float>(t.D());
++  entry.m[4] = static_cast<float>(t.E());
++  entry.m[5] = static_cast<float>(t.F());
++}
++
++// Whether `entry` is the log's last entry again. Replayed, it would only
++// replace that one as the same again (a run or a fill) or repeat what it did
++// (a clear, an operation not followed), so it need not be logged.
++bool CanvasTextRecord::SameAsLast(const Entry& entry) const {
++  if (log_.empty()) {
++    return false;
++  }
++  const Entry& last = log_.back();
++  if (last.kind != entry.kind || last.composite != entry.composite ||
++      last.style != entry.style || last.clip_exact != entry.clip_exact ||
++      last.shadow_or_filter != entry.shadow_or_filter ||
++      last.stroke != entry.stroke || last.line != entry.line ||
++      last.clip != entry.clip || last.rect != entry.rect ||
++      last.alpha != entry.alpha ||
++      (entry.style == Style::kColor && last.color != entry.color)) {
++    return false;
++  }
++  for (int i = 0; i < 6; ++i) {
++    if (last.m[i] != entry.m[i]) {
++      return false;
++    }
++  }
++  if (entry.kind != Kind::kText) {
++    return true;
++  }
++  return last.font == entry.font && last.x == entry.x && last.y == entry.y &&
++         last.width == entry.width && last.font_width == entry.font_width &&
++         last.ascent == entry.ascent && last.descent == entry.descent &&
++         last.rtl == entry.rtl && last.bidi_override == entry.bidi_override &&
++         last.text == entry.text;
++}
++
++void CanvasTextRecord::Append(Canvas2DRecorderContext& context, Entry& entry) {
++  if (SameAsLast(entry)) {
++    return;
++  }
++  if (entry.kind == Kind::kText) {
++    ++font_uses_[entry.font];
++  }
++  // A clear of the whole canvas replays the log at once: what it empties
++  // (and the fonts only that used) goes now, not at the next compaction.
++  bool clears_all = false;
++  if (entry.kind == Kind::kClear && entry.clip_exact && AxisAligned(entry.m)) {
++    const gfx::RectF canvas(0, 0, context.Width(), context.Height());
++    const gfx::RectF clip = ClipRect(entry.clip);
++    const gfx::RectF area =
++        gfx::QuadF(Map(entry.m, entry.rect.x(), entry.rect.y()),
++                   Map(entry.m, entry.rect.right(), entry.rect.bottom()),
++                   Map(entry.m, entry.rect.right(), entry.rect.y()),
++                   Map(entry.m, entry.rect.x(), entry.rect.bottom()))
++            .BoundingBox();
++    clears_all = clip.Contains(canvas) && area.Contains(canvas);
++  }
++  log_.push_back(std::move(entry));
++  if (log_.size() >= kCompactAt || clears_all) {
++    Compact(gfx::Size(context.Width(), context.Height()));
++  }
++}
++
++uint32_t CanvasTextRecord::FontIndex(const Font& font) {
++  if (last_font_.Get() == &font) {
++    return last_font_index_;
++  }
++  uint32_t index = std::numeric_limits<uint32_t>::max();
++  for (wtf_size_t i = 0; i < fonts_.size(); ++i) {
++    if (fonts_[i].Get() == &font) {
++      index = i;
++      break;
++    }
++  }
++  if (index == std::numeric_limits<uint32_t>::max()) {
++    if (!free_fonts_.empty()) {
++      index = free_fonts_.back();
++      free_fonts_.pop_back();
++      fonts_[index] = &font;
++      font_uses_[index] = 0;
++      font_css_[index] = String();
++    } else {
++      index = fonts_.size();
++      fonts_.push_back(&font);
++      font_uses_.push_back(0);
++      font_css_.push_back(String());
++      font_stale_.push_back(true);
++    }
++    // Told of every invalidation of this font's lists from now on (a set:
++    // registering again changes nothing; held weakly).
++    if (FontSelector* selector = font.GetFontSelector()) {
++      selector->RegisterForInvalidationCallbacks(this);
++    }
++  }
++  last_font_ = &font;
++  last_font_index_ = index;
++  return index;
++}
++
++void CanvasTextRecord::PendText(Canvas2DRecorderContext& context,
++                                const String& text,
++                                unsigned start,
++                                unsigned end,
++                                const Font& font,
++                                const SimpleFontData& font_data,
++                                bool rtl,
++                                bool bidi_override,
++                                const gfx::PointF& location,
++                                double width,
++                                double font_width,
++                                bool stroke) {
++  has_pending_ = false;
++  if (end <= start || end > text.length()) {
++    return;  // draws nothing
++  }
++  const CanvasRenderingContext2DState& state = context.GetState();
++  Entry& entry = pending_;
++  Begin(context, entry, Kind::kText);
++  // A cluster draw keeps only the part it draws.
++  entry.text = (start == 0 && end == text.length())
++                   ? text
++                   : text.substr(start, end - start);
++  entry.stroke = stroke;
++  entry.line = false;
++  entry.shadow_or_filter = state.ShouldDrawShadows() || HasFilter(state);
++  entry.alpha = static_cast<float>(state.GlobalAlpha());
++  SetStyle<Entry, Style>(
++      entry,
++      state.Style(stroke ? CanvasRenderingContext2DState::kStrokePaintType
++                         : CanvasRenderingContext2DState::kFillPaintType));
++  entry.rect = gfx::RectF();
++  entry.x = location.x();
++  entry.y = location.y();
++  entry.width = static_cast<float>(width);
++  entry.font_width = static_cast<float>(font_width);
++  const FontMetrics& metrics = font_data.GetFontMetrics();
++  entry.ascent = metrics.FloatAscent();
++  entry.descent = metrics.FloatDescent();
++  entry.rtl = rtl;
++  entry.bidi_override = bidi_override;
++  pending_font_ = &font;
++  has_pending_ = true;
++}
++
++void CanvasTextRecord::OnDraw(
++    Canvas2DRecorderContext& context,
++    const gfx::RectF& bounds,
++    CanvasRenderingContext2DState::PaintType paint_type,
++    CanvasPerformanceMonitor::DrawType draw_type,
++    const SkIRect& clip_bounds) {
++  if (draw_type == CanvasPerformanceMonitor::DrawType::kText) {
++    if (!has_pending_) {
++      return;
++    }
++    has_pending_ = false;
++    const Font* font = pending_font_.Get();
++    pending_font_ = nullptr;
++    if (context.layer_count_ > 0) {
++      drew_in_layer_ = true;
++      pending_.text = String();
++      return;
++    }
++    pending_.clip = clip_bounds;
++    if (pending_.text.length() > kMaxRunChars) {
++      // Too long to keep: what it draws is an operation not followed, and
++      // the canvas says it lost a run.
++      pending_.kind = Kind::kOther;
++      pending_.rect =
++          gfx::RectF(pending_.x, pending_.y - pending_.ascent, pending_.width,
++                     pending_.ascent + pending_.descent);
++      pending_.text = String();
++      truncated_ = true;
++    } else {
++      pending_.font = FontIndex(*font);
++      // This draw determined the font's primary font on its current list.
++      font_stale_[pending_.font] = false;
++    }
++    Append(context, pending_);
++    return;
++  }
++  if (context.layer_count_ > 0) {
++    drew_in_layer_ = true;
++    return;
++  }
++  const CanvasRenderingContext2DState& state = context.GetState();
++  const bool fill =
++      draw_type == CanvasPerformanceMonitor::DrawType::kRectangle &&
++      paint_type == CanvasRenderingContext2DState::kFillPaintType;
++  Entry entry;
++  Begin(context, entry, fill ? Kind::kFill : Kind::kOther);
++  entry.clip = clip_bounds;
++  entry.rect = bounds;
++  entry.shadow_or_filter = state.ShouldDrawShadows() || HasFilter(state);
++  if (fill) {
++    entry.alpha = static_cast<float>(state.GlobalAlpha());
++    SetStyle<Entry, Style>(entry, state.FillStyle());
++  } else if (draw_type == CanvasPerformanceMonitor::DrawType::kPath &&
++             paint_type == CanvasRenderingContext2DState::kStrokePaintType) {
++    // A stroked path comes padded for the sharpest miter join
++    // (InflateStrokeRect). A path straight along an axis -- an underline, a
++    // dashed squiggle -- has no join that reaches past its caps: half the
++    // line width (a square cap's corner, a little more) is all it covers.
++    const float half = static_cast<float>(state.LineWidth() / 2);
++    float padding = half;
++    if (state.GetLineJoin() == kMiterJoin) {
++      padding *= static_cast<float>(state.MiterLimit());
++    } else if (state.GetLineCap() == kSquareCap) {
++      padding *= std::sqrt(2.0f);
++    }
++    const float raw_width = std::max(0.0f, bounds.width() - 2 * padding);
++    const float raw_height = std::max(0.0f, bounds.height() - 2 * padding);
++    if (raw_width < 0.5f || raw_height < 0.5f) {
++      const float cap =
++          state.GetLineCap() == kSquareCap ? half * std::sqrt(2.0f) : half;
++      entry.rect = gfx::RectF(bounds.CenterPoint().x() - raw_width / 2 - cap,
++                              bounds.CenterPoint().y() - raw_height / 2 - cap,
++                              raw_width + 2 * cap, raw_height + 2 * cap);
++      entry.line = state.LineWidth() <= 3;
++    }
++  }
++  Append(context, entry);
++}
++
++void CanvasTextRecord::OnClear(Canvas2DRecorderContext& context,
++                               const gfx::RectF& rect,
++                               const SkIRect& clip_bounds) {
++  if (context.layer_count_ > 0) {
++    drew_in_layer_ = true;
++    return;
++  }
++  Entry entry;
++  Begin(context, entry, Kind::kClear);
++  entry.clip = clip_bounds;
++  entry.rect = rect;
++  Append(context, entry);
++}
++
++void CanvasTextRecord::OnDeviceDraw(Canvas2DRecorderContext& context,
++                                    const gfx::Rect& device_rect) {
++  Entry entry;
++  entry.kind = Kind::kDevice;
++  entry.composite = static_cast<uint8_t>(SkBlendMode::kSrcOver);
++  entry.clip = SkIRect::MakeWH(context.Width(), context.Height());
++  entry.rect = gfx::RectF(device_rect);
++  entry.m[0] = 1;
++  entry.m[1] = 0;
++  entry.m[2] = 0;
++  entry.m[3] = 1;
++  entry.m[4] = 0;
++  entry.m[5] = 0;
++  Append(context, entry);
++}
++
++void CanvasTextRecord::OnLayerEnd(Canvas2DRecorderContext& context,
++                                  cc::PaintCanvas& canvas) {
++  if (!drew_in_layer_) {
++    return;
++  }
++  drew_in_layer_ = false;
++  SkIRect clip;
++  if (!canvas.getDeviceClipBounds(&clip)) {
++    return;
++  }
++  // What the layers drew lands now, within the clip, filters and all.
++  Entry entry;
++  entry.kind = Kind::kDevice;
++  entry.composite = static_cast<uint8_t>(SkBlendMode::kSrcOver);
++  entry.clip = clip;
++  entry.rect = ClipRect(clip);
++  entry.m[0] = 1;
++  entry.m[1] = 0;
++  entry.m[2] = 0;
++  entry.m[3] = 1;
++  entry.m[4] = 0;
++  entry.m[5] = 0;
++  Append(context, entry);
++}
++
++void CanvasTextRecord::Clear() {
++  log_.Shrink(0);
++  has_pending_ = false;
++  pending_.text = String();
++  pending_font_ = nullptr;
++  EmptyShown();
++  // A resize may follow: the next compaction sizes the grid again.
++  cells_.clear();
++  cell_gen_.clear();
++  cols_ = 0;
++  rows_ = 0;
++  truncated_ = false;
++  drew_in_layer_ = false;
++  fonts_.Shrink(0);
++  font_uses_.Shrink(0);
++  font_css_.Shrink(0);
++  free_fonts_.Shrink(0);
++  font_stale_.Shrink(0);
++  last_font_ = nullptr;
++}
++
++// ---- The context's hooks (Canvas2DRecorderContext), kept here so the
++// context's own files carry only the calls.
++
++void Canvas2DRecorderContext::RecordDrawForAgent(
++    const gfx::RectF& bounds,
++    CanvasRenderingContext2DState::PaintType paint_type,
++    CanvasPerformanceMonitor::DrawType draw_type,
++    const SkIRect& clip_bounds) {
++  text_record_->OnDraw(*this, bounds, paint_type, draw_type, clip_bounds);
++}
++
++void Canvas2DRecorderContext::RecordTextForAgent(
++    const String& text,
++    unsigned start,
++    unsigned end,
++    const Font& font,
++    const SimpleFontData& font_data,
++    bool rtl,
++    bool bidi_override,
++    const gfx::PointF& location,
++    double width,
++    double font_width,
++    bool stroke) {
++  text_record_->PendText(*this, text, start, end, font, font_data, rtl,
++                         bidi_override, location, width, font_width, stroke);
++}
++
++void Canvas2DRecorderContext::RecordClearForAgent(const gfx::RectF& rect,
++                                                  const SkIRect& clip_bounds) {
++  text_record_->OnClear(*this, rect, clip_bounds);
++}
++
++void Canvas2DRecorderContext::RecordDeviceDrawForAgent(
++    const gfx::Rect& device_rect) {
++  text_record_->OnDeviceDraw(*this, device_rect);
++}
++
++void Canvas2DRecorderContext::RecordLayerEndForAgent(cc::PaintCanvas& canvas) {
++  text_record_->OnLayerEnd(*this, canvas);
++}
++
++void Canvas2DRecorderContext::TraceTextRecordForAgent(Visitor* visitor) const {
++  visitor->Trace(text_record_);
++}
++
++// The record's own memory, from its stores' capacities (strings by their
++// characters).
++uint64_t CanvasTextRecord::MemoryBytes() const {
++  uint64_t bytes = sizeof(*this);
++  bytes += uint64_t{log_.capacity()} * sizeof(Entry);
++  for (const Entry& entry : log_) {
++    bytes += uint64_t{entry.text.CharactersSizeInBytes()};
++  }
++  bytes += uint64_t{items_.capacity()} * sizeof(Item);
++  for (const Item& item : items_) {
++    bytes += uint64_t{item.text.CharactersSizeInBytes()} +
++             uint64_t{item.positions.capacity()} * sizeof(float);
++  }
++  bytes += uint64_t{cells_.capacity()} * sizeof(Vector<CellEntry>) +
++           uint64_t{cell_gen_.capacity()} * sizeof(uint32_t);
++  for (const Vector<CellEntry>& cell : cells_) {
++    bytes += uint64_t{cell.capacity()} * sizeof(CellEntry);
++  }
++  bytes += uint64_t{large_.capacity()} * sizeof(CellEntry);
++  bytes += uint64_t{same_.Capacity()} * (sizeof(uint64_t) + sizeof(uint32_t));
++  bytes += uint64_t{marks_.capacity()} * sizeof(Mark);
++  bytes += uint64_t{fonts_.capacity()} * sizeof(Member<const Font>) +
++           uint64_t{font_uses_.capacity()} * sizeof(uint32_t) +
++           uint64_t{font_css_.capacity()} * sizeof(String) +
++           uint64_t{free_fonts_.capacity()} * sizeof(uint32_t);
++  return bytes;
++}
++
++// ---- The replay.
++
++void CanvasTextRecord::EmptyShown() {
++  for (const Item& item : items_) {
++    if (item.alive && !item.fill) {
++      --font_uses_[item.font];
++    }
++  }
++  items_.Shrink(0);
++  runs_alive_ = 0;
++  fills_alive_ = 0;
++  chars_alive_ = 0;
++  large_alive_ = 0;
++  runs_head_ = 0;
++  fills_head_ = 0;
++  dead_items_ = 0;
++  // Every cell empty at once: each is emptied when next used.
++  ++grid_gen_;
++  large_.Shrink(0);
++  live_entries_ = 0;
++  dead_entries_ = 0;
++  same_.clear();
++  marks_.Shrink(0);
++}
++
++Vector<CanvasTextRecord::CellEntry>& CanvasTextRecord::CellAt(int row,
++                                                              int col) {
++  const wtf_size_t index = row * cols_ + col;
++  if (cell_gen_[index] != grid_gen_) {
++    cells_[index].Shrink(0);
++    cell_gen_[index] = grid_gen_;
++  }
++  return cells_[index];
++}
++
++void CanvasTextRecord::Compact(const gfx::Size& canvas_size) {
++  canvas_size_ = canvas_size;
++  if (cols_ == 0) {
++    // The grid's width is the canvas's, fixed until Clear() (a resize goes
++    // through it).
++    cols_ = std::clamp(
++        static_cast<int>(std::ceil(canvas_size.width() / kCellWidth)), 1,
++        kMaxCols);
++  }
++  for (Entry& entry : log_) {
++    Apply(entry);
++    MaybeSqueeze();
++  }
++  // The record at its fullest: the log, and the set before the next squeeze.
++  peak_bytes_ = std::max(peak_bytes_, MemoryBytes());
++  log_.Shrink(0);
++  // The fonts no showing run and no logged draw uses any more go.
++  for (wtf_size_t i = 0; i < fonts_.size(); ++i) {
++    if (fonts_[i] && font_uses_[i] == 0) {
++      fonts_[i] = nullptr;
++      font_css_[i] = String();
++      free_fonts_.push_back(i);
++      if (last_font_index_ == i) {
++        last_font_ = nullptr;
++      }
++    }
++  }
++}
++
++void CanvasTextRecord::Apply(Entry& entry) {
++  const SkBlendMode mode = static_cast<SkBlendMode>(entry.composite);
++  const gfx::RectF clip = ClipRect(entry.clip);
++  // Under copy, a draw first clears its whole clip, whatever it draws.
++  if (mode == SkBlendMode::kSrc &&
++      (entry.kind == Kind::kText || entry.kind == Kind::kFill ||
++       entry.kind == Kind::kOther)) {
++    if (entry.clip_exact) {
++      Cover(clip);
++    } else {
++      NotFollowed(clip, /*fills=*/true);
++    }
++  }
++  const bool followed =
++      (mode == SkBlendMode::kSrcOver || mode == SkBlendMode::kSrc) &&
++      !entry.shadow_or_filter;
++  // Where an operation not followed may have changed pixels.
++  const auto touched = [&](const gfx::RectF& device_bounds) {
++    if (IsFullClipMode(mode) || entry.shadow_or_filter) {
++      return clip;
++    }
++    gfx::RectF area = device_bounds;
++    area.Outset(1);  // antialiasing
++    area.Intersect(clip);
++    return area;
++  };
++  const auto quad_of = [&](const gfx::RectF& rect) {
++    return gfx::QuadF(Map(entry.m, rect.x(), rect.y()),
++                      Map(entry.m, rect.right(), rect.y()),
++                      Map(entry.m, rect.right(), rect.bottom()),
++                      Map(entry.m, rect.x(), rect.bottom()));
++  };
++  switch (entry.kind) {
++    case Kind::kText: {
++      if (!followed) {
++        NotFollowed(touched(quad_of(gfx::RectF(entry.x, entry.y - entry.ascent,
++                                               entry.width,
++                                               entry.ascent + entry.descent))
++                                .BoundingBox()),
++                    /*fills=*/true);
++        --font_uses_[entry.font];
++        return;
++      }
++      AddRun(entry);
++      return;
++    }
++    case Kind::kFill: {
++      const gfx::QuadF quad = quad_of(entry.rect);
++      if (!followed) {
++        NotFollowed(touched(quad.BoundingBox()), /*fills=*/true);
++        return;
++      }
++      const bool opaque = entry.style == Style::kColor &&
++                          entry.color.IsOpaque() && entry.alpha >= 1;
++      if (opaque) {
++        gfx::RectF area = quad.BoundingBox();
++        if (entry.clip_exact && AxisAligned(entry.m)) {
++          area.Intersect(clip);
++          Cover(area);
++        } else {
++          NotFollowed(touched(area), /*fills=*/true);
++        }
++      } else if (entry.style != Style::kColor) {
++        // A gradient or a pattern may hide the text under it: the runs it
++        // crosses are not followed (a fill under it stays as it is).
++        NotFollowed(touched(quad.BoundingBox()), /*fills=*/false);
++      }
++      AddFill(entry, quad);
++      return;
++    }
++    case Kind::kClear: {
++      gfx::RectF area = quad_of(entry.rect).BoundingBox();
++      if (entry.clip_exact && AxisAligned(entry.m)) {
++        area.Intersect(clip);
++        Cover(area);
++      } else {
++        area.Outset(1);
++        area.Intersect(clip);
++        NotFollowed(area, /*fills=*/true);
++      }
++      return;
++    }
++    case Kind::kOther: {
++      const gfx::RectF bounds = quad_of(entry.rect).BoundingBox();
++      if (entry.line && mode == SkBlendMode::kSrcOver &&
++          !entry.shadow_or_filter && AxisAligned(entry.m)) {
++        // A line drawn plainly touches the whole pixels its stroke lies in,
++        // no more; and it leaves fills as they are.
++        gfx::RectF area(gfx::ToEnclosingRect(bounds));
++        area.Intersect(clip);
++        NotFollowed(area, /*fills=*/false);
++      } else {
++        NotFollowed(touched(bounds), /*fills=*/true);
++      }
++      return;
++    }
++    case Kind::kDevice: {
++      gfx::RectF area = entry.rect;
++      area.Intersect(clip);
++      NotFollowed(area, /*fills=*/true);
++      return;
++    }
++  }
++}
++
++template <typename Visit>
++void CanvasTextRecord::ForEachIn(const gfx::RectF& area, const Visit& visit) {
++  const float left = area.x();
++  const float top = area.y();
++  const float right = area.right();
++  const float bottom = area.bottom();
++  const auto meets = [&](float l, float t, float r, float b) {
++    return r >= left && l <= right && b >= top && t <= bottom;
++  };
++  // The large items, the dead dropped first wherever they lie: the list
++  // holds at most kMaxLarge live entries and those that died since the last
++  // operation.
++  {
++    wtf_size_t kept = 0;
++    for (wtf_size_t i = 0; i < large_.size(); ++i) {
++      const CellEntry entry = large_[i];
++      Item& item = items_[entry.index];
++      if (!item.alive) {
++        --dead_entries_;
++        continue;  // dropped
++      }
++      large_[kept++] = entry;
++      if (meets(entry.left, entry.top, entry.right, entry.bottom) &&
++          item.stamp != stamp_) {
++        item.stamp = stamp_;
++        visit(entry.index);
++      }
++    }
++    large_.Shrink(kept);
++  }
++  if (rows_ == 0) {
++    return;
++  }
++  const int col_first = CellOf(left, kCellWidth, cols_);
++  const int col_last = CellOf(right, kCellWidth, cols_);
++  const int row_first = CellOf(top, kCellHeight, rows_);
++  const int row_last = CellOf(bottom, kCellHeight, rows_);
++  const int64_t cells =
++      int64_t{col_last - col_first + 1} * int64_t{row_last - row_first + 1};
++  if (cells > static_cast<int64_t>(items_.size())) {
++    // More cells than items (a cover of most of a large canvas): the small
++    // items themselves, so the work is the set's size, never the area's.
++    for (wtf_size_t i = 0; i < items_.size(); ++i) {
++      Item& item = items_[i];
++      if (!item.alive || !item.cells) {
++        continue;  // dead, or large (seen above)
++      }
++      const gfx::RectF& box = item.box;
++      if (meets(box.x(), box.y(), box.right(), box.bottom()) &&
++          item.stamp != stamp_) {
++        item.stamp = stamp_;
++        visit(i);
++      }
++    }
++    return;
++  }
++  // Kept entries move down over the dead ones met: a dead one is scanned at
++  // most once more.
++  const auto scan = [&](Vector<CellEntry>& entries) {
++    wtf_size_t kept = 0;
++    for (wtf_size_t i = 0; i < entries.size(); ++i) {
++      const CellEntry entry = entries[i];
++      if (meets(entry.left, entry.top, entry.right, entry.bottom)) {
++        Item& item = items_[entry.index];
++        if (!item.alive) {
++          --dead_entries_;
++          continue;  // dropped
++        }
++        if (item.stamp != stamp_) {
++          item.stamp = stamp_;
++          visit(entry.index);
++        }
++      }
++      entries[kept++] = entry;
++    }
++    entries.Shrink(kept);
++  };
++  for (int row = row_first; row <= row_last; ++row) {
++    for (int col = col_first; col <= col_last; ++col) {
++      scan(CellAt(row, col));
++    }
++  }
++}
++
++template <typename Visit>
++void CanvasTextRecord::ForEachSame(bool fill,
++                                   const gfx::PointF& at,
++                                   const Visit& visit) {
++  // Every point within kSame of `at` lies in one of four unit squares.
++  const float x0 = std::floor(at.x() - kSame);
++  const float y0 = std::floor(at.y() - kSame);
++  for (int dx = 0; dx < 2; ++dx) {
++    for (int dy = 0; dy < 2; ++dy) {
++      auto it = same_.find(SameKey(fill, x0 + dx, y0 + dy));
++      if (it == same_.end()) {
++        continue;
++      }
++      // Walk its chain, unlinking the dead.
++      uint32_t previous = 0;
++      uint32_t current = it->value;
++      while (current) {
++        Item& item = items_[current - 1];
++        const uint32_t next = item.next_same;
++        if (!item.alive) {
++          if (previous) {
++            items_[previous - 1].next_same = next;
++          } else {
++            it->value = next;
++          }
++          current = next;
++          continue;
++        }
++        visit(current - 1);
++        previous = current;
++        current = next;
++      }
++    }
++  }
++}
++
++void CanvasTextRecord::Index(uint32_t index) {
++  Item& item = items_[index];
++  const gfx::RectF& box = item.box;
++  const CellEntry entry{index, box.x(), box.y(), box.right(), box.bottom()};
++  const int col_first = CellOf(box.x(), kCellWidth, cols_);
++  const int col_last = CellOf(box.right(), kCellWidth, cols_);
++  const int row_first = CellOf(box.y(), kCellHeight, kMaxRows);
++  const int row_last = CellOf(box.bottom(), kCellHeight, kMaxRows);
++  const int count = (col_last - col_first + 1) * (row_last - row_first + 1);
++  if (count > kMaxItemCells) {
++    // Large: one entry in the short list, scanned by every operation.
++    large_.push_back(entry);
++    item.cells = 0;
++    ++large_alive_;
++    ++live_entries_;
++  } else {
++    if (row_last >= rows_) {
++      rows_ = row_last + 1;
++      cells_.resize(rows_ * cols_);
++      cell_gen_.resize(rows_ * cols_);  // generation 0: empty
++    }
++    for (int row = row_first; row <= row_last; ++row) {
++      for (int col = col_first; col <= col_last; ++col) {
++        CellAt(row, col).push_back(entry);
++      }
++    }
++    item.cells = static_cast<uint16_t>(count);
++    live_entries_ += count;
++  }
++  // The same-again index.
++  const gfx::PointF& at = item.fill ? item.quad.p1() : item.start;
++  const uint64_t key = SameKey(item.fill, at.x(), at.y());
++  auto result = same_.insert(key, index + 1);
++  if (!result.is_new_entry) {
++    item.next_same = result.stored_value->value;
++    result.stored_value->value = index + 1;
++  } else {
++    item.next_same = 0;
++  }
++}
++
++void CanvasTextRecord::Kill(uint32_t index) {
++  Item& item = items_[index];
++  if (!item.alive) {
++    return;
++  }
++  item.alive = false;
++  ++dead_items_;
++  const wtf_size_t entries = item.cells ? item.cells : 1;
++  live_entries_ -= entries;
++  dead_entries_ += entries;
++  if (!item.cells) {
++    --large_alive_;
++  }
++  if (item.fill) {
++    --fills_alive_;
++  } else {
++    --runs_alive_;
++    chars_alive_ -= item.text.length();
++    --font_uses_[item.font];
++    item.text = String();
++    item.positions.clear();
++  }
++}
++
++void CanvasTextRecord::KillOldest(bool fill) {
++  wtf_size_t& head = fill ? fills_head_ : runs_head_;
++  while (head < items_.size() &&
++         (!items_[head].alive || items_[head].fill != fill)) {
++    ++head;
++  }
++  if (head < items_.size()) {
++    Kill(head);
++  }
++}
++
++void CanvasTextRecord::Add(Item&& item) {
++  item.seq = next_seq_++;
++  const bool fill = item.fill;
++  const wtf_size_t length = item.text.length();
++  const uint32_t index = items_.size();
++  items_.push_back(std::move(item));
++  if (fill) {
++    ++fills_alive_;
++  } else {
++    ++runs_alive_;
++    chars_alive_ += length;
++  }
++  Index(index);
++  // Rule 7: past a cap, the oldest go.
++  while (runs_alive_ > kMaxRuns || chars_alive_ > kMaxChars) {
++    KillOldest(/*fill=*/false);
++    truncated_ = true;
++  }
++  while (fills_alive_ > kMaxFills) {
++    KillOldest(/*fill=*/true);
++    truncated_ = true;
++  }
++  if (large_alive_ > kMaxLarge) {
++    // The oldest large one goes.
++    uint32_t oldest = std::numeric_limits<uint32_t>::max();
++    uint32_t oldest_seq = std::numeric_limits<uint32_t>::max();
++    for (const CellEntry& entry : large_) {
++      const Item& large = items_[entry.index];
++      if (large.alive && large.seq < oldest_seq) {
++        oldest_seq = large.seq;
++        oldest = entry.index;
++      }
++    }
++    if (oldest != std::numeric_limits<uint32_t>::max()) {
++      Kill(oldest);
++      truncated_ = true;
++    }
++  }
++}
++
++void CanvasTextRecord::Cover(const gfx::RectF& area) {
++  if (area.IsEmpty()) {
++    return;
++  }
++  gfx::RectF slack = area;
++  slack.Outset(kSlack);
++  const gfx::RectF canvas_rect{gfx::SizeF(canvas_size_)};
++  if (slack.Contains(canvas_rect)) {
++    EmptyShown();
++    truncated_ = false;
++    return;
++  }
++  ++stamp_;
++  ForEachIn(area, [&](uint32_t index) {
++    Item& item = items_[index];
++    // What can show of it is what lies on the canvas: its central band's
++    // part there, or, with none of the band there, its box's.
++    bool inside;
++    if (item.rectilinear) {
++      gfx::RectF part;
++      if (!CutTo(item.band, canvas_rect, part) &&
++          !CutTo(item.box, canvas_rect, part)) {
++        return;  // nothing of it on the canvas: no cover changes it
++      }
++      inside = Within(part, slack);
++    } else {
++      inside = QuadInside(area, item.fill ? item.quad : CentralBand(item.quad));
++    }
++    if (inside) {
++      Kill(index);
++    } else if (Crosses(item.band, area) && item.inexact == Inexact::kNone) {
++      item.inexact = Inexact::kPartlyCovered;
++    }
++  });
++}
++
++void CanvasTextRecord::NotFollowed(const gfx::RectF& area, bool fills) {
++  if (area.IsEmpty()) {
++    return;
++  }
++  // A large area is one mark, judged at read time; a small one marks what it
++  // crosses now.
++  const int cols = CellOf(area.right(), kCellWidth, kMaxCols) -
++                   CellOf(area.x(), kCellWidth, kMaxCols) + 1;
++  const int rows = CellOf(area.bottom(), kCellHeight, kMaxRows) -
++                   CellOf(area.y(), kCellHeight, kMaxRows) + 1;
++  if (cols * rows > kMarkCells) {
++    if (!marks_.empty() && marks_.back().area == area &&
++        marks_.back().fills == fills) {
++      marks_.back().seq = next_seq_;  // the same again, later
++      return;
++    }
++    marks_.push_back(Mark{area, next_seq_, fills});
++    if (marks_.size() > kMaxMarks) {
++      // The two oldest as one: more is marked, never less.
++      Mark merged = marks_[0];
++      merged.area.Union(marks_[1].area);
++      merged.seq = std::max(marks_[0].seq, marks_[1].seq);
++      merged.fills = marks_[0].fills || marks_[1].fills;
++      marks_.EraseAt(0, 2);
++      marks_.push_front(merged);
++    }
++    return;
++  }
++  ++stamp_;
++  ForEachIn(area, [&](uint32_t index) {
++    Item& item = items_[index];
++    if (item.fill && !fills) {
++      return;
++    }
++    if (item.inexact == Inexact::kNone && Crosses(item.band, area)) {
++      item.inexact = Inexact::kNotFollowed;
++    }
++  });
++}
++
++CanvasTextRecord::Inexact CanvasTextRecord::MarkedInexact(
++    const Item& item) const {
++  for (const Mark& mark : marks_) {
++    if (mark.seq > item.seq && (!item.fill || mark.fills) &&
++        Crosses(item.band, mark.area)) {
++      return Inexact::kNotFollowed;
++    }
++  }
++  return Inexact::kNone;
++}
++
++void CanvasTextRecord::AddRun(Entry& entry) {
++  const float top = entry.y - entry.ascent;
++  const float bottom = entry.y + entry.descent;
++  const float left = entry.x;
++  const float right = entry.x + entry.width;
++  Item run;
++  run.quad =
++      gfx::QuadF(Map(entry.m, left, top), Map(entry.m, right, top),
++                 Map(entry.m, right, bottom), Map(entry.m, left, bottom));
++  run.box = run.quad.BoundingBox();
++  // Rule 1: a draw whose box misses the clip shows nothing. A run of no
++  // width (marks only) shows where its box lies inside the clip.
++  if (!Crosses(run.box, ClipRect(entry.clip))) {
++    --font_uses_[entry.font];
++    return;
++  }
++  run.band = CentralBand(run.quad).BoundingBox();
++  run.rectilinear = run.quad.IsRectilinear();
++  run.start = Map(entry.m, left, entry.y);
++  run.end = Map(entry.m, right, entry.y);
++
++  // Rule 2: the same text, font and style on the same device baseline
++  // replaces a showing run.
++  const FontDescription& description = fonts_[entry.font]->GetFontDescription();
++  ForEachSame(/*fill=*/false, run.start, [&](uint32_t index) {
++    Item& other = items_[index];
++    if (!Near(other.start, run.start) || !Near(other.end, run.end) ||
++        other.stroke != entry.stroke || other.style != entry.style ||
++        (entry.style == Style::kColor && other.color != entry.color)) {
++      return;
++    }
++    if (other.font != entry.font &&
++        fonts_[other.font]->GetFontDescription() != description) {
++      return;
++    }
++    if (other.text != entry.text) {
++      return;
++    }
++    Kill(index);
++  });
++
++  run.text = std::move(entry.text);
++  run.font = entry.font;  // its use moves to the run
++  run.style = entry.style;
++  run.color = entry.color;
++  run.alpha = entry.alpha;
++  run.stroke = entry.stroke;
++  run.width = entry.width;
++  run.font_width = entry.font_width;
++  run.rtl = entry.rtl;
++  run.bidi_override = entry.bidi_override;
++  Add(std::move(run));
++}
++
++void CanvasTextRecord::AddFill(const Entry& entry, const gfx::QuadF& quad) {
++  Item fill;
++  fill.fill = true;
++  fill.quad = quad;
++  fill.box = quad.BoundingBox();
++  if (!Crosses(fill.box, ClipRect(entry.clip)) || fill.box.IsEmpty()) {
++    return;  // rule 1
++  }
++  fill.band = fill.box;  // an operation not followed need only meet it
++  fill.rectilinear = quad.IsRectilinear();
++  fill.style = entry.style;
++  fill.color = entry.color;
++  fill.alpha = entry.alpha;
++  // Rule 2 for fills: the same device quad, colour and alpha.
++  ForEachSame(/*fill=*/true, quad.p1(), [&](uint32_t index) {
++    Item& other = items_[index];
++    if (other.style == fill.style && other.alpha == fill.alpha &&
++        (fill.style != Style::kColor || other.color == fill.color) &&
++        Near(other.quad.p1(), quad.p1()) && Near(other.quad.p2(), quad.p2()) &&
++        Near(other.quad.p3(), quad.p3()) && Near(other.quad.p4(), quad.p4())) {
++      Kill(index);
++    }
++  });
++  Add(std::move(fill));
++}
++
++void CanvasTextRecord::MaybeSqueeze() {
++  if (dead_entries_ > live_entries_ + kDeadSlack ||
++      dead_items_ > runs_alive_ + fills_alive_ + kDeadSlack) {
++    Squeeze();
++  }
++}
++
++// Drops the dead items and index entries, rebuilds the index, and drops the
++// marks nothing showing is older than.
++void CanvasTextRecord::Squeeze() {
++  wtf_size_t kept = 0;
++  for (wtf_size_t i = 0; i < items_.size(); ++i) {
++    if (items_[i].alive) {
++      if (kept != i) {
++        items_[kept] = std::move(items_[i]);
++      }
++      ++kept;
++    }
++  }
++  items_.Shrink(kept);
++  runs_head_ = 0;
++  fills_head_ = 0;
++  dead_items_ = 0;
++  ++grid_gen_;
++  large_.Shrink(0);
++  live_entries_ = 0;
++  dead_entries_ = 0;
++  large_alive_ = 0;
++  same_.clear();
++  uint32_t oldest = next_seq_;
++  for (wtf_size_t i = 0; i < items_.size(); ++i) {
++    oldest = std::min(oldest, items_[i].seq);
++    Index(i);
++  }
++  wtf_size_t marks_kept = 0;
++  for (const Mark& mark : marks_) {
++    if (mark.seq > oldest) {
++      marks_[marks_kept++] = mark;
++    }
++  }
++  marks_.Shrink(marks_kept);
++}
++
++// ---- Read time.
++
++// The caret positions of the run's boundaries, from its left end, from the
++// shaping the draw used (the items' ShapeResults, as TextMetrics takes them),
++// with the font as the draw had it. Never starts a font load, and never
++// makes, refreshes or revalidates a fallback list the page's fonts share, nor
++// determines its primary font (FontFallbackList's primary-font lookup begins
++// a load unguarded): the page's font is used only when a text draw used it
++// since the last font invalidation (so its list is that draw's, whose primary
++// font the draw determined) and its list holds no web font not loaded (a
++// loading fallback). Any other run -- its font's lists invalidated since its
++// last draw (a web font came, went or loaded), or holding a web font not
++// loaded -- is shaped with its system fonts only: the same glyphs when the
++// run used no web font, which its width then shows; otherwise the run says
++// the font changed.
++void CanvasTextRecord::Shape(Item& run,
++                             PlainTextPainter& painter,
++                             HeapVector<Member<const Font>>& system_fonts) {
++  if (run.cached) {
++    return;
++  }
++  const unsigned length = run.text.length();
++  run.positions.resize(length + 1);
++  const Font* font = fonts_[run.font].Get();
++  if (!font) {
++    for (unsigned k = 0; k <= length; ++k) {
++      const float at = length ? run.font_width * k / length : 0;
++      run.positions[k] = run.rtl ? run.font_width - at : at;
++    }
++    run.shaped_width = -1;  // not shaped
++    run.bidi = false;
++    return;  // not cached: a later read may shape it
++  }
++  // The page's font when its list is still the one its last draw used (with
++  // the primary font that draw determined) and holds no loading fallback. A
++  // valid list is its description's entry in its selector's map, so Get()
++  // finds the font's own list and creates nothing.
++  bool system_only = true;
++  if (!font_stale_[run.font] && font->IsFallbackValid()) {
++    if (FontSelector* selector = font->GetFontSelector()) {
++      system_only = selector->GetFontFallbackMap()
++                        .Get(font->GetFontDescription())
++                        ->HasLoadingFallback();
++    }
++  }
++  if (system_only) {
++    // No selector: the list comes from the font cache's own map, which holds
++    // system fonts only and is not the page's. One per font slot and read.
++    if (system_fonts.size() <= run.font) {
++      system_fonts.resize(fonts_.size());
++    }
++    if (!system_fonts[run.font]) {
++      system_fonts[run.font] =
++          MakeGarbageCollected<Font>(font->GetFontDescription());
++    }
++    font = system_fonts[run.font].Get();
++  }
++  ScopedNoFontLoads no_font_loads;
++  const TextDirection direction =
++      run.rtl ? TextDirection::kRtl : TextDirection::kLtr;
++  const PlainTextNode& node = painter.SegmentAndShape(
++      TextRun(run.text, direction, run.bidi_override), *font);
++  Vector<bool> placed(length + 1, false);
++  float x = 0;
++  bool ltr_items = false;
++  bool rtl_items = false;
++  for (const PlainTextItem& item : node.ItemList()) {
++    const ShapeResult* result = item.GetShapeResult();
++    if (!result) {
++      continue;
++    }
++    (item.Direction() == TextDirection::kRtl ? rtl_items : ltr_items) = true;
++    const unsigned from = std::min<unsigned>(item.StartOffset(), length);
++    const unsigned to = std::min<unsigned>(item.EndOffset(), length);
++    for (unsigned i = from; i <= to; ++i) {
++      // At a boundary between two items, the first in visual order's, as
++      // TextMetrics' first rect for that offset.
++      if (placed[i]) {
++        continue;
++      }
++      placed[i] = true;
++      run.positions[i] =
++          result->CaretPositionForOffset(i - item.StartOffset(), item.Text(),
++                                         AdjustMidCluster::kToStart) +
++          x;
++    }
++    x += result->Width();
++  }
++  run.shaped_width = x;
++  run.bidi = ltr_items && rtl_items;
++  for (unsigned k = 0; k <= length; ++k) {
++    if (!placed[k]) {
++      run.positions[k] = k > 0 ? run.positions[k - 1] : (run.rtl ? x : 0);
++    }
++  }
++  // Shaped with system fonts only, it is kept only when it came out as wide
++  // as the draw (it used no web font); else a later read, with the page's
++  // list valid again, may do better.
++  run.cached = !system_only || std::abs(x - run.font_width) <=
++                                   std::max(0.01f, 1e-4f * run.font_width);
++}
++
++void CanvasTextRecord::Read(const gfx::Size& canvas_size,
++                            PlainTextPainter& painter,
++                            wtf_size_t max_runs,
++                            wtf_size_t max_chars,
++                            wtf_size_t max_fills,
++                            base::FunctionRef<bool(const gfx::QuadF&)> keep,
++                            Reading& out) {
++  Compact(canvas_size);
++  out.truncated = truncated_;
++  // The runs answered: the newest the caller keeps, within its caps.
++  Vector<uint32_t> chosen;
++  wtf_size_t chars = 0;
++  for (wtf_size_t i = items_.size(); i > 0; --i) {
++    const Item& item = items_[i - 1];
++    if (!item.alive || item.fill || !keep(item.quad)) {
++      continue;
++    }
++    if (chosen.size() >= max_runs || chars + item.text.length() > max_chars) {
++      ++out.runs_left;
++      continue;
++    }
++    chosen.push_back(i - 1);
++    chars += item.text.length();
++  }
++  out.chars = chars;
++  out.memory_bytes = MemoryBytes();
++  out.peak_bytes = std::max(peak_bytes_, out.memory_bytes);
++  out.runs.ReserveInitialCapacity(chosen.size());
++  HeapVector<Member<const Font>> system_fonts;
++  for (wtf_size_t c = chosen.size(); c > 0; --c) {
++    Item& run = items_[chosen[c - 1]];
++    Shape(run, painter, system_fonts);
++    RunReading reading;
++    reading.text = run.text;
++    if (font_css_[run.font].IsNull()) {
++      font_css_[run.font] = FontCss(fonts_[run.font]->GetFontDescription());
++    }
++    reading.font = font_css_[run.font];
++    reading.color = run.style == Style::kColor
++                        ? run.color.SerializeAsCanvasColor()
++                    : run.style == Style::kGradient ? String("gradient")
++                                                    : String("pattern");
++    reading.alpha = run.alpha;
++    reading.stroke = run.stroke;
++    reading.rtl = run.rtl;
++    reading.bidi = run.bidi;
++    reading.start = run.start;
++    reading.end = run.end;
++    reading.quad = run.quad;
++    reading.width = run.width;
++    // The advances, in the run's units, so that the last boundary is at its
++    // width and every point stays in its box: shaped as drawn, the caret
++    // positions times the maxWidth squeeze, as the draw scales; shaped
++    // otherwise now (fontChanged), the current shaping scaled to the run's
++    // width; nothing shaped, spread evenly over it.
++    const bool font_changed =
++        run.shaped_width < 0 || std::abs(run.shaped_width - run.font_width) >
++                                    std::max(0.01f, 1e-4f * run.font_width);
++    const unsigned length = run.text.length();
++    reading.advances.ReserveInitialCapacity(run.positions.size());
++    if (!font_changed || run.shaped_width < 0 || run.shaped_width > 0) {
++      // Not shaped: the positions are already spread over font_width.
++      const double from = font_changed && run.shaped_width > 0
++                              ? run.shaped_width
++                              : run.font_width;
++      const double scale = from > 0 ? run.width / from : 1;
++      for (float p : run.positions) {
++        reading.advances.push_back(p * scale);
++      }
++    } else {
++      for (unsigned k = 0; k <= length; ++k) {
++        const double at = length ? run.width * k / length : 0;
++        reading.advances.push_back(run.rtl ? run.width - at : at);
++      }
++    }
++    reading.inexact =
++        run.inexact != Inexact::kNone ? run.inexact : MarkedInexact(run);
++    if (reading.inexact == Inexact::kNone && font_changed) {
++      reading.inexact = Inexact::kFontChanged;  // a font came or went since
++    }
++    if (!run.cached) {
++      run.positions.clear();
++    }
++    out.runs.push_back(std::move(reading));
++  }
++  // The fills answered: the newest the caller keeps, within its cap.
++  chosen.clear();
++  for (wtf_size_t i = items_.size(); i > 0; --i) {
++    const Item& item = items_[i - 1];
++    if (!item.alive || !item.fill || !keep(item.quad)) {
++      continue;
++    }
++    if (chosen.size() >= max_fills) {
++      ++out.fills_left;
++      continue;
++    }
++    chosen.push_back(i - 1);
++  }
++  out.fills.ReserveInitialCapacity(chosen.size());
++  for (wtf_size_t c = chosen.size(); c > 0; --c) {
++    const Item& fill = items_[chosen[c - 1]];
++    FillReading reading;
++    reading.quad = fill.quad;
++    reading.color = fill.style == Style::kColor
++                        ? fill.color.SerializeAsCanvasColor()
++                    : fill.style == Style::kGradient ? String("gradient")
++                                                     : String("pattern");
++    reading.alpha = fill.alpha;
++    reading.inexact =
++        fill.inexact != Inexact::kNone ? fill.inexact : MarkedInexact(fill);
++    out.fills.push_back(std::move(reading));
++  }
++}
++
++}  // namespace blink
+diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h
+new file mode 100644
+index 0000000000..678cb32667
+--- /dev/null
++++ b/third_party/blink/renderer/modules/canvas/canvas2d/canvas_text_record.h
+@@ -0,0 +1,369 @@
++// Copyright 2026 The browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_CANVAS_TEXT_RECORD_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_CANVAS_TEXT_RECORD_H_
++
++#include <cstdint>
++
++#include "base/functional/function_ref.h"
++#include "third_party/blink/renderer/core/html/canvas/canvas_performance_monitor.h"
++#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d_state.h"
++#include "third_party/blink/renderer/modules/modules_export.h"
++#include "third_party/blink/renderer/platform/fonts/font_selector_client.h"
++#include "third_party/blink/renderer/platform/graphics/color.h"
++#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
++#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
++#include "third_party/blink/renderer/platform/heap/member.h"
++#include "third_party/blink/renderer/platform/wtf/hash_map.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++#include "third_party/blink/renderer/platform/wtf/vector.h"
++#include "third_party/skia/include/core/SkRect.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/quad_f.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/size.h"
++
++namespace cc {
++class PaintCanvas;
++}  // namespace cc
++
++namespace blink {
++
++class Canvas2DRecorderContext;
++class Font;
++class PlainTextPainter;
++class SimpleFontData;
++
++// browser: the text and fills an HTML <canvas> element's 2D context still
++// shows, for Page.agentCanvasText. Off unless the browser runs with
++// --enable-canvas-text-record.
++//
++// At draw time a call appends one plain entry to the log -- what the draw had
++// in hand: the text, the font it used, the style's colour, globalAlpha, the
++// composite mode, the transform, the device clip bounds and whether the clip
++// is an exact device rectangle -- and resolves nothing. What still shows is
++// resolved by replaying the log in order onto the set of showing runs and
++// fills (Compact), when the log reaches kCompactAt entries and when it is read.
++//
++// Bounded work and memory: a showing item is indexed in at most kMaxItemCells
++// cells of a grid of device space, or else in a short list of large items
++// (at most kMaxLarge alive); an operation not followed whose area spans more
++// than kMarkCells cells is kept as one mark, judged at read time, instead of
++// visiting what it covers; a cover of the whole canvas empties the set at
++// once; an area spanning more cells than the set has items walks the items,
++// not the cells; the large list drops its dead at every operation, and dead
++// cell entries are dropped by a squeeze inside the replay once they
++// outnumber the live ones; "the same again" is found by a hash of the
++// quantised device start point. Left: one cell may hold many small items
++// (up to the caps), each operation on it scanning them all.
++//
++// Only contexts of an HTMLCanvasElement own one: an OffscreenCanvas's and the
++// paint worklet's contexts keep a null record and record nothing. Everything
++// runs on the context's own (main) thread. Nothing here is reachable from
++// script; the log is off the Oilpan heap except one reference per font that a
++// showing run or a logged draw uses, released once none does.
++class MODULES_EXPORT CanvasTextRecord final
++    : public GarbageCollected<CanvasTextRecord>,
++      public FontSelectorClient {
++ public:
++  // Whether a new context records: true under --enable-canvas-text-record.
++  // Read once per process.
++  static bool Enabled();
++
++  CanvasTextRecord();
++  CanvasTextRecord(const CanvasTextRecord&) = delete;
++  CanvasTextRecord& operator=(const CanvasTextRecord&) = delete;
++  ~CanvasTextRecord();
++
++  // ---- Draw time.
++
++  // fillText, strokeText and the cluster draws, before their Draw<>: what the
++  // draw has in hand, kept until that Draw<> hands OnDraw its clip (a draw
++  // that does nothing never gets there). `location` is the run's left end on
++  // the alphabetic baseline, in the text's own coordinates; `width` its
++  // advance after the maxWidth squeeze, `font_width` before it.
++  void PendText(Canvas2DRecorderContext& context,
++                const String& text,
++                unsigned start,
++                unsigned end,
++                const Font& font,
++                const SimpleFontData& font_data,
++                bool rtl,
++                bool bidi_override,
++                const gfx::PointF& location,
++                double width,
++                double font_width,
++                bool stroke);
++  // Every draw through Canvas2DRecorderContext::Draw, after its own checks:
++  // text takes the pending text; fillRect is followed; everything else is an
++  // operation the record does not follow, with its local bounds.
++  void OnDraw(Canvas2DRecorderContext& context,
++              const gfx::RectF& bounds,
++              CanvasRenderingContext2DState::PaintType paint_type,
++              CanvasPerformanceMonitor::DrawType draw_type,
++              const SkIRect& clip_bounds);
++  void OnClear(Canvas2DRecorderContext& context,
++               const gfx::RectF& rect,
++               const SkIRect& clip_bounds);
++  // Pixels changed outside the transform and the clip, in device pixels: a
++  // putImageData, a focus ring.
++  void OnDeviceDraw(Canvas2DRecorderContext& context,
++                    const gfx::Rect& device_rect);
++  // The outermost endLayer, with the canvas the layer was drawn into.
++  void OnLayerEnd(Canvas2DRecorderContext& context, cc::PaintCanvas& canvas);
++  // reset(), a resize and a lost context.
++  void Clear();
++
++  // ---- Read time.
++  enum class Inexact : uint8_t {
++    kNone,
++    kPartlyCovered,
++    kNotFollowed,
++    kFontChanged,
++  };
++  struct RunReading {
++    String text;
++    String font;
++    String color;
++    double alpha = 1;
++    bool stroke = false;
++    bool rtl = false;
++    bool bidi = false;
++    // In canvas pixels (the transform applied): the left and right ends of
++    // the baseline and the run's box (left-top, right-top, right-bottom,
++    // left-bottom).
++    gfx::PointF start;
++    gfx::PointF end;
++    gfx::QuadF quad;
++    // In the text's own units.
++    double width = 0;
++    Vector<double> advances;
++    Inexact inexact = Inexact::kNone;
++  };
++  struct FillReading {
++    gfx::QuadF quad;  // canvas pixels
++    String color;
++    double alpha = 1;
++    Inexact inexact = Inexact::kNone;
++  };
++  struct Reading {
++    Vector<RunReading> runs;
++    Vector<FillReading> fills;
++    bool truncated = false;
++    // Runs and fills still showing and kept by the caller's filter, left out
++    // past its caps (the oldest go first).
++    wtf_size_t runs_left = 0;
++    wtf_size_t fills_left = 0;
++    wtf_size_t chars = 0;
++    // The record's own memory, estimated from its stores' capacities, now
++    // and at its highest (measured at the end of each compaction).
++    uint64_t memory_bytes = 0;
++    uint64_t peak_bytes = 0;
++  };
++  // What still shows, oldest first: the runs and fills `keep` accepts (given
++  // each one's quad in canvas pixels), at most `max_runs` runs of
++  // `max_chars` UTF-16 units in all and `max_fills` fills, the newest kept.
++  // Only the runs answered are shaped, by the reader's own canvas-mode
++  // painter, never starting a font load.
++  void Read(const gfx::Size& canvas_size,
++            PlainTextPainter& painter,
++            wtf_size_t max_runs,
++            wtf_size_t max_chars,
++            wtf_size_t max_fills,
++            base::FunctionRef<bool(const gfx::QuadF&)> keep,
++            Reading& out);
++
++  // FontSelectorClient: a font came, went or loaded, and fallback lists may
++  // have been invalidated. Registered with the selector of each font a draw
++  // brings, which holds it weakly.
++  void FontsNeedUpdate(FontSelector*, FontInvalidationReason) override;
++
++  void Trace(Visitor*) const override;
++
++  // The showing set's caps, the log's compaction size, and the index's
++  // bounds.
++  static constexpr wtf_size_t kMaxRuns = 20000;
++  static constexpr wtf_size_t kMaxFills = 20000;
++  static constexpr wtf_size_t kMaxChars = 1000000;
++  static constexpr wtf_size_t kMaxRunChars = 4096;
++  static constexpr wtf_size_t kCompactAt = 2048;
++  static constexpr int kMaxItemCells = 16;
++  static constexpr wtf_size_t kMaxLarge = 256;
++  static constexpr int kMarkCells = 64;
++  static constexpr wtf_size_t kMaxMarks = 64;
++
++ private:
++  enum class Kind : uint8_t { kText, kFill, kClear, kOther, kDevice };
++  enum class Style : uint8_t { kColor, kGradient, kPattern };
++
++  // One call, as the draw had it in hand; the text fields for kText only.
++  struct Entry {
++    String text;  // the drawn part only
++    SkIRect clip;
++    float m[6];
++    // kFill, kClear, kOther: local; kDevice: device.
++    gfx::RectF rect;
++    Color color;
++    float alpha = 1;
++    float x = 0;  // kText: left end, alphabetic baseline, text space
++    float y = 0;
++    float width = 0;
++    float font_width = 0;
++    float ascent = 0;
++    float descent = 0;
++    uint32_t font = 0;  // in fonts_
++    Kind kind = Kind::kOther;
++    uint8_t composite = 0;  // SkBlendMode
++    Style style = Style::kColor;
++    bool clip_exact = false;
++    bool shadow_or_filter = false;
++    bool stroke = false;
++    // kOther: a straight stroke along an axis, at most 3 px wide (an
++    // underline, a squiggle, a rule): it can cross a run's central band, but
++    // cannot hide a fill.
++    bool line = false;
++    bool rtl = false;
++    bool bidi_override = false;
++  };
++
++  // A showing run or fill.
++  struct Item {
++    gfx::QuadF quad;    // device: a run's box, a fill's rect
++    gfx::RectF box;     // quad's bounds
++    gfx::RectF band;    // a run's central band's bounds; a fill's box
++    String text;        // runs
++    gfx::PointF start;  // runs: the device baseline's ends
++    gfx::PointF end;
++    Color color;
++    float alpha = 1;
++    float width = 0;
++    float font_width = 0;
++    // Read-time cache: caret positions before the squeeze, and the width
++    // shaped.
++    Vector<float> positions;
++    float shaped_width = 0;
++    uint32_t seq = 0;        // order of adding
++    uint32_t stamp = 0;      // the last scan that met it
++    uint32_t next_same = 0;  // the next in its hash chain, plus one
++    uint32_t font = 0;
++    uint16_t cells = 0;  // grid entries it holds; 0 for a large one
++    Inexact inexact = Inexact::kNone;
++    Style style = Style::kColor;
++    bool alive = true;
++    bool fill = false;
++    bool stroke = false;
++    bool rtl = false;
++    bool bidi_override = false;
++    bool rectilinear = true;
++    bool bidi = false;
++    bool cached = false;
++  };
++
++  // A grid cell's (or the large list's) reference to an item, with its box,
++  // so a scan reads the item only where the boxes meet.
++  struct CellEntry {
++    uint32_t index;
++    float left;
++    float top;
++    float right;
++    float bottom;
++  };
++
++  // An operation not followed over a large area: what was showing before it
++  // (seq below) and meets it is not followed. `fills`: it can hide fills too.
++  struct Mark {
++    gfx::RectF area;
++    uint32_t seq;
++    bool fills;
++  };
++
++  void Begin(Canvas2DRecorderContext& context, Entry& entry, Kind kind);
++  void Append(Canvas2DRecorderContext& context, Entry& entry);
++  bool SameAsLast(const Entry& entry) const;
++  uint32_t FontIndex(const Font& font);
++  void Compact(const gfx::Size& canvas_size);
++  void Apply(Entry& entry);
++  void Cover(const gfx::RectF& area);
++  void NotFollowed(const gfx::RectF& area, bool fills);
++  void AddRun(Entry& entry);
++  void AddFill(const Entry& entry, const gfx::QuadF& quad);
++  void Add(Item&& item);
++  void Index(uint32_t index);
++  template <typename Visit>
++  void ForEachIn(const gfx::RectF& area, const Visit& visit);
++  template <typename Visit>
++  void ForEachSame(bool fill, const gfx::PointF& at, const Visit& visit);
++  Vector<CellEntry>& CellAt(int row, int col);
++  void Kill(uint32_t index);
++  void KillOldest(bool fill);
++  void MaybeSqueeze();
++  void Squeeze();
++  void EmptyShown();
++  // `system_fonts`: the system-only fonts made during one read, by font slot.
++  void Shape(Item& run,
++             PlainTextPainter& painter,
++             HeapVector<Member<const Font>>& system_fonts);
++  Inexact MarkedInexact(const Item& item) const;
++  uint64_t MemoryBytes() const;
++  static gfx::PointF Map(const float m[6], float x, float y);
++  static uint64_t SameKey(bool fill, float x, float y);
++
++  // The raw log, and the text draw waiting for its Draw<> with its font.
++  Vector<Entry> log_;
++  Entry pending_;
++  Member<const Font> pending_font_;
++  bool has_pending_ = false;
++
++  // The showing set, oldest first.
++  Vector<Item> items_;
++  wtf_size_t runs_alive_ = 0;
++  wtf_size_t fills_alive_ = 0;
++  wtf_size_t chars_alive_ = 0;
++  wtf_size_t large_alive_ = 0;
++  wtf_size_t runs_head_ = 0;  // the oldest that may be alive
++  wtf_size_t fills_head_ = 0;
++  wtf_size_t dead_items_ = 0;
++  uint32_t next_seq_ = 1;
++  // The grid (rows_ by cols_, row-major); a cell whose generation is not
++  // grid_gen_ is empty. The large items' list. Live and dead entries in both.
++  Vector<Vector<CellEntry>> cells_;
++  Vector<uint32_t> cell_gen_;
++  uint32_t grid_gen_ = 1;
++  int cols_ = 0;
++  int rows_ = 0;
++  Vector<CellEntry> large_;
++  wtf_size_t live_entries_ = 0;
++  wtf_size_t dead_entries_ = 0;
++  // The same-again index: a quantised device start point to the head of its
++  // chain of items (an index plus one).
++  HashMap<uint64_t, uint32_t> same_;
++  Vector<Mark> marks_;
++  gfx::Size canvas_size_;
++  uint64_t peak_bytes_ = 0;
++  uint32_t stamp_ = 0;
++  bool truncated_ = false;
++  // Draws inside a layer since the outermost beginLayer.
++  bool drew_in_layer_ = false;
++  // The fonts showing runs and logged draws use (a slot is null once none
++  // does), how many use each, and each one's CSS string once written.
++  HeapVector<Member<const Font>> fonts_;
++  Vector<uint32_t> font_uses_;
++  Vector<String> font_css_;
++  Vector<uint32_t> free_fonts_;
++  // The last font asked for and its slot: compared only, and only while that
++  // slot holds it.
++  UntracedMember<const Font> last_font_;
++  uint32_t last_font_index_ = 0;
++  // Per slot: whether the font's list may have been invalidated (and since
++  // refreshed) after the last text draw with it. Clear: its list is the one
++  // that draw used, whose primary font that draw determined (the page's own
++  // lookup). Set by FontsNeedUpdate, cleared by a draw.
++  Vector<bool> font_stale_;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_CANVAS_CANVAS2D_CANVAS_TEXT_RECORD_H_
+diff --git a/third_party/blink/renderer/platform/fonts/font_fallback_iterator.cc b/third_party/blink/renderer/platform/fonts/font_fallback_iterator.cc
+index 6f615ce92e..16558ac3d0 100644
+--- a/third_party/blink/renderer/platform/fonts/font_fallback_iterator.cc
++++ b/third_party/blink/renderer/platform/fonts/font_fallback_iterator.cc
+@@ -14,6 +14,25 @@
+ 
+ namespace blink {
+ 
++// browser: ScopedNoFontLoads (Page.agentCanvasText's read-time shaping); the
++// header says what it covers.
++namespace {
++constinit thread_local int g_no_font_loads = 0;
++}  // namespace
++
++ScopedNoFontLoads::ScopedNoFontLoads() {
++  ++g_no_font_loads;
++}
++
++ScopedNoFontLoads::~ScopedNoFontLoads() {
++  --g_no_font_loads;
++}
++
++// static
++bool ScopedNoFontLoads::Active() {
++  return g_no_font_loads > 0;
++}
++
+ FontFallbackIterator::FontFallbackIterator(
+     const FontDescription& description,
+     FontFallbackList* fallback_list,
+@@ -66,6 +85,10 @@ void FontFallbackIterator::WillUseRange(const AtomicString& family,
+   FontSelector* selector = font_fallback_list_->GetFontSelector();
+   if (!selector)
+     return;
++  // browser: no load from a reader the page must not see.
++  if (ScopedNoFontLoads::Active()) {
++    return;
++  }
+ 
+   selector->WillUseRange(font_description_, family, range_set);
+ }
+@@ -216,8 +239,12 @@ FontDataForRangeSet* FontFallbackIterator::Next(const HintCharList& hint_list) {
+     const SimpleFontData* current_segmented_face_font_data =
+         current_segmented_face->FontData();
+     if (const CustomFontData* current_segmented_face_custom_font_data =
+-            current_segmented_face_font_data->GetCustomFontData())
++            current_segmented_face_font_data->GetCustomFontData();
++        current_segmented_face_custom_font_data &&
++        // browser: no load from a reader the page must not see.
++        !ScopedNoFontLoads::Active()) {
+       current_segmented_face_custom_font_data->BeginLoadIfNeeded();
++    }
+     if (!current_segmented_face_font_data->IsLoading())
+       return UniqueOrNext(current_segmented_face, hint_list);
+     tracked_loading_range_sets_.push_back(current_segmented_face);
+diff --git a/third_party/blink/renderer/platform/fonts/font_fallback_iterator.h b/third_party/blink/renderer/platform/fonts/font_fallback_iterator.h
+index 2d13729c74..4ef9140790 100644
+--- a/third_party/blink/renderer/platform/fonts/font_fallback_iterator.h
++++ b/third_party/blink/renderer/platform/fonts/font_fallback_iterator.h
+@@ -19,6 +19,25 @@ class FontDescription;
+ class FontFallbackList;
+ class SimpleFontData;
+ 
++// browser: while one lives on this thread, fallback iteration starts no font
++// load (no BeginLoadIfNeeded, no WillUseRange). A face still loading is
++// passed over, as a draw passes over it; one whose load has not begun comes
++// back as a candidate, with its loading-fallback data. FontFallbackList's
++// primary-font lookup is not covered: it begins a load unguarded. For readers
++// the page must not see, such as the canvas text record's read-time shaping
++// (Page.agentCanvasText), which shapes with a page's font only when a draw
++// determined that font's primary font on its current list.
++class PLATFORM_EXPORT ScopedNoFontLoads {
++  STACK_ALLOCATED();
++
++ public:
++  ScopedNoFontLoads();
++  ScopedNoFontLoads(const ScopedNoFontLoads&) = delete;
++  ScopedNoFontLoads& operator=(const ScopedNoFontLoads&) = delete;
++  ~ScopedNoFontLoads();
++  static bool Active();
++};
++
+ class PLATFORM_EXPORT FontFallbackIterator {
+   STACK_ALLOCATED();
+ 
+diff --git a/third_party/blink/renderer/platform/fonts/plain_text_painter.cc b/third_party/blink/renderer/platform/fonts/plain_text_painter.cc
+index e725fec696..b18933871e 100644
+--- a/third_party/blink/renderer/platform/fonts/plain_text_painter.cc
++++ b/third_party/blink/renderer/platform/fonts/plain_text_painter.cc
+@@ -68,9 +68,9 @@ PlainTextPainter& PlainTextPainter::Shared() {
+ 
+ const PlainTextNode& PlainTextPainter::SegmentAndShape(const TextRun& run,
+                                                        const Font& font) {
+-  // This function doesn't support DirectionOverride because there are no such
+-  // callers.
+-  DCHECK(!run.DirectionalOverride());
++  // browser: a directional override is taken as the draw takes it
++  // (PlainTextNode wraps the text and maps its items back): the canvas text
++  // record shapes an overridden run as it was drawn (Page.agentCanvasText).
+   return CreateNode(run, font);
+ }
+ 
+-- 
+2.45.1.windows.1
+

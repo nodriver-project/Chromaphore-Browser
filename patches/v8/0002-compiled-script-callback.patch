@@ -1,4 +1,4 @@
-From 3491c9f601e91e5c6556e8ad6037d1131ca27b99 Mon Sep 17 00:00:00 2001
+From 0bf3e4f1624c9c714955506e6150cd67eb3b2ff1 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
 Date: Sun, 1 Nov 2026 20:29:55 -0500
 Subject: [PATCH 3/3] compiled-script-callback
@@ -14,7 +14,7 @@ Isolate::SetCompiledScriptCallback: the embedder is told about every script the 
  6 files changed, 139 insertions(+)
 
 diff --git a/include/v8-callbacks.h b/include/v8-callbacks.h
-index efa9de29..f2253097 100644
+index bca245b6..7feb9ee4 100644
 --- a/include/v8-callbacks.h
 +++ b/include/v8-callbacks.h
 @@ -6,6 +6,7 @@
@@ -85,10 +85,10 @@ index efa9de29..f2253097 100644
  struct ModifyCodeGenerationFromStringsResult {
    // If true, proceed with the codegen algorithm. Otherwise, block it.
 diff --git a/include/v8-isolate.h b/include/v8-isolate.h
-index a352b5f0..6f9aba9f 100644
+index 544e7a46..187ec275 100644
 --- a/include/v8-isolate.h
 +++ b/include/v8-isolate.h
-@@ -1725,6 +1725,15 @@ class V8_EXPORT Isolate {
+@@ -1739,6 +1739,15 @@ class V8_EXPORT Isolate {
     */
    void AutomaticallyRestoreInitialHeapLimit(double threshold_percent = 0.5);
  
@@ -105,10 +105,10 @@ index a352b5f0..6f9aba9f 100644
     * Set the callback to invoke to check if code generation from
     * strings should be allowed.
 diff --git a/src/api/api.cc b/src/api/api.cc
-index 56867119..272900ac 100644
+index 5e9bbb96..eb8775a8 100644
 --- a/src/api/api.cc
 +++ b/src/api/api.cc
-@@ -11079,6 +11079,9 @@ CALLBACK_SETTER(IsJSApiWrapperNativeErrorCallback,
+@@ -11121,6 +11121,9 @@ CALLBACK_SETTER(IsJSApiWrapperNativeErrorCallback,
  CALLBACK_SETTER(ArrayBufferDetachCallback, ArrayBufferDetachCallback,
                  array_buffer_detach_callback)
  
@@ -119,10 +119,10 @@ index 56867119..272900ac 100644
    v8::HandleScope handle_scope(this);
    v8::Context::Scope context_scope(context);
 diff --git a/src/debug/debug.cc b/src/debug/debug.cc
-index def10a51..7d11b56b 100644
+index a84c6ec0..5d9284ae 100644
 --- a/src/debug/debug.cc
 +++ b/src/debug/debug.cc
-@@ -2829,6 +2829,72 @@ void Debug::OnAfterCompile(DirectHandle<Script> script) {
+@@ -2905,6 +2905,72 @@ void Debug::OnAfterCompile(DirectHandle<Script> script) {
    ProcessCompileEvent(false, script);
  }
  
@@ -195,7 +195,7 @@ index def10a51..7d11b56b 100644
  void Debug::ProcessCompileEvent(bool has_compile_error,
                                  DirectHandle<Script> script) {
    RCS_SCOPE(isolate_, RuntimeCallCounterId::kDebugger);
-@@ -2837,6 +2903,7 @@ void Debug::ProcessCompileEvent(bool has_compile_error,
+@@ -2913,6 +2979,7 @@ void Debug::ProcessCompileEvent(bool has_compile_error,
    // Attach the correct debug id to the script. The debug id is used by the
    // inspector to filter scripts by native context.
    script->set_context_data(isolate_->native_context()->debug_context_id());
@@ -204,10 +204,10 @@ index def10a51..7d11b56b 100644
    if (!script->IsSubjectToDebugging()) return;
    if (!debug_delegate_) return;
 diff --git a/src/debug/debug.h b/src/debug/debug.h
-index 4a093800..7d41241c 100644
+index cf2b8fc0..badcf043 100644
 --- a/src/debug/debug.h
 +++ b/src/debug/debug.h
-@@ -538,6 +538,12 @@ class V8_EXPORT_PRIVATE Debug {
+@@ -561,6 +561,12 @@ class V8_EXPORT_PRIVATE Debug {
  
    void ProcessCompileEvent(bool has_compile_error, DirectHandle<Script> script);
  
@@ -221,10 +221,10 @@ index 4a093800..7d41241c 100644
    int FindBreakablePosition(Handle<DebugInfo> debug_info, int source_position);
    // Instrument code to break at break points.
 diff --git a/src/execution/isolate.h b/src/execution/isolate.h
-index f8c0c95e..9dca6b38 100644
+index bb742ca9..e57d5237 100644
 --- a/src/execution/isolate.h
 +++ b/src/execution/isolate.h
-@@ -514,6 +514,7 @@ using DebugObjectCache = std::vector<Handle<HeapObject>>;
+@@ -518,6 +518,7 @@ using DebugObjectCache = std::vector<Handle<HeapObject>>;
      wasm_custom_descriptors_enabled_callback, nullptr)                      \
    V(IsJSApiWrapperNativeErrorCallback,                                      \
      is_js_api_wrapper_native_error_callback, nullptr)                       \

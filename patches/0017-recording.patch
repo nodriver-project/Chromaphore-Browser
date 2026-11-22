@@ -1,7 +1,7 @@
-From 074d9b9dbd860fa75bc3b372b426f06829f1b408 Mon Sep 17 00:00:00 2001
+From 78b924fbbdfe94de366c0005c8e6abbc1b7b3e51 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:57 -0500
-Subject: [PATCH 16/61] recording
+Date: Sun, 22 Nov 2026 13:07:31 -0500
+Subject: [PATCH 17/62] recording
 
 Browser.startRecording, stopRecording, recordingMask, recordingStatus and
 the recordingEnded event: a network-service TrafficRecorder that sees every
@@ -87,7 +87,7 @@ for a redacted video recording through them.
  create mode 100644 third_party/blink/renderer/bindings/core/v8/script_recorder.h
 
 diff --git a/chrome/browser/chrome_content_browser_client_receiver_bindings.cc b/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
-index a805557b73..f1be10e927 100644
+index aa6ff52009..c6033304ab 100644
 --- a/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
 +++ b/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
 @@ -15,6 +15,7 @@
@@ -95,18 +95,18 @@ index a805557b73..f1be10e927 100644
  #include "chrome/browser/chrome_content_browser_client_parts.h"
  #include "chrome/browser/content_settings/content_settings_manager_delegate.h"
 +#include "chrome/browser/devtools/protocol/recording_registry.h"
+ #include "chrome/browser/facilitated_payments/facilitated_payments_driver_binder.h"
  #include "chrome/browser/headless/headless_mode_util.h"
  #include "chrome/browser/net/net_error_tab_helper.h"
- #include "chrome/browser/net_benchmarking.h"
-@@ -59,6 +60,7 @@
+@@ -63,6 +64,7 @@
  #include "pdf/buildflags.h"
  #include "printing/buildflags/buildflags.h"
  #include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
 +#include "third_party/blink/public/mojom/script_recorder/script_recorder_host.mojom.h"
  #include "third_party/widevine/cdm/buildflags.h"
+ #include "ui/webui/buildflags.h"
  
- #if BUILDFLAG(IS_ANDROID)
-@@ -724,6 +726,15 @@ void ChromeContentBrowserClient::BindUtilityHostReceiver(
+@@ -745,6 +747,15 @@ void ChromeContentBrowserClient::BindUtilityHostReceiver(
  void ChromeContentBrowserClient::BindHostReceiverForRenderer(
      content::RenderProcessHost* render_process_host,
      mojo::GenericPendingReceiver receiver) {
@@ -3291,7 +3291,7 @@ index 0000000000..73d14737de
 +
 +#endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_RECORDING_SUMMARY_H_
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
-index f899f273b4..d64e01a32e 100644
+index ece69736c8..2a6f28bb41 100644
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
 @@ -317,6 +317,12 @@ size_t g_max_renderer_count_override = 0;
@@ -3307,7 +3307,7 @@ index f899f273b4..d64e01a32e 100644
  RendererMainThreadFactoryFunction g_renderer_main_thread_factory = nullptr;
  
  base::Thread* g_in_process_thread = nullptr;
-@@ -2054,6 +2060,11 @@ bool RenderProcessHostImpl::Init() {
+@@ -2075,6 +2081,11 @@ bool RenderProcessHostImpl::Init() {
        storage_partition_impl_->cors_exempt_header_list(),
        GetContentClient()->browser()->GetOriginTrialsSettings(), cpu_tier,
        trace_id);
@@ -3319,7 +3319,7 @@ index f899f273b4..d64e01a32e 100644
  
    if (run_renderer_in_process()) {
      CHECK(g_renderer_main_thread_factory, base::NotFatalUntil::M152);
-@@ -5249,6 +5260,22 @@ RenderProcessHost* RenderProcessHost::FromID(ChildProcessId render_process_id) {
+@@ -5299,6 +5310,22 @@ RenderProcessHost* RenderProcessHost::FromID(ChildProcessId render_process_id) {
    return GetAllHosts().Lookup(render_process_id);
  }
  
@@ -3454,10 +3454,10 @@ index e6ade45d19..96eb53e736 100644
    // corresponding bundled bytecode cache. This is called once after a
    // renderer's process lock has been set.
 diff --git a/content/public/browser/render_process_host.h b/content/public/browser/render_process_host.h
-index 5d39791a11..44b7b90e47 100644
+index 988a887561..d396b8570f 100644
 --- a/content/public/browser/render_process_host.h
 +++ b/content/public/browser/render_process_host.h
-@@ -889,6 +889,11 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
+@@ -877,6 +877,11 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
    // This forces a renderer that is running "in process" to shut down.
    static void ShutDownInProcessRenderer();
  
@@ -3470,10 +3470,10 @@ index 5d39791a11..44b7b90e47 100644
    // that each host may not be active, and therefore may have nullptr channels.
    static iterator AllHostsIterator();
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
-index fe688f282a..14d5e7dc27 100644
+index 67c135e961..3125e63aa8 100644
 --- a/content/renderer/render_thread_impl.cc
 +++ b/content/renderer/render_thread_impl.cc
-@@ -1338,6 +1338,16 @@ void RenderThreadImpl::SetIsIsolatedContext(bool value) {
+@@ -1345,6 +1345,16 @@ void RenderThreadImpl::SetIsIsolatedContext(bool value) {
    blink::SetIsIsolatedContext(value);
  }
  
@@ -3491,20 +3491,20 @@ index fe688f282a..14d5e7dc27 100644
      const base::flat_map<GURL, int>& resource_map) {
    blink_platform_impl_->set_webui_resource_to_code_cache_id_map(resource_map);
 diff --git a/content/renderer/render_thread_impl.h b/content/renderer/render_thread_impl.h
-index 09133870f6..84d14a92b2 100644
+index 09133870f6..e356f0954e 100644
 --- a/content/renderer/render_thread_impl.h
 +++ b/content/renderer/render_thread_impl.h
 @@ -426,6 +426,8 @@ class CONTENT_EXPORT RenderThreadImpl
  #endif
    void SetIsWebSecurityDisabled(bool value) override;
    void SetIsIsolatedContext(bool value) override;
-+  void SetScriptRecording(bool value) override;  // browser
++  void SetScriptRecording(bool value) override;          // browser
 +  void SetAgentRedaction(uint32_t generation) override;  // browser
    void SetWebUIResourceUrlToCodeCacheMap(
        const base::flat_map<GURL, int>& resource_map) override;
  
 diff --git a/services/network/BUILD.gn b/services/network/BUILD.gn
-index 3603695f3e..f40daa93a5 100644
+index ebc6e1788b..ae3752aa80 100644
 --- a/services/network/BUILD.gn
 +++ b/services/network/BUILD.gn
 @@ -243,6 +243,10 @@ component("network_service") {
@@ -3519,7 +3519,7 @@ index 3603695f3e..f40daa93a5 100644
      "transitional_url_loader_factory_owner.h",
      "udp_socket.cc",
 diff --git a/services/network/network_service.cc b/services/network/network_service.cc
-index 539cc8e82e..7bba01b8bd 100644
+index 811517e4aa..8c520d879b 100644
 --- a/services/network/network_service.cc
 +++ b/services/network/network_service.cc
 @@ -100,6 +100,7 @@
@@ -3530,7 +3530,7 @@ index 539cc8e82e..7bba01b8bd 100644
  #include "services/network/url_loader.h"
  
  #if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
-@@ -716,6 +717,28 @@ void NetworkService::SetSSLKeyLogFile(base::File file) {
+@@ -745,6 +746,28 @@ void NetworkService::SetSSLKeyLogFile(base::File file) {
        std::make_unique<net::SSLKeyLoggerImpl>(std::move(file)));
  }
  
@@ -3560,10 +3560,10 @@ index 539cc8e82e..7bba01b8bd 100644
      mojo::PendingReceiver<mojom::NetworkContext> receiver,
      mojom::NetworkContextParamsPtr params) {
 diff --git a/services/network/network_service.h b/services/network/network_service.h
-index 616665c6d0..ba50d84f53 100644
+index f6ce7a80be..711f13b9bb 100644
 --- a/services/network/network_service.h
 +++ b/services/network/network_service.h
-@@ -62,6 +62,7 @@
+@@ -61,6 +61,7 @@
  #include "services/network/public/mojom/network_context.mojom.h"
  #endif  // BUILDFLAG(IS_ANDROID)
  #include "services/network/public/mojom/system_dns_resolution.mojom.h"
@@ -3571,7 +3571,7 @@ index 616665c6d0..ba50d84f53 100644
  #include "services/network/public/mojom/trust_tokens.mojom.h"
  #include "services/network/public/mojom/url_loader_network_service_observer.mojom.h"
  #include "services/network/restricted_cookie_manager.h"
-@@ -92,6 +93,7 @@ class NetLogProxySink;
+@@ -96,6 +97,7 @@ class NetLogProxySink;
  class NetworkContext;
  class NetworkService;
  class SCTAuditingCache;
@@ -3579,7 +3579,7 @@ index 616665c6d0..ba50d84f53 100644
  
  class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
      : public mojom::NetworkService,
-@@ -169,6 +171,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
+@@ -173,6 +175,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
        mojo::PendingRemote<mojom::NetLogProxySource> proxy_source,
        mojo::PendingReceiver<mojom::NetLogProxySink>) override;
    void SetSSLKeyLogFile(base::File file) override;
@@ -3591,7 +3591,7 @@ index 616665c6d0..ba50d84f53 100644
    void CreateNetworkContext(
        mojo::PendingReceiver<mojom::NetworkContext> receiver,
        mojom::NetworkContextParamsPtr params) override;
-@@ -325,6 +332,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
+@@ -332,6 +339,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
    KeepaliveStatisticsRecorder* keepalive_statistics_recorder() {
      return &keepalive_statistics_recorder_;
    }
@@ -3601,7 +3601,7 @@ index 616665c6d0..ba50d84f53 100644
    net::HostResolverManager* host_resolver_manager() {
      return host_resolver_manager_.get();
    }
-@@ -463,6 +473,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
+@@ -472,6 +482,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkService
  
    KeepaliveStatisticsRecorder keepalive_statistics_recorder_;
  
@@ -3613,10 +3613,10 @@ index 616665c6d0..ba50d84f53 100644
  
    // Observer that logs network changes to the NetLog. Must be below the NetLog
 diff --git a/services/network/public/mojom/BUILD.gn b/services/network/public/mojom/BUILD.gn
-index 4292ab0633..0a5b4e7d6e 100644
+index ead4a4e977..40d41cb525 100644
 --- a/services/network/public/mojom/BUILD.gn
 +++ b/services/network/public/mojom/BUILD.gn
-@@ -1947,6 +1947,7 @@ mojom("mojom") {
+@@ -1974,6 +1974,7 @@ mojom("mojom") {
      "system_dns_resolution.mojom",
      "tcp_socket.mojom",
      "tls_socket.mojom",
@@ -3625,10 +3625,10 @@ index 4292ab0633..0a5b4e7d6e 100644
      "transferable_socket.mojom",
      "udp_socket.mojom",
 diff --git a/services/network/public/mojom/network_context.mojom b/services/network/public/mojom/network_context.mojom
-index 5eb7be85b1..299870343c 100644
+index 858f61f387..3a826ca817 100644
 --- a/services/network/public/mojom/network_context.mojom
 +++ b/services/network/public/mojom/network_context.mojom
-@@ -72,6 +72,7 @@ import "services/network/public/mojom/ssl_config.mojom";
+@@ -73,6 +73,7 @@ import "services/network/public/mojom/ssl_config.mojom";
  import "services/network/public/mojom/ssl_info.mojom";
  import "services/network/public/mojom/storage_access_api.mojom";
  import "services/network/public/mojom/tcp_socket.mojom";
@@ -3636,7 +3636,7 @@ index 5eb7be85b1..299870343c 100644
  import "services/network/public/mojom/transferable_directory.mojom";
  import "services/network/public/mojom/trust_token_access_observer.mojom";
  import "services/network/public/mojom/trust_tokens.mojom";
-@@ -1012,6 +1013,12 @@ struct URLLoaderFactoryParams {
+@@ -1014,6 +1015,12 @@ struct URLLoaderFactoryParams {
    // will target. If absent, the default network is instead used. Represents a
    //net::handles::NetworkHandle. See URLRequestContext::CreateRequest.
    int64? target_network;
@@ -3650,10 +3650,10 @@ index 5eb7be85b1..299870343c 100644
  
  struct IdAndAllowlistedPatterns {
 diff --git a/services/network/public/mojom/network_service.mojom b/services/network/public/mojom/network_service.mojom
-index 93248cac19..224a600478 100644
+index 1a4380a30e..107f1c46bf 100644
 --- a/services/network/public/mojom/network_service.mojom
 +++ b/services/network/public/mojom/network_service.mojom
-@@ -37,6 +37,7 @@ import "services/network/public/mojom/proxy_config.mojom";
+@@ -36,6 +36,7 @@ import "services/network/public/mojom/proxy_config.mojom";
  import "services/network/public/mojom/schemeful_site.mojom";
  import "services/network/public/mojom/source_type.mojom";
  import "services/network/public/mojom/system_dns_resolution.mojom";
@@ -3661,7 +3661,7 @@ index 93248cac19..224a600478 100644
  import "services/network/public/mojom/trust_tokens.mojom";
  import "services/network/public/mojom/url_loader.mojom";
  import "services/network/public/mojom/url_loader_network_service_observer.mojom";
-@@ -426,6 +427,22 @@ interface NetworkService {
+@@ -440,6 +441,22 @@ interface NetworkService {
    SetNetworkAnnotationMonitor(
        pending_remote<network.mojom.NetworkAnnotationMonitor> remote);
  
@@ -4469,10 +4469,10 @@ index 0000000000..8462aed1e9
 +
 +#endif  // SERVICES_NETWORK_TRAFFIC_RECORDER_UPLOAD_STREAM_H_
 diff --git a/services/network/url_loader.cc b/services/network/url_loader.cc
-index 729337bbde..c1be2a28cd 100644
+index 8cff0e93d7..b5dbe70e8e 100644
 --- a/services/network/url_loader.cc
 +++ b/services/network/url_loader.cc
-@@ -119,6 +119,7 @@
+@@ -120,6 +120,7 @@
  #include "services/network/public/mojom/url_loader_factory.mojom.h"
  #include "services/network/public/mojom/url_loader_network_service_observer.mojom-data-view.h"
  #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -4480,7 +4480,7 @@ index 729337bbde..c1be2a28cd 100644
  #include "services/network/resource_scheduler/resource_scheduler_client.h"
  #include "services/network/sec_header_helpers.h"
  #include "services/network/shared_dictionary/shared_dictionary_access_checker.h"
-@@ -129,6 +130,8 @@
+@@ -130,6 +131,8 @@
  #include "services/network/throttling/scoped_throttling_token.h"
  #include "services/network/throttling/throttling_controller.h"
  #include "services/network/throttling/throttling_network_interceptor.h"
@@ -4489,7 +4489,7 @@ index 729337bbde..c1be2a28cd 100644
  #include "services/network/trust_tokens/trust_token_request_helper.h"
  #include "services/network/trust_tokens/trust_token_url_loader_interceptor.h"
  #include "services/network/url_loader_factory.h"
-@@ -238,6 +241,24 @@ ResponseHeaderToRawHeaderPairs(
+@@ -239,6 +242,24 @@ ResponseHeaderToRawHeaderPairs(
    return header_array;
  }
  
@@ -4514,7 +4514,7 @@ index 729337bbde..c1be2a28cd 100644
  bool IncludesValidLoadField(const net::HttpResponseHeaders* headers) {
    if (!headers) {
      return false;
-@@ -343,7 +364,8 @@ URLLoader::URLLoader(
+@@ -344,7 +365,8 @@ URLLoader::URLLoader(
      mojo::PendingRemote<mojom::AcceptCHFrameObserver> accept_ch_frame_observer,
      SharedResourceChecker& shared_resource_checker,
      std::unique_ptr<DevtoolsDurableMessageWriter> maybe_durable_message_writer,
@@ -4524,7 +4524,7 @@ index 729337bbde..c1be2a28cd 100644
      : url_request_context_(context.GetUrlRequestContext()),
        network_context_client_(context.GetNetworkContextClient()),
        delete_callback_(std::move(delete_callback)),
-@@ -426,7 +448,8 @@ URLLoader::URLLoader(
+@@ -427,7 +449,8 @@ URLLoader::URLLoader(
                ? request.trusted_params
                      ->expected_response_headers_for_synthetic_response
                : nullptr),
@@ -4534,7 +4534,7 @@ index 729337bbde..c1be2a28cd 100644
    DCHECK(delete_callback_);
  
    // To minimize performance overhead and UMA report volume, this metric is
-@@ -552,6 +575,35 @@ URLLoader::URLLoader(
+@@ -553,6 +576,35 @@ URLLoader::URLLoader(
          request.net_log_reference_info.value());
    }
  
@@ -4570,7 +4570,7 @@ index 729337bbde..c1be2a28cd 100644
    // Resolve elements from request_body and prepare upload data.
    if (request.request_body.get()) {
      OpenFilesForUpload(request);
-@@ -650,8 +702,20 @@ void URLLoader::SetUpUpload(
+@@ -651,8 +703,20 @@ void URLLoader::SetUpUpload(
    scoped_refptr<base::SequencedTaskRunner> task_runner =
        base::ThreadPool::CreateSequencedTaskRunner(
            {base::MayBlock(), base::TaskPriority::USER_VISIBLE});
@@ -4593,7 +4593,7 @@ index 729337bbde..c1be2a28cd 100644
  
    if (request.enable_upload_progress) {
      upload_progress_tracker_ = std::make_unique<UploadProgressTracker>(
-@@ -758,6 +822,13 @@ void URLLoader::ScheduleStart() {
+@@ -759,6 +823,13 @@ void URLLoader::ScheduleStart() {
  URLLoader::~URLLoader() {
    TRACE_EVENT("loading", "URLLoader::~URLLoader",
                net::NetLogWithSourceToFlow(url_request_->net_log()));
@@ -4607,7 +4607,7 @@ index 729337bbde..c1be2a28cd 100644
    if (keepalive_ && keepalive_statistics_recorder_) {
      keepalive_statistics_recorder_->OnLoadFinished(
          *factory_params_->top_frame_id, keepalive_request_size_);
-@@ -979,6 +1050,12 @@ void URLLoader::OnReceivedRedirect(net::URLRequest* url_request,
+@@ -980,6 +1051,12 @@ void URLLoader::OnReceivedRedirect(net::URLRequest* url_request,
    mojom::URLResponseHeadPtr response = BuildResponseHead();
    DispatchOnRawResponse();
    ReportFlaggedResponseCookies(false);
@@ -4620,7 +4620,7 @@ index 729337bbde..c1be2a28cd 100644
  
    // Enforce the Cross-Origin-Resource-Policy (CORP) header.
    const CrossOriginEmbedderPolicy kEmptyCoep;
-@@ -1166,6 +1243,14 @@ void URLLoader::OnResponseStarted(net::URLRequest* url_request, int net_error) {
+@@ -1186,6 +1263,14 @@ void URLLoader::OnResponseStarted(net::URLRequest* url_request, int net_error) {
  
    response_ = BuildResponseHead();
    DispatchOnRawResponse();
@@ -4635,7 +4635,7 @@ index 729337bbde..c1be2a28cd 100644
  
    if (expected_response_headers_for_synthetic_response &&
        !CheckHeaderConsistencyForSyntheticResponse(
-@@ -2061,6 +2146,7 @@ void URLLoader::NotifyCompleted(int error_code) {
+@@ -2059,6 +2144,7 @@ void URLLoader::NotifyCompleted(int error_code) {
        status.ssl_info = url_request_->ssl_info();
      }
  
@@ -4643,7 +4643,7 @@ index 729337bbde..c1be2a28cd 100644
      url_loader_client_.Get()->OnComplete(status);
    }
  
-@@ -2110,6 +2196,15 @@ void URLLoader::CompletePendingWrite(bool success) {
+@@ -2108,6 +2194,15 @@ void URLLoader::CompletePendingWrite(bool success) {
      // to the now-invalid IOBuffer in some worker thread trying to commit it to
      // disk.  In case of an error, this will have to wait till everything is
      // destroyed.
@@ -4659,7 +4659,7 @@ index 729337bbde..c1be2a28cd 100644
      response_body_stream_ =
          pending_write_->Complete(pending_write_buffer_offset_);
    }
-@@ -2123,6 +2218,29 @@ void URLLoader::SetRawResponseHeaders(
+@@ -2121,6 +2216,29 @@ void URLLoader::SetRawResponseHeaders(
    raw_response_headers_ = headers;
  }
  
@@ -4689,7 +4689,7 @@ index 729337bbde..c1be2a28cd 100644
  void URLLoader::NotifyEarlyResponse(
      scoped_refptr<const net::HttpResponseHeaders> headers) {
    DCHECK(!has_received_response_);
-@@ -2164,6 +2282,18 @@ void URLLoader::MaybeNotifyEarlyResponseToDevtools(
+@@ -2162,6 +2280,18 @@ void URLLoader::MaybeNotifyEarlyResponseToDevtools(
  
  void URLLoader::SetRawRequestHeadersAndNotify(
      net::HttpRawRequestHeaders headers) {
@@ -4708,7 +4708,7 @@ index 729337bbde..c1be2a28cd 100644
    // If we have emitted_devtools_raw_request_, don't notify DevTools
    // to prevent duplicate ExtraInfo events.
    if (!emitted_devtools_raw_request_ && devtools_observer_ &&
-@@ -2425,6 +2555,7 @@ void URLLoader::CompleteBlockedResponse(
+@@ -2423,6 +2553,7 @@ void URLLoader::CompleteBlockedResponse(
    status.should_report_orb_blocking = should_report_orb_blocking;
    status.blocked_by_response_reason = reason;
  
@@ -5251,7 +5251,7 @@ index eed893864a..48f0177409 100644
  // from frames.
  BLINK_EXPORT void SetCorsExemptHeaderList(
 diff --git a/third_party/blink/renderer/bindings/bindings.gni b/third_party/blink/renderer/bindings/bindings.gni
-index e2342ca316..3262f030fd 100644
+index 25185c85d7..47a2ad04ed 100644
 --- a/third_party/blink/renderer/bindings/bindings.gni
 +++ b/third_party/blink/renderer/bindings/bindings.gni
 @@ -98,6 +98,8 @@ blink_core_sources_bindings =
@@ -5626,7 +5626,7 @@ index 0000000000..69f275a7a4
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_BINDINGS_CORE_V8_SCRIPT_RECORDER_H_
 diff --git a/third_party/blink/renderer/bindings/core/v8/v8_initializer.cc b/third_party/blink/renderer/bindings/core/v8/v8_initializer.cc
-index 9d28b83009..f736b818f6 100644
+index 36afb996e5..07d63761ba 100644
 --- a/third_party/blink/renderer/bindings/core/v8/v8_initializer.cc
 +++ b/third_party/blink/renderer/bindings/core/v8/v8_initializer.cc
 @@ -50,6 +50,7 @@
@@ -5637,16 +5637,16 @@ index 9d28b83009..f736b818f6 100644
  #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
  #include "third_party/blink/renderer/bindings/core/v8/shadow_realm_context.h"
  #include "third_party/blink/renderer/bindings/core/v8/use_counter_callback.h"
-@@ -900,6 +901,9 @@ void V8Initializer::InitializeV8Common(v8::Isolate* isolate) {
+@@ -882,6 +883,9 @@ void V8Initializer::InitializeV8Common(v8::Isolate* isolate) {
    isolate->SetHostInitializeImportMetaObjectCallback(
        HostGetImportMetaProperties);
    isolate->SetIsJSApiWrapperNativeErrorCallback(IsDOMExceptionWrapper);
 +  // browser: the compile notification a traffic recording at the full level
 +  // reads (script_recorder.h); off until the browser turns it on.
 +  isolate->SetCompiledScriptCallback(ScriptRecorder::OnScriptCompiled);
-   isolate->SetMetricsRecorder(std::make_shared<V8MetricsRecorder>(isolate));
- 
- #if BUILDFLAG(IS_WIN)
+   isolate->SetDynamicScriptCompiledFromEmbedderCallback(
+       DynamicScriptCompiledFromEmbedderCallback);
+   DOMArrayBuffer::SetArrayBufferDetachCallback(isolate);
 diff --git a/third_party/blink/renderer/controller/blink_initializer.cc b/third_party/blink/renderer/controller/blink_initializer.cc
 index cfced2ae75..44efe9496b 100644
 --- a/third_party/blink/renderer/controller/blink_initializer.cc

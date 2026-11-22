@@ -1,7 +1,7 @@
-From e8dc1a7f8b0b503ccafec7531d1b612186385a2c Mon Sep 17 00:00:00 2001
+From 8b96822e852f5e4fb999c026776c2d980f067476 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:12:09 -0500
-Subject: [PATCH 06/61] media-capabilities
+Date: Sun, 22 Nov 2026 13:06:35 -0500
+Subject: [PATCH 06/62] media-capabilities
 
 MediaCapabilities decodingInfo spoof.
 ---
@@ -22,7 +22,7 @@ index 830b332f18..16968d423f 100644
      "//third_party/blink/renderer/modules/encryptedmedia",
      "//third_party/blink/renderer/modules/mediarecorder",
 diff --git a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
-index 1dea63eee6..b5f1eea448 100644
+index f1fe983506..898cb7b43b 100644
 --- a/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
 +++ b/third_party/blink/renderer/modules/media_capabilities/media_capabilities.cc
 @@ -15,6 +15,7 @@
@@ -33,9 +33,9 @@ index 1dea63eee6..b5f1eea448 100644
  #include "media/base/media_switches.h"
  #include "media/base/media_util.h"
  #include "media/base/mime_util.h"
-@@ -814,6 +815,40 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
-     ExceptionState& exception_state) {
-   const base::TimeTicks request_time = base::TimeTicks::Now();
+@@ -878,6 +879,40 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
+   // Validation errors should return above.
+   DCHECK(message.empty());
  
 +  // browser: claim support for Microsoft PlayReady recommendation 3000
 +  // (Media Foundation hardware DRM). Fingerprinting scripts probe
@@ -71,9 +71,9 @@ index 1dea63eee6..b5f1eea448 100644
 +    return promise;
 +  }
 +
-   if (config->hasKeySystemConfiguration()) {
-     UseCounter::Count(
-         ExecutionContext::From(script_state),
+   if (is_webrtc) {
+     UseCounter::Count(ExecutionContext::From(script_state),
+                       WebFeature::kMediaCapabilitiesDecodingInfoWebrtc);
 -- 
 2.45.1.windows.1
 

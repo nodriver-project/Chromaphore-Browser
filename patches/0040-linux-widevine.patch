@@ -1,7 +1,7 @@
-From 1535399de774b9a1065d42cfe9f1eccdfdf4a454 Mon Sep 17 00:00:00 2001
+From 58bfb5519d41b913a2b380c9b3c0965c14969f54 Mon Sep 17 00:00:00 2001
 From: The browser Authors <noreply@browser.invalid>
-Date: Fri, 13 Nov 2026 02:15:06 -0500
-Subject: [PATCH 39/61] linux-widevine
+Date: Sun, 22 Nov 2026 13:09:43 -0500
+Subject: [PATCH 40/62] linux-widevine
 
 Widevine in a Linux build presenting Windows (see the user-agent commit)
 runs as Chrome's Widevine runs on Windows. Windows' CDM works in privacy
@@ -21,11 +21,11 @@ switch declaration rides in switch-resolver.
 ---
  .../service_host/utility_process_host.cc      |   5 +
  media/cdm/BUILD.gn                            |   7 +
- media/cdm/cdm_adapter.cc                      |  96 +++++
+ media/cdm/cdm_adapter.cc                      |  95 +++++
  media/cdm/cdm_adapter.h                       |  26 ++
- media/cdm/windows_widevine.cc                 | 400 ++++++++++++++++++
+ media/cdm/windows_widevine.cc                 | 398 ++++++++++++++++++
  media/cdm/windows_widevine.h                  |  86 ++++
- 6 files changed, 620 insertions(+)
+ 6 files changed, 617 insertions(+)
  create mode 100644 media/cdm/windows_widevine.cc
  create mode 100644 media/cdm/windows_widevine.h
 
@@ -64,7 +64,7 @@ index 49c017bb16..5e01d60c99 100644
      if (enable_cdm_host_verification) {
        sources += [
 diff --git a/media/cdm/cdm_adapter.cc b/media/cdm/cdm_adapter.cc
-index 8de444a6be..bf7b8b5869 100644
+index 3247f7aa77..e5ea6dcb92 100644
 --- a/media/cdm/cdm_adapter.cc
 +++ b/media/cdm/cdm_adapter.cc
 @@ -268,6 +268,10 @@ CdmAdapter::CdmAdapter(
@@ -113,7 +113,7 @@ index 8de444a6be..bf7b8b5869 100644
    uint32_t promise_id =
        cdm_promise_adapter_.SavePromise(std::move(promise), __func__);
    DVLOG(2) << __func__ << ": promise_id = " << promise_id;
-@@ -419,6 +444,28 @@ void CdmAdapter::UpdateSession(const std::string& session_id,
+@@ -419,6 +444,29 @@ void CdmAdapter::UpdateSession(const std::string& session_id,
    CHECK(!response.empty());
    TRACE_EVENT1("media", "CdmAdapter::UpdateSession", "session_id", session_id);
  
@@ -132,7 +132,8 @@ index 8de444a6be..bf7b8b5869 100644
 +            MakeWidevinePrivacyRequest(clear_request, *certificate);
 +        promise->resolve();
 +        DeliverWindowsWidevineRequest(
-+            session_id, request ? std::move(*request) : std::move(clear_request));
++            session_id,
++            request ? std::move(*request) : std::move(clear_request));
 +        return;
 +      }
 +    }
@@ -142,7 +143,7 @@ index 8de444a6be..bf7b8b5869 100644
    cdm_metrics_data_.number_of_update_calls++;
  
    uint32_t promise_id =
-@@ -892,12 +939,57 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
+@@ -891,12 +939,55 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
                 session_id_str, "message_type", message_type);
  
    const uint8_t* message_ptr = reinterpret_cast<const uint8_t*>(message);
@@ -153,21 +154,19 @@ index 8de444a6be..bf7b8b5869 100644
 +  // request is held until the certificate comes.
 +  if (windows_widevine_ && message_type == cdm::kLicenseRequest &&
 +      windows_widevine_started_sessions_.insert(session_id_str).second) {
-+    std::vector<uint8_t> clear_request(
-+        message_ptr, UNSAFE_TODO(message_ptr + message_size));
++    std::vector<uint8_t> clear_request(message_ptr,
++                                       UNSAFE_TODO(message_ptr + message_size));
 +    if (!windows_widevine_certificate_) {
 +      windows_widevine_held_requests_[session_id_str] =
 +          std::move(clear_request);
-+      session_message_cb_.Run(session_id_str,
-+                              ToMediaMessageType(message_type),
++      session_message_cb_.Run(session_id_str, ToMediaMessageType(message_type),
 +                              WidevineServiceCertificateRequest());
 +      return;
 +    }
 +    if (std::optional<std::vector<uint8_t>> request =
 +            MakeWidevinePrivacyRequest(clear_request,
 +                                       *windows_widevine_certificate_)) {
-+      session_message_cb_.Run(session_id_str,
-+                              ToMediaMessageType(message_type),
++      session_message_cb_.Run(session_id_str, ToMediaMessageType(message_type),
 +                              std::move(*request));
 +      return;
 +    }
@@ -200,7 +199,7 @@ index 8de444a6be..bf7b8b5869 100644
  void CdmAdapter::OnExpirationChange(const char* session_id,
                                      uint32_t session_id_size,
                                      cdm::Time new_expiry_time) {
-@@ -920,6 +1012,10 @@ void CdmAdapter::OnSessionClosed(const char* session_id,
+@@ -919,6 +1010,10 @@ void CdmAdapter::OnSessionClosed(const char* session_id,
    std::string session_id_str(session_id, session_id_size);
    TRACE_EVENT1("media", "CdmAdapter::OnSessionClosed", "session_id",
                 session_id_str);
@@ -279,10 +278,10 @@ index 9770d6d19a..78ec690989 100644
  
 diff --git a/media/cdm/windows_widevine.cc b/media/cdm/windows_widevine.cc
 new file mode 100644
-index 0000000000..b7e23787d6
+index 0000000000..9f45a13f32
 --- /dev/null
 +++ b/media/cdm/windows_widevine.cc
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,398 @@
 +// Copyright 2026 The browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -311,15 +310,15 @@ index 0000000000..b7e23787d6
 +// The major Widevine streaming services, whose content must play: they get
 +// the Linux Widevine unchanged. --widevine-playback-sites adds to them.
 +constexpr const char* kPlaybackSites[] = {
-+    "netflix.com",      "youtube.com",        "primevideo.com",
-+    "amazon.com",       "disneyplus.com",     "hulu.com",
-+    "max.com",          "hbomax.com",         "paramountplus.com",
-+    "peacocktv.com",    "apple.com",          "spotify.com",
-+    "tidal.com",        "crunchyroll.com",    "dazn.com",
-+    "espn.com",         "sling.com",          "fubo.tv",
-+    "starz.com",        "discoveryplus.com",  "mubi.com",
-+    "plex.tv",          "vudu.com",           "fandangoathome.com",
-+    "tubitv.com",       "pluto.tv",           "philo.com",
++    "netflix.com",   "youtube.com",       "primevideo.com",
++    "amazon.com",    "disneyplus.com",    "hulu.com",
++    "max.com",       "hbomax.com",        "paramountplus.com",
++    "peacocktv.com", "apple.com",         "spotify.com",
++    "tidal.com",     "crunchyroll.com",   "dazn.com",
++    "espn.com",      "sling.com",         "fubo.tv",
++    "starz.com",     "discoveryplus.com", "mubi.com",
++    "plex.tv",       "vudu.com",          "fandangoathome.com",
++    "tubitv.com",    "pluto.tv",          "philo.com",
 +};
 +
 +// SignedMessage.MessageType.
@@ -450,15 +449,14 @@ index 0000000000..b7e23787d6
 +    base::span<const uint8_t> iv,
 +    base::span<const uint8_t> plaintext) {
 +  bssl::ScopedEVP_CIPHER_CTX context;
-+  if (!EVP_EncryptInit_ex(context.get(), EVP_aes_128_cbc(), nullptr,
-+                          key.data(), iv.data())) {
++  if (!EVP_EncryptInit_ex(context.get(), EVP_aes_128_cbc(), nullptr, key.data(),
++                          iv.data())) {
 +    return std::nullopt;
 +  }
 +  std::vector<uint8_t> out(plaintext.size() + EVP_MAX_BLOCK_LENGTH);
 +  int written = 0;
 +  int final_written = 0;
-+  if (!EVP_EncryptUpdate(context.get(), out.data(), &written,
-+                         plaintext.data(),
++  if (!EVP_EncryptUpdate(context.get(), out.data(), &written, plaintext.data(),
 +                         base::checked_cast<int>(plaintext.size())) ||
 +      !EVP_EncryptFinal_ex(
 +          context.get(),
@@ -554,8 +552,8 @@ index 0000000000..b7e23787d6
 +      !public_key) {
 +    return std::nullopt;
 +  }
-+  bssl::UniquePtr<RSA> rsa(RSA_public_key_from_bytes(
-+      public_key->bytes.data(), public_key->bytes.size()));
++  bssl::UniquePtr<RSA> rsa(RSA_public_key_from_bytes(public_key->bytes.data(),
++                                                     public_key->bytes.size()));
 +  if (!rsa) {
 +    return std::nullopt;
 +  }
@@ -591,8 +589,7 @@ index 0000000000..b7e23787d6
 +std::optional<std::vector<uint8_t>> MakeWidevinePrivacyRequest(
 +    base::span<const uint8_t> clear_request,
 +    const WindowsWidevineCertificate& certificate) {
-+  const std::optional<std::vector<Field>> signed_message =
-+      Parse(clear_request);
++  const std::optional<std::vector<Field>> signed_message = Parse(clear_request);
 +  if (!signed_message) {
 +    return std::nullopt;
 +  }
