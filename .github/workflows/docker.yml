@@ -1,0 +1,120 @@
+# Builds the official Chromaphore image from a published release's Linux
+# tarball and pushes it to ghcr.io/nodriver-project/chromaphore.
+#   release published  -> build, smoke-test, push <version> (+ latest)
+#   workflow_dispatch  -> same, for the tag given (default: the latest release)
+#   pull_request       -> build and smoke-test only, nothing is pushed
+# Repo layout assumed: docker/Dockerfile, docker/entrypoint.sh.
+name: Docker image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package, e.g. v2.0.0 (empty = latest release)"
+        required: false
+        default: ""
+  pull_request:
+    paths:
+      - "docker/**"
+      - ".github/workflows/docker.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/nodriver-project/chromaphore
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve release asset
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_IN: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+          tag="${TAG_IN:-$latest}"
+          gh api "repos/$REPO/releases/tags/$tag" > release.json
+          asset=$(jq -c '[.assets[] | select(.name | test("-linux-x64\\.tar\\.xz$"))][0]' release.json)
+          if [ "$asset" = "null" ]; then echo "::error::release $tag has no linux-x64 tarball"; exit 1; fi
+          name=$(jq -r .name <<<"$asset")
+          url=$(jq -r .browser_download_url <<<"$asset")
+          sha=$(jq -r '.digest // ""' <<<"$asset" | sed 's/^sha256://')
+          if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then echo "::error::no sha256 digest for $name"; exit 1; fi
+          version="${tag#v}"
+          chromium=$(sed -E 's/.*-chromium([0-9.]+)-linux-x64\.tar\.xz/\1/' <<<"$name")
+          prerelease=$(jq -r .prerelease release.json)
+          tags="$IMAGE:$version"
+          if [ "$tag" = "$latest" ] && [ "$prerelease" = "false" ]; then tags="$tags $IMAGE:latest"; fi
+          {
+            echo "version=$version"; echo "chromium=$chromium"; echo "url=$url"
+            echo "sha=$sha"; echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+          echo "Packaging $name ($sha) as: $tags"
+
+      - name: Free disk space
+        run: |
+          # The image is ~3 GB and the build briefly holds the tarball and an
+          # unpacked copy as well; drop preinstalled SDKs the job never uses.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+          CHROMIUM: ${{ steps.rel.outputs.chromium }}
+          URL: ${{ steps.rel.outputs.url }}
+          SHA: ${{ steps.rel.outputs.sha }}
+          TAGS: ${{ steps.rel.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tag_args=(); for t in $TAGS; do tag_args+=(-t "$t"); done
+          docker build docker \
+            --build-arg CHROMAPHORE_VERSION="$VERSION" \
+            --build-arg CHROMIUM_VERSION="$CHROMIUM" \
+            --build-arg CHROMAPHORE_URL="$URL" \
+            --build-arg CHROMAPHORE_SHA256="$SHA" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            "${tag_args[@]}"
+          docker image ls "$IMAGE"
+
+      - name: Smoke test (CDP answers on 9222)
+        env:
+          IMG: ${{ env.IMAGE }}:${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run -d --name smoke -p 127.0.0.1:9222:9222 "$IMG"
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9222/json/version > version.json; then break; fi
+            sleep 1
+          done
+          cat version.json
+          grep -q webSocketDebuggerUrl version.json
+          docker stop smoke
+          docker rm smoke
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.rel.outputs.tags }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          for t in $TAGS; do docker push "$t"; done
