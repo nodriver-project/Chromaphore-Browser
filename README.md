@@ -273,6 +273,9 @@ The official image runs the Linux build headless, with CDP on port 9222:
 
 Attach any CDP client to `http://127.0.0.1:9222`, e.g. `chromium.connectOverCDP('http://127.0.0.1:9222')` in Playwright or `puppeteer.connect({ browserURL: 'http://127.0.0.1:9222' })` in Puppeteer. Switches after the image name go to the browser (`... ghcr.io/nodriver-project/chromaphore --fingerprint-seed=12345`), and `-e TZ=America/New_York` sets the time zone it reports.
 
+From another container on the same compose or user-defined Docker network, use the service or container name instead: `http://chromaphore:9222` (names don't resolve on Docker's default bridge network). No port needs publishing for that. Playwright's `connectOverCDP` and Puppeteer's `browserURL` work with it unchanged, and the `ws://` URL the image hands back uses the same name.
+In compose, add `depends_on: { chromaphore: { condition: service_healthy } }` to your client so it waits until CDP is up (about 6 s); [`docker/compose-example.yml`](docker/compose-example.yml) is a complete example.
+
 The image is Ubuntu 24.04 with the release tarball unchanged and the libraries from its `INSTALL.md`; the browser runs as a non-root user with `--headless=new --no-sandbox --disable-gpu --disable-software-rasterizer`. It is about 1.7 GB to pull. Keep the published port on `127.0.0.1` as above: anyone who can reach port 9222 controls the browser.
 
 Without a proxy, a container's connections still look like Linux at the TCP level; see the tcp-syn container steps in `INSTALL.md`.
