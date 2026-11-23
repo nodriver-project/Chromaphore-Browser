@@ -50,7 +50,8 @@ LABEL org.opencontainers.image.title="Chromaphore" \
 COPY --link --from=fetch /opt/chromaphore /opt/chromaphore
 
 # Libraries: the list in the release's INSTALL.md (minimal Ubuntu 24.04).
-# socat: forwards 0.0.0.0:9222 to the browser's loopback-only CDP port.
+# python3: runs cdp-proxy.py, which forwards 0.0.0.0:9222 to the browser's
+#   loopback-only CDP port and lets clients connect by hostname.
 # tini: PID 1, so `docker stop` reaches the browser and the forwarder.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -59,12 +60,13 @@ RUN apt-get update \
       libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libudev1 libx11-6 \
       libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 \
       libxrandr2 \
-      socat tini \
+      python3 tini \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb \
  && { userdel --remove ubuntu 2>/dev/null || true; } \
  && useradd --create-home --uid 1000 --shell /bin/bash chromaphore
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/chromaphore-entrypoint
+COPY --chmod=755 cdp-proxy.py /usr/local/bin/chromaphore-cdp-proxy
 
 # C.UTF-8 so file paths with non-ASCII letters work (INSTALL.md, Locale).
 # TZ is passed through to the browser: docker run -e TZ=America/New_York ...
