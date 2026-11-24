@@ -1,9 +1,10 @@
 # Builds the Chromaphore image from a published release's Linux tarball, tests
 # it, and on a manual run pushes it to ghcr.io/nodriver-project/chromaphore.
 #   pull_request       -> build and test only, nothing is pushed
-#   workflow_dispatch  -> build and test the tag given (default: the latest
-#                         release), then push <version> (and latest) if "push"
-#                         is ticked
+#   workflow_dispatch  -> build and test the tag given (default: the newest
+#                         release that has a Linux tarball), then push
+#                         <version> (and latest) if "push" is ticked
+# Not every release has a Linux build: a Windows-only release is passed over.
 # Publishing is a manual run on purpose: a release is published first and its
 # image follows when someone decides so.
 name: Docker image
@@ -12,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to package, e.g. v2.0.0 (empty = the latest release)"
+        description: "Release tag to package, e.g. v2.0.0 (empty = the newest release with a Linux tarball)"
         required: false
         default: ""
       push:
@@ -58,8 +59,11 @@ jobs:
           TAG_IN: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2> /dev/null || true)
+          # Not every release has a Linux build: the default tag and :latest
+          # follow the newest published, non-prerelease release that has one.
+          latest=$(gh api "repos/$REPO/releases?per_page=50" --jq '[.[] | select((.draft | not) and (.prerelease | not)) | select(any(.assets[]; .name | test("-linux-x64\\.tar\\.xz$")))][0].tag_name // ""')
           tag="${TAG_IN:-$latest}"
+          if [ -z "$tag" ]; then echo "::error::no release has a linux-x64 tarball"; exit 1; fi
           if ! [[ "$tag" =~ ^v[0-9]+(\.[0-9]+){2}([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::not a release tag: '$tag'"; exit 1
           fi
