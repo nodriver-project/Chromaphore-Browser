@@ -267,18 +267,29 @@ It is not made for a Linux desktop or a host with a GPU.
 
 ### Docker
 
-The official image runs the Linux build headless, with CDP on port 9222:
+The image runs the Linux build headless, with CDP on port 9222:
 
     docker run -d --name chromaphore -p 127.0.0.1:9222:9222 ghcr.io/nodriver-project/chromaphore
 
-Attach any CDP client to `http://127.0.0.1:9222`, e.g. `chromium.connectOverCDP('http://127.0.0.1:9222')` in Playwright or `puppeteer.connect({ browserURL: 'http://127.0.0.1:9222' })` in Puppeteer. Switches after the image name go to the browser (`... ghcr.io/nodriver-project/chromaphore --fingerprint-seed=12345`), and `-e TZ=America/New_York` sets the time zone it reports.
+Attach any CDP client to `http://127.0.0.1:9222`, e.g. `chromium.connectOverCDP('http://127.0.0.1:9222')` in Playwright or `puppeteer.connect({ browserURL: 'http://127.0.0.1:9222' })` in Puppeteer. Keep the published port on `127.0.0.1` as above: anyone who can reach port 9222 controls the browser.
 
-From another container on the same compose or user-defined Docker network, use the service or container name instead: `http://chromaphore:9222` (names don't resolve on Docker's default bridge network). No port needs publishing for that. Playwright's `connectOverCDP` and Puppeteer's `browserURL` work with it unchanged, and the `ws://` URL the image hands back uses the same name.
-In compose, add `depends_on: { chromaphore: { condition: service_healthy } }` to your client so it waits until CDP is up (about 6 s); [`docker/compose-example.yml`](docker/compose-example.yml) is a complete example.
+Switches after the image name go to the browser. The [fingerprint identity](#fingerprint-identity) is off unless you give one, and in a container the machine's real values are the server's: its processor count and memory, behind a Windows desktop's screen. To present a machine of its own:
 
-The image is Ubuntu 24.04 with the release tarball unchanged and the libraries from its `INSTALL.md`; the browser runs as a non-root user with `--headless=new --no-sandbox --disable-gpu --disable-software-rasterizer`. It is about 1.7 GB to pull. Keep the published port on `127.0.0.1` as above: anyone who can reach port 9222 controls the browser.
+    docker run -d --name chromaphore -p 127.0.0.1:9222:9222 -e TZ=America/New_York \
+      ghcr.io/nodriver-project/chromaphore --fingerprint-seed=auto --fingerprint-screen=auto
 
-Without a proxy, a container's connections still look like Linux at the TCP level; see the tcp-syn container steps in `INSTALL.md`.
+`--fingerprint-seed=auto` draws a new identity at each start. To keep one identity, give it a number of your own (`--fingerprint-seed=<number> --fingerprint-screen=auto`) and mount a volume at `/home/chromaphore/data` to keep its profile with it. `TZ` is the time zone the browser reports (UTC without it).
+
+**From another container** on the same compose or user-defined Docker network, use the service or container name instead: `http://chromaphore:9222` (names don't resolve on Docker's default bridge network). No port needs publishing for that, Playwright's `connectOverCDP` and Puppeteer's `browserURL` work with it unchanged, and the `ws://` URL the image hands back uses the same name. The browser itself refuses a request whose Host is a name, as its guard against web pages that reach the port under a domain of their own; the image lets single-word names through, which a page cannot be served under, and dotted names you list yourself, which should be names nobody else can point at the port: `-e CDP_ALLOWED_HOSTS=host.docker.internal,browser.example.internal`. In compose, add `depends_on: { chromaphore: { condition: service_healthy } }` to your client so that it waits until CDP is up; [`docker/compose-example.yml`](docker/compose-example.yml) is a complete example.
+
+**What is in it.** Ubuntu 24.04 with the release tarball unchanged in `/opt/chromaphore` (its `INSTALL.md` too) and the libraries `INSTALL.md` lists; about 1.7 GB to pull. The browser runs as a non-root user with `--headless=new --no-sandbox --disable-gpu --disable-software-rasterizer`. To keep the browser's own sandbox on, start the container with `-e CHROMAPHORE_SANDBOX=1 --security-opt seccomp=unconfined`: the sandbox needs user namespaces, which Docker's default seccomp profile withholds from a container.
+
+**Connecting directly, without a proxy.** A container's connections look like Linux at the TCP level, and a site that compares that with the Windows machine its pages see answers with a robot check. The release's helper changes it for one container, from the host, after each start of that container:
+
+    docker cp chromaphore:/opt/chromaphore/tcp-syn ./tcp-syn    # once
+    sudo nsenter -t "$(docker inspect -f '{{.State.Pid}}' chromaphore)" -n ./tcp-syn/build-and-install.sh
+
+It needs `tc` and `nsenter` on the host. It changes that container's network settings and not the host's (the values it replaced are kept in a file under `/run` on the host); `--remove` at the end of the second line undoes it. Behind a proxy none of this shows.
 
 ## Source and binary
 

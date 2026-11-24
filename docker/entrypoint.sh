@@ -1,43 +1,129 @@
-#!/bin/sh
+#!/bin/bash
 # Chromaphore container entrypoint.
 #
-#   docker run ... chromaphore                          headless browser, CDP on 9222
-#   docker run ... chromaphore --fingerprint-seed=12345 extra browser switches are appended
-#   docker run ... chromaphore bash                     anything not starting with "-" runs as-is
+#   docker run ... <image>                         the browser, headless, CDP on port 9222
+#   docker run ... <image> --fingerprint-seed=auto --fingerprint-screen=auto
+#                                                  switches go to the browser
+#   docker run ... <image> chromaphore --version   anything not starting with "-" runs as given
 #
 # Environment:
-#   CDP_PORT                 port CDP answers on in the container (default 9222)
-#   CHROMAPHORE_USER_DATA_DIR  profile folder (default ~/data; mount a volume here to keep it)
-#   TZ                       time zone the browser reports (default UTC)
-set -e
+#   CDP_PORT                   the port CDP answers on in the container (default 9222)
+#   CDP_ALLOWED_HOSTS          dotted names clients may connect by, comma-separated
+#                              (single-word names such as a compose service's always work)
+#   CHROMAPHORE_USER_DATA_DIR  the profile folder (default ~/data; mount a volume there to keep it)
+#   CHROMAPHORE_SANDBOX=1      keep the browser's sandbox on; the container must then be
+#                              allowed user namespaces (README, Docker)
+#   TZ                         the time zone the browser reports (default UTC)
+set -euo pipefail
+
+# A `docker stop` (tini signals the whole group, the browser included) is
+# waited out from the first moment, so that the browser closes cleanly and its
+# exit code becomes the container's. An exec below puts the signal back to its
+# default for the program that takes over.
+stopping=0
+trap 'stopping=1' TERM INT
 
 if [ "$#" -gt 0 ] && [ "${1#-}" = "$1" ]; then
   exec "$@"
 fi
 
+# The browser never runs as root: a container started with --user 0 goes on as
+# the browser's user.
+if [ "$(id -u)" = 0 ]; then
+  export HOME=/home/chromaphore USER=chromaphore LOGNAME=chromaphore
+  exec setpriv --reuid=chromaphore --regid=chromaphore --init-groups "$0" "$@"
+fi
+
 PORT="${CDP_PORT:-9222}"
-INNER=$((PORT + 1))
 DATA="${CHROMAPHORE_USER_DATA_DIR:-$HOME/data}"
-mkdir -p "$DATA"
+if ! mkdir -p "$DATA" 2> /dev/null || ! [ -w "$DATA" ]; then
+  echo "The profile folder $DATA is not writable by the browser's user (uid $(id -u)): chown the mounted folder to it." >&2
+  exit 1
+fi
+rm -f "$DATA/DevToolsActivePort"
+if [ "$stopping" = 1 ]; then exit 0; fi
 
-# In --headless=new the browser's CDP server listens on 127.0.0.1 only
-# (--remote-debugging-address=0.0.0.0 is ignored), so a published port cannot
-# reach it; cdp-proxy.py forwards the container's PORT to it. Unlike a plain
-# TCP forwarder it also accepts a hostname in the Host header (the browser
-# refuses one), so other containers can use http://<service name>:9222.
-python3 -I /usr/local/bin/chromaphore-cdp-proxy "${PORT}" "${INNER}" &
+# --no-sandbox: a container usually cannot give the sandbox its namespaces
+# (INSTALL.md, Servers). --disable-gpu --disable-software-rasterizer: no GPU, so
+# no WebGL, as a Windows machine without a usable graphics card has it.
+# --disable-dev-shm-usage: Docker's /dev/shm is 64 MB, too small for renderers.
+# --remote-debugging-port=0: the browser picks a free loopback port and writes
+# it to DevToolsActivePort; the forwarder below puts it on $PORT.
+sandbox=(--no-sandbox)
+if [ "${CHROMAPHORE_SANDBOX:-0}" = 1 ]; then sandbox=(); fi
 
-# Flags: --no-sandbox (containers, INSTALL.md); --disable-gpu and
-# --disable-software-rasterizer (no GPU, INSTALL.md); --disable-dev-shm-usage
-# (Docker's /dev/shm is 64 MB by default, too small for page renderers).
-exec /opt/chromaphore/chromaphore \
+/opt/chromaphore/chrome \
   --headless=new \
-  --no-sandbox \
+  "${sandbox[@]}" \
   --disable-gpu \
   --disable-software-rasterizer \
   --disable-dev-shm-usage \
   --no-first-run \
   --no-default-browser-check \
-  --remote-debugging-port="${INNER}" \
-  --user-data-dir="${DATA}" \
-  "$@"
+  --remote-debugging-port=0 \
+  --user-data-dir="$DATA" \
+  "$@" &
+browser=$!
+
+inner=
+for _ in $(seq 1 300); do
+  if [ -s "$DATA/DevToolsActivePort" ]; then
+    inner=$(head -n 1 "$DATA/DevToolsActivePort" 2> /dev/null || true)
+    case "$inner" in '' | *[!0-9]*) inner= ;; *) break ;; esac
+  fi
+  if [ "$stopping" = 1 ]; then inner=; break; fi
+  kill -0 "$browser" 2> /dev/null || break
+  sleep 0.1 || true  # a stop signal reaches the sleep too
+done
+if [ -z "$inner" ]; then
+  set +e
+  if [ "$stopping" = 1 ]; then
+    wait "$browser"
+    status=$?
+    while [ "$status" -gt 128 ] && kill -0 "$browser" 2> /dev/null; do
+      wait "$browser"
+      status=$?
+    done
+    exit "$status"
+  fi
+  if kill -0 "$browser" 2> /dev/null; then
+    echo "The browser did not open its DevTools port within 30 s." >&2
+    kill "$browser"
+    wait "$browser"
+    exit 1
+  fi
+  # It ended by itself: --version, or a switch it refused.
+  wait "$browser"
+  exit $?
+fi
+
+python3 -I /usr/local/bin/chromaphore-cdp-proxy "$PORT" "$inner" &
+forward=$!
+
+# The container lives as long as both do. On `docker stop` the forwarder ends at
+# once and the browser closes; the browser's exit code (0 after a clean close)
+# is then the container's.
+set +e
+ended=
+status=0
+while [ -z "${ended:-}" ]; do
+  wait -n -p ended "$browser" "$forward"
+  status=$?
+  if [ "$status" = 127 ]; then break; fi
+done
+if [ "${ended:-}" = "$browser" ]; then
+  kill "$forward" 2> /dev/null
+elif [ "$stopping" = 1 ]; then
+  wait "$browser"
+  status=$?
+  while [ "$status" -gt 128 ] && kill -0 "$browser" 2> /dev/null; do
+    wait "$browser"
+    status=$?
+  done
+else
+  echo "The CDP forwarder ended (exit $status); stopping the browser." >&2
+  kill "$browser" 2> /dev/null
+  wait "$browser"
+  status=1
+fi
+exit "$status"
