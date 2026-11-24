@@ -1,7 +1,9 @@
 # Builds the official Chromaphore image from a published release's Linux
 # tarball and pushes it to ghcr.io/nodriver-project/chromaphore.
 #   release published  -> build, smoke-test, push <version> (+ latest)
-#   workflow_dispatch  -> same, for the tag given (default: the latest release)
+#   workflow_dispatch  -> same, for the tag given (default: the newest release
+#                         that has a Linux tarball)
+#   A release without a linux-x64 tarball (a Windows-only release) builds nothing.
 #   pull_request       -> build and smoke-test only, nothing is pushed
 # Repo layout assumed: docker/Dockerfile, docker/entrypoint.sh.
 name: Docker image
@@ -12,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to package, e.g. v2.0.0 (empty = latest release)"
+        description: "Release tag to package, e.g. v2.0.0 (empty = newest release with a Linux tarball)"
         required: false
         default: ""
   pull_request:
@@ -48,11 +50,21 @@ jobs:
           TAG_IN: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           set -euo pipefail
-          latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+          # Not every release has a Linux build: the default tag and :latest
+          # follow the newest published, non-prerelease release that has one.
+          latest=$(gh api "repos/$REPO/releases?per_page=50" --jq '[.[] | select((.draft | not) and (.prerelease | not)) | select(any(.assets[]; .name | test("-linux-x64\\.tar\\.xz$")))][0].tag_name // ""')
           tag="${TAG_IN:-$latest}"
+          if [ -z "$tag" ]; then echo "::error::no release has a linux-x64 tarball"; exit 1; fi
           gh api "repos/$REPO/releases/tags/$tag" > release.json
           asset=$(jq -c '[.assets[] | select(.name | test("-linux-x64\\.tar\\.xz$"))][0]' release.json)
-          if [ "$asset" = "null" ]; then echo "::error::release $tag has no linux-x64 tarball"; exit 1; fi
+          if [ "$asset" = "null" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+              echo "::notice::release $tag has no linux-x64 tarball; no image built"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::release $tag has no linux-x64 tarball"; exit 1
+          fi
           name=$(jq -r .name <<<"$asset")
           url=$(jq -r .browser_download_url <<<"$asset")
           sha=$(jq -r '.digest // ""' <<<"$asset" | sed 's/^sha256://')
@@ -69,6 +81,7 @@ jobs:
           echo "Packaging $name ($sha) as: $tags"
 
       - name: Free disk space
+        if: steps.rel.outputs.skip != 'true'
         run: |
           # The image is ~3 GB and the build briefly holds the tarball and an
           # unpacked copy as well; drop preinstalled SDKs the job never uses.
@@ -76,6 +89,7 @@ jobs:
           df -h /
 
       - name: Build
+        if: steps.rel.outputs.skip != 'true'
         env:
           VERSION: ${{ steps.rel.outputs.version }}
           CHROMIUM: ${{ steps.rel.outputs.chromium }}
@@ -95,6 +109,7 @@ jobs:
           docker image ls "$IMAGE"
 
       - name: Smoke test (CDP answers on 9222)
+        if: steps.rel.outputs.skip != 'true'
         env:
           IMG: ${{ env.IMAGE }}:${{ steps.rel.outputs.version }}
         run: |
@@ -110,7 +125,7 @@ jobs:
           docker rm smoke
 
       - name: Push
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.rel.outputs.skip != 'true'
         env:
           TAGS: ${{ steps.rel.outputs.tags }}
           GH_TOKEN: ${{ github.token }}
