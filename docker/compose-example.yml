@@ -7,11 +7,11 @@
 services:
   chromaphore:
     image: ${CHROMAPHORE_IMAGE:-ghcr.io/nodriver-project/chromaphore:latest}
-    # An identity for this start, with its own screen (README, Fingerprint
-    # identity). To keep one identity across starts, give --fingerprint-seed a
-    # number of your own (--fingerprint-screen stays "auto") and mount a volume
-    # at /home/chromaphore/data to keep its profile with it.
-    command: ["--fingerprint-seed=auto", "--fingerprint-screen=auto"]
+    # Each start of a fresh container is a new machine to the sites it visits.
+    # To stay the same machine, keep the profile:
+    # volumes:
+    #   - chromaphore-profile:/home/chromaphore/data
+    # (and declare `volumes: { chromaphore-profile: {} }` at the end of the file).
     environment:
       TZ: America/New_York
     # Other containers need no published port. To attach from the host as well:

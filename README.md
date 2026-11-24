@@ -273,12 +273,12 @@ The image runs the Linux build headless, with CDP on port 9222:
 
 Attach any CDP client to `http://127.0.0.1:9222`, e.g. `chromium.connectOverCDP('http://127.0.0.1:9222')` in Playwright or `puppeteer.connect({ browserURL: 'http://127.0.0.1:9222' })` in Puppeteer. Keep the published port on `127.0.0.1` as above: anyone who can reach port 9222 controls the browser.
 
-Switches after the image name go to the browser. The [fingerprint identity](#fingerprint-identity) is off unless you give one, and in a container the machine's real values are the server's: its processor count and memory, behind a Windows desktop's screen. To present a machine of its own:
+Unlike the browser by itself, the image gives every profile a [fingerprint identity](#fingerprint-identity), because in a container the machine's real values are the server's: its processor count and memory, behind a Windows desktop's screen. A fresh container is a new machine to the sites it visits. Mount a volume at `/home/chromaphore/data` and the profile kept there stays the same machine across starts (one running container per profile folder):
 
     docker run -d --name chromaphore -p 127.0.0.1:9222:9222 -e TZ=America/New_York \
-      ghcr.io/nodriver-project/chromaphore --fingerprint-seed=auto --fingerprint-screen=auto
+      -v chromaphore-profile:/home/chromaphore/data ghcr.io/nodriver-project/chromaphore
 
-`--fingerprint-seed=auto` draws a new identity at each start. To keep one identity, give it a number of your own (`--fingerprint-seed=<number> --fingerprint-screen=auto`) and mount a volume at `/home/chromaphore/data` to keep its profile with it. `TZ` is the time zone the browser reports (UTC without it).
+Switches after the image name go to the browser: `--fingerprint-seed=<number>` picks the identity yourself, and `-e CHROMAPHORE_IDENTITY=off` runs without one. `TZ` is the time zone the browser reports (UTC without it).
 
 **From another container** on the same compose or user-defined Docker network, use the service or container name instead: `http://chromaphore:9222` (names don't resolve on Docker's default bridge network). No port needs publishing for that, Playwright's `connectOverCDP` and Puppeteer's `browserURL` work with it unchanged, and the `ws://` URL the image hands back uses the same name. The browser itself refuses a request whose Host is a name, as its guard against web pages that reach the port under a domain of their own; the image lets single-word names through, which a page cannot be served under, and dotted names you list yourself, which should be names nobody else can point at the port: `-e CDP_ALLOWED_HOSTS=host.docker.internal,browser.example.internal`. In compose, add `depends_on: { chromaphore: { condition: service_healthy } }` to your client so that it waits until CDP is up; [`docker/compose-example.yml`](docker/compose-example.yml) is a complete example.
 

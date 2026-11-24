@@ -2,11 +2,12 @@
 # Chromaphore container entrypoint.
 #
 #   docker run ... <image>                         the browser, headless, CDP on port 9222
-#   docker run ... <image> --fingerprint-seed=auto --fingerprint-screen=auto
+#   docker run ... <image> --fingerprint-seed=12345
 #                                                  switches go to the browser
 #   docker run ... <image> chromaphore --version   anything not starting with "-" runs as given
 #
 # Environment:
+#   CHROMAPHORE_IDENTITY=off   no fingerprint identity; by default each profile folder gets one
 #   CDP_PORT                   the port CDP answers on in the container (default 9222)
 #   CDP_ALLOWED_HOSTS          dotted names clients may connect by, comma-separated
 #                              (single-word names such as a compose service's always work)
@@ -40,8 +41,48 @@ if ! mkdir -p "$DATA" 2> /dev/null || ! [ -w "$DATA" ]; then
   echo "The profile folder $DATA is not writable by the browser's user (uid $(id -u)): chown the mounted folder to it." >&2
   exit 1
 fi
-rm -f "$DATA/DevToolsActivePort"
+
+# One container at a time on a profile. This lock is the system's, so it is
+# gone as soon as its container's processes are, however they ended. Holding
+# it, whatever the browser left in the folder to say "in use" comes from a
+# container that was killed, and would stop this start: it is taken away.
+exec 9> "$DATA/chromaphore-lock"
+lock=0
+flock -n -E 75 9 || lock=$?
+if [ "$lock" = 75 ]; then
+  echo "The profile folder $DATA is in use by another running container." >&2
+  exit 1
+fi
+rm -f "$DATA/SingletonLock" "$DATA/SingletonSocket" "$DATA/SingletonCookie" "$DATA/DevToolsActivePort"
 if [ "$stopping" = 1 ]; then exit 0; fi
+
+# An identity of its own for each profile, unless the start says otherwise: a
+# seed drawn once and kept in the profile folder, so that a kept profile stays
+# the same machine and a fresh container is a new one. A --fingerprint-seed
+# among the switches takes its place; --use-chromium-defaults and
+# CHROMAPHORE_IDENTITY=off run without an identity (the server's real values).
+identity=()
+if [ "${CHROMAPHORE_IDENTITY:-profile}" != off ]; then
+  given=0
+  for arg in "$@"; do
+    case "$arg" in
+      --fingerprint-seed | --fingerprint-seed=* | --use-chromium-defaults) given=1 ;;
+    esac
+  done
+  if [ "$given" = 0 ]; then
+    seed=
+    if [ -s "$DATA/chromaphore-seed" ]; then
+      seed=$(head -n 1 "$DATA/chromaphore-seed" 2> /dev/null || true)
+    fi
+    case "$seed" in
+      '' | *[!0-9]*)
+        seed=$(($(od -An -N4 -tu4 /dev/urandom) & 0x7fffffff))
+        echo "$seed" > "$DATA/chromaphore-seed"
+        ;;
+    esac
+    identity=(--fingerprint-seed="$seed" --fingerprint-screen=auto --fingerprint-screen-position=auto)
+  fi
+fi
 
 # --no-sandbox: a container usually cannot give the sandbox its namespaces
 # (INSTALL.md, Servers). --disable-gpu --disable-software-rasterizer: no GPU, so
@@ -62,6 +103,7 @@ if [ "${CHROMAPHORE_SANDBOX:-0}" = 1 ]; then sandbox=(); fi
   --no-default-browser-check \
   --remote-debugging-port=0 \
   --user-data-dir="$DATA" \
+  "${identity[@]}" \
   "$@" &
 browser=$!
 
