@@ -1,0 +1,163 @@
+# Builds the Chromaphore image from a published release's Linux tarball, tests
+# it, and on a manual run pushes it to ghcr.io/nodriver-project/chromaphore.
+#   pull_request       -> build and test only, nothing is pushed
+#   workflow_dispatch  -> build and test the tag given (default: the newest
+#                         release that has a Linux tarball), then push
+#                         <version> (and latest) if "push" is ticked
+# Not every release has a Linux build: a Windows-only release is passed over.
+# Publishing is a manual run on purpose: a release is published first and its
+# image follows when someone decides so.
+name: Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package, e.g. v2.0.0 (empty = the newest release with a Linux tarball)"
+        required: false
+        default: ""
+      push:
+        description: "Push the image to ghcr.io after the tests"
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - "docker/**"
+      - ".github/workflows/docker.yml"
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces its running check; a manual run is
+# never cancelled by another (it may be in the middle of a push).
+concurrency:
+  group: docker-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/nodriver-project/chromaphore
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # One job, so that the image pushed is the very image tested. packages:
+    # write is only used by the last step, which a pull request never reaches.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the release's Linux tarball
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_IN: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # Not every release has a Linux build: the default tag and :latest
+          # follow the newest published, non-prerelease release that has one.
+          latest=$(gh api "repos/$REPO/releases?per_page=50" --jq '[.[] | select((.draft | not) and (.prerelease | not)) | select(any(.assets[]; .name | test("-linux-x64\\.tar\\.xz$")))][0].tag_name // ""')
+          tag="${TAG_IN:-$latest}"
+          if [ -z "$tag" ]; then echo "::error::no release has a linux-x64 tarball"; exit 1; fi
+          if ! [[ "$tag" =~ ^v[0-9]+(\.[0-9]+){2}([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::not a release tag: '$tag'"; exit 1
+          fi
+          gh api "repos/$REPO/releases/tags/$tag" > release.json
+          tag=$(jq -r .tag_name release.json)
+          asset=$(jq -c '[.assets[] | select(.name | test("-linux-x64\\.tar\\.xz$"))][0]' release.json)
+          if [ "$asset" = "null" ]; then echo "::error::release $tag has no linux-x64 tarball"; exit 1; fi
+          name=$(jq -r .name <<<"$asset")
+          url=$(jq -r .browser_download_url <<<"$asset")
+          sha=$(jq -r '.digest // ""' <<<"$asset" | sed 's/^sha256://')
+          if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then echo "::error::no sha256 digest for $name"; exit 1; fi
+          # The digest GitHub computed for the uploaded file must be the one the
+          # release notes give for it: two records that would have to be changed
+          # together.
+          if ! jq -r '.body // ""' release.json | grep -qiF "$sha"; then
+            echo "::error::the notes of release $tag do not list $name's SHA-256 ($sha)"; exit 1
+          fi
+          version="${tag#v}"
+          chromium=$(sed -nE 's/.*-chromium([0-9.]+)-linux-x64\.tar\.xz$/\1/p' <<<"$name")
+          if [ -z "$chromium" ]; then echo "::error::no Chromium version in the name $name"; exit 1; fi
+          prerelease=$(jq -r .prerelease release.json)
+          tags="$IMAGE:$version"
+          if [ "$tag" = "$latest" ] && [ "$prerelease" = "false" ]; then tags="$tags $IMAGE:latest"; fi
+          {
+            echo "version=$version"; echo "chromium=$chromium"; echo "url=$url"
+            echo "sha=$sha"; echo "tags=$tags"
+          } >> "$GITHUB_OUTPUT"
+          echo "Packaging $name ($sha) as: $tags"
+
+      - name: Free disk space
+        run: |
+          # The image is about 3 GB and the build briefly holds the tarball and
+          # an unpacked copy as well; drop preinstalled SDKs the job never uses.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.rel.outputs.version }}
+          CHROMIUM: ${{ steps.rel.outputs.chromium }}
+          URL: ${{ steps.rel.outputs.url }}
+          SHA: ${{ steps.rel.outputs.sha }}
+          TAGS: ${{ steps.rel.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tag_args=(); for t in $TAGS; do tag_args+=(-t "$t"); done
+          docker build docker \
+            --build-arg CHROMAPHORE_VERSION="$VERSION" \
+            --build-arg CHROMIUM_VERSION="$CHROMIUM" \
+            --build-arg CHROMAPHORE_URL="$URL" \
+            --build-arg CHROMAPHORE_SHA256="$SHA" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            "${tag_args[@]}"
+          docker image ls "$IMAGE"
+
+      - name: "Test: CDP on 9222, the name rule, a clean stop"
+        env:
+          IMG: ${{ env.IMAGE }}:${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm "$IMG" chromaphore --version
+          docker run -d --name smoke -p 127.0.0.1:9222:9222 "$IMG"
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9222/json/version > version.json; then break; fi
+            sleep 1
+          done
+          cat version.json
+          grep -q webSocketDebuggerUrl version.json
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" http://127.0.0.1:9222/json/version; }
+          # A single-word name is helped past the browser's Host check, a dotted
+          # one gets the browser's own refusal, and a web page's request by name
+          # is refused.
+          test "$(code -H 'Host: chromaphore:9222')" = 200
+          test "$(code -H 'Host: rebind.example.com:9222')" = 500
+          test "$(code -H 'Host: chromaphore:9222' -H 'Origin: http://chromaphore:9222')" = 403
+          docker stop smoke
+          test "$(docker inspect -f '{{.State.ExitCode}}' smoke)" = 0
+          docker rm smoke
+
+      - name: "Test: a client container loads a page by service name"
+        env:
+          CHROMAPHORE_IMAGE: ${{ env.IMAGE }}:${{ steps.rel.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker compose -f docker/compose-example.yml up --abort-on-container-exit --exit-code-from client
+          docker compose -f docker/compose-example.yml down
+
+      - name: Push
+        if: github.event_name == 'workflow_dispatch' && inputs.push
+        env:
+          TAGS: ${{ steps.rel.outputs.tags }}
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          for t in $TAGS; do docker push "$t"; done

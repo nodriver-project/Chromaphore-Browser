@@ -267,6 +267,32 @@ For headless servers and containers without a GPU.
 
 It is not made for a Linux desktop or a host with a GPU.
 
+### Docker
+
+The image runs the Linux build headless, with CDP on port 9222:
+
+    docker run -d --name chromaphore -p 127.0.0.1:9222:9222 ghcr.io/nodriver-project/chromaphore
+
+Attach any CDP client to `http://127.0.0.1:9222`, e.g. `chromium.connectOverCDP('http://127.0.0.1:9222')` in Playwright or `puppeteer.connect({ browserURL: 'http://127.0.0.1:9222' })` in Puppeteer. Keep the published port on `127.0.0.1` as above: anyone who can reach port 9222 controls the browser.
+
+Unlike the browser by itself, the image gives every profile a [fingerprint identity](#fingerprint-identity), because in a container the machine's real values are the server's: its processor count and memory, behind a Windows desktop's screen. A fresh container is a new machine to the sites it visits. Mount a volume at `/home/chromaphore/data` and the profile kept there stays the same machine across starts (one running container per profile folder):
+
+    docker run -d --name chromaphore -p 127.0.0.1:9222:9222 -e TZ=America/New_York \
+      -v chromaphore-profile:/home/chromaphore/data ghcr.io/nodriver-project/chromaphore
+
+Switches after the image name go to the browser: `--fingerprint-seed=<number>` picks the identity yourself, and `-e CHROMAPHORE_IDENTITY=off` runs without one. `TZ` is the time zone the browser reports (UTC without it).
+
+**From another container** on the same compose or user-defined Docker network, use the service or container name instead: `http://chromaphore:9222` (names don't resolve on Docker's default bridge network). No port needs publishing for that, Playwright's `connectOverCDP` and Puppeteer's `browserURL` work with it unchanged, and the `ws://` URL the image hands back uses the same name. The browser itself refuses a request whose Host is a name, as its guard against web pages that reach the port under a domain of their own; the image lets single-word names through, which a page cannot be served under, and dotted names you list yourself, which should be names nobody else can point at the port: `-e CDP_ALLOWED_HOSTS=host.docker.internal,browser.example.internal`. In compose, add `depends_on: { chromaphore: { condition: service_healthy } }` to your client so that it waits until CDP is up; [`docker/compose-example.yml`](docker/compose-example.yml) is a complete example.
+
+**What is in it.** Ubuntu 24.04 with the release tarball unchanged in `/opt/chromaphore` (its `INSTALL.md` too) and the libraries `INSTALL.md` lists; about 1.7 GB to pull. The browser runs as a non-root user with `--headless=new --no-sandbox --disable-gpu --disable-software-rasterizer`. To keep the browser's own sandbox on, start the container with `-e CHROMAPHORE_SANDBOX=1 --security-opt seccomp=unconfined`: the sandbox needs user namespaces, which Docker's default seccomp profile withholds from a container.
+
+**Connecting directly, without a proxy.** A container's connections look like Linux at the TCP level, and a site that compares that with the Windows machine its pages see answers with a robot check. The release's helper changes it for one container, from the host, after each start of that container:
+
+    docker cp chromaphore:/opt/chromaphore/tcp-syn ./tcp-syn    # once
+    sudo nsenter -t "$(docker inspect -f '{{.State.Pid}}' chromaphore)" -n ./tcp-syn/build-and-install.sh
+
+It needs `tc` and `nsenter` on the host. It changes that container's network settings and not the host's (the values it replaced are kept in a file under `/run` on the host); `--remove` at the end of the second line undoes it. Behind a proxy none of this shows.
+
 ## Source and binary
 
 The binary on the Releases page is the whole browser, free to use: everything this README describes is in it. Its source is published in [`patches/`](patches) except for the fingerprint identity layer: the identity switches above and `chrome://browser-settings`. That part stays closed so detection vendors cannot simply read how the spoofing works. It is no perfect defence, but it raises their cost.
