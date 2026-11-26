@@ -75,6 +75,12 @@ RUN apt-get update \
 COPY --chmod=755 entrypoint.sh /usr/local/bin/chromaphore-entrypoint
 COPY --chmod=755 cdp-proxy.py /usr/local/bin/chromaphore-cdp-proxy
 
+# Suppress the "--no-sandbox" security warning infobar in headless mode,
+# which otherwise trims 56 px off the initial tab's window.innerHeight.
+RUN install -d -m 755 /etc/chromium/policies/managed \
+ && printf '{"CommandLineFlagSecurityWarningsEnabled":false}\n' > /etc/chromium/policies/managed/chromaphore.json \
+ && chmod 644 /etc/chromium/policies/managed/chromaphore.json
+
 # C.UTF-8 so that file paths with letters outside ASCII work (INSTALL.md,
 # Locale). TZ goes through to the browser: docker run -e TZ=America/New_York.
 ENV LC_ALL=C.UTF-8 \
